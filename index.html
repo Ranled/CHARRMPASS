@@ -101,7 +101,7 @@
     </header>
 
     <!-- Main Content Container -->
-    <main class="relative z-10 w-full max-w-[420px] my-auto py-2 flex flex-col items-center">
+    <main class="relative z-10 w-full max-w-[420px] landing-main-container my-auto py-2 flex flex-col items-center">
 
         <!-- VIEW 1: Initial Welcome Hero (SIGN IN Button) -->
         <div id="landingView" class="w-full transition-all duration-200 ease-out transform opacity-100 scale-100">
@@ -142,7 +142,7 @@
         </div>
 
         <!-- VIEW 2: Credentials Form Card (Enterprise Style) -->
-        <div id="loginCardView" class="w-full hidden transition-all duration-200 ease-out transform opacity-0 scale-95">
+        <div id="loginCardView" class="w-full hidden transition-all duration-200 ease-out transform opacity-0 scale-95" style="display: none;">
             <div class="premium-card w-full">
 
                 <!-- Compact Translucent Green Header with Back Navigation -->
@@ -262,6 +262,9 @@
 
             setTimeout(() => {
                 landingView.classList.add('hidden');
+                landingView.style.display = 'none';
+
+                loginCardView.style.display = 'block';
                 loginCardView.classList.remove('hidden');
 
                 // Force Reflow
@@ -285,6 +288,9 @@
 
             setTimeout(() => {
                 loginCardView.classList.add('hidden');
+                loginCardView.style.display = 'none';
+
+                landingView.style.display = 'block';
                 landingView.classList.remove('hidden');
 
                 // Force Reflow
