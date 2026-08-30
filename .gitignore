@@ -7,9 +7,7 @@ Thumbs.db
 supabase-config.js
 
 # ─── LARGE MEDIA / LOCAL ASSETS ────────────────────
-*.mp4
-logocharrmpark.png
-landingbg.jpg
+# (Media files included for deployment)
 
 # ─── EDITOR / OS ───────────────────────────────────
 .vscode/
