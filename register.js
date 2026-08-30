@@ -3,7 +3,17 @@
  * Multi-step form with camera/upload, validation, and Supabase submission
  */
 
-initSupabase();
+if (typeof initSupabase === 'function') {
+    initSupabase();
+} else {
+    console.warn('supabase-config.js not loaded. Operating in fallback mode.');
+}
+
+if (typeof showToast !== 'function') {
+    window.showToast = function(msg, type = 'info') {
+        alert(msg);
+    };
+}
 
 let currentStep = 1;
 const totalSteps = 4;
@@ -149,12 +159,20 @@ function capturePhoto() {
     const video = document.getElementById('cameraVideo');
     const canvas = document.getElementById('cameraCanvas');
     
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0);
+    const MAX = 600;
+    let w = video.videoWidth || 640;
+    let h = video.videoHeight || 480;
+    if (w > MAX || h > MAX) {
+        if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+        else { w = Math.round(w * MAX / h); h = MAX; }
+    }
+    
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext('2d').drawImage(video, 0, 0, w, h);
     
     // Compress to smaller size for DB storage
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.4);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
     photoData[cameraTarget] = dataUrl;
     
     updatePhotoPreview(cameraTarget, dataUrl);
@@ -397,7 +415,13 @@ document.getElementById('registrationForm').addEventListener('submit', async (e)
         
     } catch (err) {
         console.error('Registration error:', err);
-        showToast('Error: ' + (err.message || err.details || 'Unknown error'), 'error');
+        let errMsg = err.message || err.details || 'Registration failed. Please try again.';
+        if (errMsg.includes('vehicles_plate_number_key') || errMsg.toLowerCase().includes('duplicate key')) {
+            errMsg = 'This license plate is already registered in the system.';
+        } else if (errMsg.includes('violates foreign key')) {
+            errMsg = 'Database relationship error. Please check your inputs.';
+        }
+        showToast(errMsg, 'error');
         btnSubmit.innerHTML = origText;
         btnSubmit.disabled = false;
         lucide.createIcons();

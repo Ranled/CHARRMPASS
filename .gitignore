@@ -2,9 +2,8 @@ node_modules/
 .DS_Store
 Thumbs.db
 
-# ─── SENSITIVE CONFIG (never commit) ───────────────
-# Copy supabase-config.example.js → supabase-config.js and fill in your keys
-supabase-config.js
+# ─── APP CONFIG ───────────────────────────────────
+# supabase-config.js is committed for static browser hosting
 
 # ─── LARGE MEDIA / LOCAL ASSETS ────────────────────
 # (Media files included for deployment)
