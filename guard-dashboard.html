@@ -521,6 +521,7 @@
     <script src="supabase-config.js"></script>
     <script src="guard-app.js"></script>
     <script>
+        if (window.lucide) lucide.createIcons();
         // Update Profile Info from Session
         (function() {
             const session = JSON.parse(sessionStorage.getItem('charrmpass_session'));

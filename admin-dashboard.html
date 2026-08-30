@@ -560,6 +560,7 @@
     <script src="supabase-config.js"></script>
     <script src="admin-app.js"></script>
     <script>
+        if (window.lucide) lucide.createIcons();
         function logout() { sessionStorage.removeItem('charrmpass_session'); window.location.href = 'index.html'; }
     </script>
 </body>

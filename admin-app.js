@@ -2,7 +2,10 @@
  * CHARRMPASS - Admin Dashboard Logic
  * User management, RFID UID assignment, analytics, and real-time updates
  */
-initSupabase(); startClock(); updateDBBadge();
+if (typeof initSupabase === 'function') initSupabase();
+if (typeof startClock === 'function') startClock();
+if (typeof updateDBBadge === 'function') updateDBBadge();
+if (window.lucide) lucide.createIcons();
 const el = id => document.getElementById(id);
 
 let adminState = { users: [], pendingUsers: [], logs: [], accounts: [], specialTags: [], activeVehicles: [] };

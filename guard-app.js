@@ -2,9 +2,10 @@
  * CHARRMPASS - Guard Dashboard Logic
  * Live scan processing, manual RFID entry, visitor pass, and live activity log
  */
-initSupabase();
-startClock();
-updateDBBadge();
+if (typeof initSupabase === 'function') initSupabase();
+if (typeof startClock === 'function') startClock();
+if (typeof updateDBBadge === 'function') updateDBBadge();
+if (window.lucide) lucide.createIcons();
 
 // State
 let appState = {
