@@ -67,7 +67,7 @@ async function initState() {
                     vehicles ( plate_number, vehicle_type, vehicle_model, vehicle_color )
                 `)
                 .order('timestamp', { ascending: false })
-                .limit(50);
+                .limit(500);
             if (le) console.error('Logs fetch error:', le);
             if (logs) {
                 appState.recentScans = logs.map(l => {

@@ -88,7 +88,6 @@ async function loadData() {
             const exits   = adminState.logs.filter(t => t.direction === 'EXIT'  && t.status === 'AUTHORIZED').length;
             adminState.activeVehicles = Math.max(0, entries - exits);
 
-            console.log('✅ Admin data refreshed:', adminState.users.length, 'users,', adminState.logs.length, 'transactions,', adminState.activeVehicles, 'inside');
             const {data:acc, error:acce} = await supabaseClient.from('system_accounts').select('*');
             if (acce) console.error('Accounts error:', acce);
             if (acc) adminState.accounts = acc;
@@ -97,18 +96,20 @@ async function loadData() {
             if (ste) console.error('Special tags error:', ste);
             if (st) adminState.specialTags = st;
 
-            console.log('✅ Admin data refreshed:', adminState.users.length, 'users,', adminState.logs.length, 'logs,', adminState.activeVehicles.length, 'inside');
+            console.log('✅ Admin data refreshed:', adminState.users.length, 'users,', adminState.logs.length, 'transactions,', adminState.activeVehicles, 'inside');
         } catch(e) {
             console.error('CRITICAL LOAD ERROR:', e);
             showToast('Database Error: ' + e.message, 'error');
-            adminState.users = demoUsers;
         }
     } else {
         adminState.users = [...demoUsers];
     }
-    adminState.pendingUsers = adminState.users.filter(u => u.authorization_status === 'PENDING');
+    adminState.pendingUsers = adminState.users.filter(u => u.authorization_status === 'PENDING' || !u.authorization_status);
     renderAdmin();
 }
+
+const renderAll = renderAdmin;
+window.renderAll = renderAdmin;
 
 // =====================
 // RENDER
@@ -157,20 +158,25 @@ function renderAdmin() {
     if(el('usersTable')) {
         const search = (el('userSearch')?.value||'').toLowerCase();
         const role = el('roleFilter')?.value||'';
-        let filtered = adminState.users.filter(u => u.authorization_status==='AUTHORIZED');
+        let filtered = [...adminState.users];
         if(search) filtered = filtered.filter(u => (u.full_name||'').toLowerCase().includes(search) || (u.rfid_uid||'').toLowerCase().includes(search) || (u.plate_number||'').toLowerCase().includes(search));
         if(role) filtered = filtered.filter(u => u.role===role);
-        el('usersTable').innerHTML = filtered.length ? filtered.map(u=>`<tr class="hover:bg-white/60 border-b border-slate-100/50">
-            <td class="p-4 font-bold text-slate-800">${u.full_name}</td>
-            <td class="p-4"><span class="px-2 py-0.5 rounded text-xs font-bold bg-slate-200 text-slate-700 uppercase">${u.role}</span><div class="text-xs text-slate-500 mt-1">${u.program||'--'} • ${u.section||'--'}</div></td>
-            <td class="p-4 font-mono text-xs">${u.rfid_uid ? `<span class="text-green-600 font-bold">${u.rfid_uid}</span>` : '<span class="text-yellow-600 font-bold">Not Assigned</span>'}</td>
-            <td class="p-4"><div class="font-semibold text-slate-700">${u.vehicle_type||'--'} - ${u.vehicle_model||'--'}</div></td>
-            <td class="p-4 font-mono font-bold text-slate-700">${u.plate_number||'--'}</td>
-            <td class="p-4 text-center"><span class="px-2 py-1 rounded text-[10px] font-bold ${u.rfid_uid?'bg-green-100 text-green-700':'bg-yellow-100 text-yellow-700'}">${u.rfid_uid?'ACTIVE':'NO RFID'}</span></td>
-            <td class="p-4 text-right whitespace-nowrap">
-                <button onclick="openUserModal('${u.id}')" class="p-1.5 text-slate-400 hover:text-charm-dark rounded-lg hover:bg-slate-100" title="Edit / Assign RFID"><i data-lucide="edit" class="w-4 h-4"></i></button>
-                <button onclick="deleteUser('${u.id}')" class="p-1.5 text-slate-400 hover:text-red-500 ml-1 rounded-lg hover:bg-red-50" title="Delete"><i data-lucide="trash" class="w-4 h-4"></i></button>
-            </td></tr>`).join('') : '<tr><td colspan="7" class="p-8 text-center text-slate-400">No authorized users found</td></tr>';
+        el('usersTable').innerHTML = filtered.length ? filtered.map(u => {
+            const isAuth = u.authorization_status === 'AUTHORIZED';
+            const statusClass = isAuth ? 'bg-green-100 text-green-700' : (u.authorization_status === 'PENDING' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700');
+            const statusLabel = u.authorization_status || (u.rfid_uid ? 'AUTHORIZED' : 'PENDING');
+            return `<tr class="hover:bg-white/60 border-b border-slate-100/50">
+                <td class="p-4 font-bold text-slate-800">${u.full_name || '--'}</td>
+                <td class="p-4"><span class="px-2 py-0.5 rounded text-xs font-bold bg-slate-200 text-slate-700 uppercase">${u.role || '--'}</span><div class="text-xs text-slate-500 mt-1">${u.program||'--'} • ${u.section||'--'}</div></td>
+                <td class="p-4 font-mono text-xs">${u.rfid_uid ? `<span class="text-green-600 font-bold">${u.rfid_uid}</span>` : '<span class="text-yellow-600 font-bold">Not Assigned</span>'}</td>
+                <td class="p-4"><div class="font-semibold text-slate-700">${u.vehicle_type||'--'} - ${u.vehicle_model||'--'}</div></td>
+                <td class="p-4 font-mono font-bold text-slate-700">${u.plate_number||'--'}</td>
+                <td class="p-4 text-center"><span class="px-2 py-1 rounded text-[10px] font-bold ${statusClass}">${statusLabel}</span></td>
+                <td class="p-4 text-right whitespace-nowrap">
+                    <button onclick="openUserModal('${u.id}')" class="p-1.5 text-slate-400 hover:text-charm-dark rounded-lg hover:bg-slate-100" title="Edit / Assign RFID"><i data-lucide="edit" class="w-4 h-4"></i></button>
+                    <button onclick="deleteUser('${u.id}')" class="p-1.5 text-slate-400 hover:text-red-500 ml-1 rounded-lg hover:bg-red-50" title="Delete"><i data-lucide="trash" class="w-4 h-4"></i></button>
+                </td></tr>`;
+        }).join('') : '<tr><td colspan="7" class="p-8 text-center text-slate-400">No users found</td></tr>';
     }
 
     // Accounts (Guard Management)
