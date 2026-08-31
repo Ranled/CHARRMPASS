@@ -19,6 +19,16 @@ const demoUsers = [
     { id:'5', full_name:'Pedro Garcia', role:'Student', rfid_uid:'', program:'BSA', section:'1A', vehicle_type:'Car', vehicle_model:'Vios', plate_number:'JKL-012', vehicle_color:'Blue', authorization_status:'PENDING', age:19, sex:'Male', address:'Tangalan, Aklan', created_at:'2024-05-14' },
 ];
 
+const demoSpecialTags = [
+    { id: '1', rfid_uid: '73 71 A9 FE', type: 'VISITOR', description: 'Visitor Pass (Reusable RFID Tag)' },
+    { id: '2', rfid_uid: 'D3 85 96 FE', type: 'EMERGENCY', description: 'Emergency Response Vehicle Tag' }
+];
+
+const demoAccounts = [
+    { id: '1', username: 'guard', password: 'guard123', role: 'GUARD' },
+    { id: '2', username: 'admin', password: 'admin123', role: 'ADMIN' }
+];
+
 
 
 // =====================
@@ -38,7 +48,11 @@ function adminView(v) {
         renderReports();
     }
     renderAdmin();
-    if (window.lucide) lucide.createIcons();
+    setTimeout(() => {
+        if (window.lucide && typeof lucide.createIcons === 'function') {
+            lucide.createIcons();
+        }
+    }, 50);
 }
 window.adminView = adminView;
 
@@ -96,19 +110,25 @@ async function loadData() {
 
             const {data:acc, error:acce} = await supabaseClient.from('system_accounts').select('*');
             if (acce) console.error('Accounts error:', acce);
-            if (acc) adminState.accounts = acc;
+            if (acc && acc.length) adminState.accounts = acc;
+            else if (!adminState.accounts.length) adminState.accounts = [...demoAccounts];
 
             const {data:st, error:ste} = await supabaseClient.from('special_tags').select('*');
             if (ste) console.error('Special tags error:', ste);
-            if (st) adminState.specialTags = st;
+            if (st && st.length) adminState.specialTags = st;
+            else if (!adminState.specialTags.length) adminState.specialTags = [...demoSpecialTags];
 
             console.log('✅ Admin data refreshed:', adminState.users.length, 'users,', adminState.logs.length, 'transactions,', adminState.activeVehicles, 'inside');
         } catch(e) {
             console.error('CRITICAL LOAD ERROR:', e);
             showToast('Database Error: ' + e.message, 'error');
+            if (!adminState.specialTags.length) adminState.specialTags = [...demoSpecialTags];
+            if (!adminState.accounts.length) adminState.accounts = [...demoAccounts];
         }
     } else {
         adminState.users = [...demoUsers];
+        adminState.specialTags = [...demoSpecialTags];
+        adminState.accounts = [...demoAccounts];
     }
     adminState.pendingUsers = adminState.users.filter(u => u.authorization_status === 'PENDING' || !u.authorization_status);
     renderAdmin();
@@ -134,7 +154,7 @@ function renderAdmin() {
     // Update charts if viewing analytics
     const analyticsView = el('aview-analytics');
     if (analyticsView && !analyticsView.classList.contains('hidden')) {
-        initCharts();
+        renderAnalytics();
     }
 
     // Pending table
@@ -207,7 +227,7 @@ function renderAdmin() {
 
                     <div class="mt-5 flex gap-2 w-full">
                         <button onclick="openAccountModal('${acc.id}')" class="flex-1 px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-bold hover:bg-charm-dark hover:text-white transition-all flex items-center justify-center gap-1.5 shadow-sm">
-                            <i data-lucide="key-round" class="w-3.5 h-3.5"></i> Change Password / Username
+                            <i data-lucide="key" class="w-3.5 h-3.5"></i> Change Password / Username
                         </button>
                     </div>
                 </div>
@@ -357,7 +377,7 @@ function renderAdmin() {
                         <td class="p-4"><span class="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${typeClass}">${t.type}</span></td>
                         <td class="p-4 text-slate-500">${t.description || '--'}</td>
                         <td class="p-4 text-right whitespace-nowrap">
-                            <button onclick="editSpecialTag('${t.id}')" class="p-2 text-slate-400 hover:text-charm-dark transition-colors"><i data-lucide="edit-3" class="w-4 h-4"></i></button>
+                            <button onclick="editSpecialTag('${t.id}')" class="p-2 text-slate-400 hover:text-charm-dark transition-colors"><i data-lucide="edit" class="w-4 h-4"></i></button>
                             <button onclick="deleteSpecialTag('${t.id}')" class="p-2 text-slate-400 hover:text-red-500 transition-colors"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
                         </td>
                     </tr>
@@ -368,7 +388,9 @@ function renderAdmin() {
         }
     }
     
-    lucide.createIcons();
+    if (window.lucide && typeof lucide.createIcons === 'function') {
+        lucide.createIcons();
+    }
 }
 
 // =====================
