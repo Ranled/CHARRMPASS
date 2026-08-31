@@ -323,46 +323,29 @@ function renderAdmin() {
         }
     }
 
-    // Ranking Tables (respecting timeframe)
-    const now = new Date();
-    let filteredLogs = adminState.logs;
-    if (analyticsRange === 'day') {
-        filteredLogs = adminState.logs.filter(l => {
-            const d = new Date(l.timestamp);
-            return d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-        });
-    } else if (analyticsRange === 'week') {
-        const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        filteredLogs = adminState.logs.filter(l => new Date(l.timestamp) >= weekAgo);
-    } else if (analyticsRange === 'month') {
-        filteredLogs = adminState.logs.filter(l => {
-            const d = new Date(l.timestamp);
-            return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-        });
-    } else if (analyticsRange === 'annual') {
-        filteredLogs = adminState.logs.filter(l => new Date(l.timestamp).getFullYear() === now.getFullYear());
-    }
+    // Ranking Tables (if present in DOM)
+    if (el('studentRankingTable') || el('facultyRankingTable')) {
+        const studentLogs = (adminState.logs || []).filter(l => l.users?.role === 'Student');
+        const sCounts = {};
+        studentLogs.forEach(l => { const name = l.users?.full_name; if(name) sCounts[name] = (sCounts[name] || 0) + 1; });
+        const sRanked = Object.entries(sCounts).sort((a,b) => b[1] - a[1]).slice(0, 5);
+        if (el('studentRankingTable')) {
+            el('studentRankingTable').innerHTML = sRanked.length ? sRanked.map(([name, count], i) => {
+                const u = adminState.users.find(x => x.full_name === name);
+                return `<tr class="border-b border-slate-50"><td class="p-3 text-center font-bold text-charm-dark">${i+1}</td><td class="p-3 font-semibold">${name}</td><td class="p-3 text-center text-slate-500">${u?.program||'--'}</td><td class="p-3 text-center"><span class="px-2 py-0.5 rounded-full bg-slate-100 font-bold text-slate-700">${count}</span></td></tr>`;
+            }).join('') : '<tr><td colspan="4" class="p-8 text-center text-slate-300">No activity in this period</td></tr>';
+        }
 
-    if (el('studentRankingTable')) {
-        const studentLogs = filteredLogs.filter(l => l.users?.role === 'Student');
-        const counts = {};
-        studentLogs.forEach(l => { const name = l.users?.full_name; if(name) counts[name] = (counts[name] || 0) + 1; });
-        const ranked = Object.entries(counts).sort((a,b) => b[1] - a[1]).slice(0, 5);
-        el('studentRankingTable').innerHTML = ranked.length ? ranked.map(([name, count], i) => {
-            const u = adminState.users.find(x => x.full_name === name);
-            return `<tr class="border-b border-slate-50"><td class="p-3 text-center font-bold text-charm-dark">${i+1}</td><td class="p-3 font-semibold">${name}</td><td class="p-3 text-center text-slate-500">${u?.program||'--'}</td><td class="p-3 text-center"><span class="px-2 py-0.5 rounded-full bg-slate-100 font-bold text-slate-700">${count}</span></td></tr>`;
-        }).join('') : '<tr><td colspan="4" class="p-8 text-center text-slate-300">No activity in this period</td></tr>';
-    }
-
-    if (el('facultyRankingTable')) {
-        const facultyLogs = filteredLogs.filter(l => l.users?.role === 'Faculty' || l.users?.role === 'Staff');
-        const counts = {};
-        facultyLogs.forEach(l => { const name = l.users?.full_name; if(name) counts[name] = (counts[name] || 0) + 1; });
-        const ranked = Object.entries(counts).sort((a,b) => b[1] - a[1]).slice(0, 5);
-        el('facultyRankingTable').innerHTML = ranked.length ? ranked.map(([name, count], i) => {
-            const u = adminState.users.find(x => x.full_name === name);
-            return `<tr class="border-b border-slate-50"><td class="p-3 text-center font-bold text-charm-mid">${i+1}</td><td class="p-3 font-semibold">${name}</td><td class="p-3 text-center text-slate-500">${u?.role||'--'}</td><td class="p-3 text-center"><span class="px-2 py-0.5 rounded-full bg-slate-100 font-bold text-slate-700">${count}</span></td></tr>`;
-        }).join('') : '<tr><td colspan="4" class="p-8 text-center text-slate-300">No activity in this period</td></tr>';
+        const facultyLogs = (adminState.logs || []).filter(l => l.users?.role === 'Faculty' || l.users?.role === 'Staff');
+        const fCounts = {};
+        facultyLogs.forEach(l => { const name = l.users?.full_name; if(name) fCounts[name] = (fCounts[name] || 0) + 1; });
+        const fRanked = Object.entries(fCounts).sort((a,b) => b[1] - a[1]).slice(0, 5);
+        if (el('facultyRankingTable')) {
+            el('facultyRankingTable').innerHTML = fRanked.length ? fRanked.map(([name, count], i) => {
+                const u = adminState.users.find(x => x.full_name === name);
+                return `<tr class="border-b border-slate-50"><td class="p-3 text-center font-bold text-charm-mid">${i+1}</td><td class="p-3 font-semibold">${name}</td><td class="p-3 text-center text-slate-500">${u?.role||'--'}</td><td class="p-3 text-center"><span class="px-2 py-0.5 rounded-full bg-slate-100 font-bold text-slate-700">${count}</span></td></tr>`;
+            }).join('') : '<tr><td colspan="4" class="p-8 text-center text-slate-300">No activity in this period</td></tr>';
+        }
     }
 
     // Special Tags
