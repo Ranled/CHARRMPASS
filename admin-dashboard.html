@@ -518,23 +518,34 @@
                             </div>
                         </div>
 
-                        <!-- Guard Operational Monitoring -->
+                        <!-- User Access Leaderboard (Students, Faculty, Staff/Utility, Visitors) -->
                         <div class="lg:col-span-6 glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col">
-                            <h3 class="font-display font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
-                                <i data-lucide="shield" class="w-5 h-5 text-charm-dark"></i> Guard Operational Monitoring
-                            </h3>
-                            <div class="flex-1 overflow-auto rounded-xl border border-slate-100 bg-white/40">
+                            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+                                <h3 class="font-display font-bold text-lg text-slate-800 flex items-center gap-2">
+                                    <i data-lucide="trophy" class="w-5 h-5 text-amber-500"></i> User Access Leaderboard
+                                </h3>
+                                <!-- Category Filter Pills -->
+                                <div class="flex items-center gap-1 bg-slate-100/90 p-1 rounded-xl border border-slate-200/80 text-[11px]">
+                                    <button onclick="setUserLeaderboardCategory('ALL')" id="ldrBtn-ALL" class="ldr-tab px-2.5 py-1 rounded-lg font-bold transition-all bg-charm-dark text-white shadow-sm">All</button>
+                                    <button onclick="setUserLeaderboardCategory('Student')" id="ldrBtn-Student" class="ldr-tab px-2.5 py-1 rounded-lg font-bold transition-all text-slate-600 hover:text-slate-900">Student</button>
+                                    <button onclick="setUserLeaderboardCategory('Faculty')" id="ldrBtn-Faculty" class="ldr-tab px-2.5 py-1 rounded-lg font-bold transition-all text-slate-600 hover:text-slate-900">Faculty</button>
+                                    <button onclick="setUserLeaderboardCategory('Staff')" id="ldrBtn-Staff" class="ldr-tab px-2.5 py-1 rounded-lg font-bold transition-all text-slate-600 hover:text-slate-900">Staff/Utility</button>
+                                    <button onclick="setUserLeaderboardCategory('Visitor')" id="ldrBtn-Visitor" class="ldr-tab px-2.5 py-1 rounded-lg font-bold transition-all text-slate-600 hover:text-slate-900">Visitor</button>
+                                </div>
+                            </div>
+                            <div class="flex-1 overflow-auto rounded-xl border border-slate-100 bg-white/40 max-h-[290px]">
                                 <table class="w-full text-left border-collapse text-xs">
                                     <thead class="bg-white/80 sticky top-0 uppercase text-slate-500 font-bold tracking-wider">
                                         <tr>
-                                            <th class="p-3">Guard Officer</th>
-                                            <th class="p-3 text-center">Total Scans</th>
-                                            <th class="p-3 text-center">Entries</th>
-                                            <th class="p-3 text-center">Exits</th>
-                                            <th class="p-3 text-right">Status</th>
+                                            <th class="p-3 text-center">Rank</th>
+                                            <th class="p-3">User / Driver</th>
+                                            <th class="p-3">Category</th>
+                                            <th class="p-3">Plate</th>
+                                            <th class="p-3 text-center">Accesses</th>
+                                            <th class="p-3 text-right">Last Scan</th>
                                         </tr>
                                     </thead>
-                                    <tbody id="guardActivityTable" class="text-sm">
+                                    <tbody id="userLeaderboardTable" class="text-sm">
                                         <!-- Injected dynamically -->
                                     </tbody>
                                 </table>

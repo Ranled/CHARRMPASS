@@ -1051,37 +1051,145 @@ function renderAnalytics() {
         `).join('') : '<tr><td colspan="5" class="p-6 text-center text-slate-400 text-xs">No frequent vehicles recorded in this period.</td></tr>';
     }
 
-    // 6. Guard Activity
-    const guardAccounts = adminState.accounts.filter(a => a.role === 'GUARD') || [];
-    if (el('guardActivityTable')) {
-        el('guardActivityTable').innerHTML = guardAccounts.length ? guardAccounts.map(g => {
-            const scans = filteredLogs.length > 0 ? Math.floor(filteredLogs.length / (guardAccounts.length || 1)) : 0;
-            const entriesCnt = Math.floor(scans * 0.52);
-            const exitsCnt = scans - entriesCnt;
-            return `
-                <tr class="border-b border-slate-100/60 hover:bg-white/80">
-                    <td class="p-3 font-bold text-slate-800 flex items-center gap-2">
-                        <div class="w-6 h-6 rounded-full bg-charm-dark text-charm-yellow flex items-center justify-center text-xs font-black">G</div>
-                        ${g.username}
-                    </td>
-                    <td class="p-3 text-center font-mono font-bold text-slate-700">${scans}</td>
-                    <td class="p-3 text-center font-mono text-emerald-700 font-bold">${entriesCnt}</td>
-                    <td class="p-3 text-center font-mono text-blue-700 font-bold">${exitsCnt}</td>
-                    <td class="p-3 text-right"><span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700">Active</span></td>
-                </tr>
-            `;
-        }).join('') : `
-            <tr class="border-b border-slate-100/60 hover:bg-white/80">
-                <td class="p-3 font-bold text-slate-800">Gate Duty Officer (Main)</td>
-                <td class="p-3 text-center font-mono font-bold text-slate-700">${filteredLogs.length}</td>
-                <td class="p-3 text-center font-mono text-emerald-700 font-bold">${totalEntries}</td>
-                <td class="p-3 text-center font-mono text-blue-700 font-bold">${totalExits}</td>
-                <td class="p-3 text-right"><span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700">On Duty</span></td>
-            </tr>
-        `;
-    }
+    // 6. User Access Leaderboard (Students, Faculty, Staff/Utility, Visitors)
+    renderUserLeaderboard(filteredLogs);
 
     renderAnalyticsCharts(filteredLogs);
+}
+
+let userLeaderboardCategory = 'ALL';
+
+window.setUserLeaderboardCategory = function(category) {
+    userLeaderboardCategory = category;
+    document.querySelectorAll('.ldr-tab').forEach(b => {
+        b.className = 'ldr-tab px-2.5 py-1 rounded-lg font-bold transition-all text-slate-600 hover:text-slate-900';
+    });
+    const activeBtn = el(`ldrBtn-${category}`);
+    if (activeBtn) {
+        activeBtn.className = 'ldr-tab px-2.5 py-1 rounded-lg font-bold transition-all bg-charm-dark text-white shadow-sm';
+    }
+    renderUserLeaderboard(getFilteredAnalyticsLogs());
+};
+
+function renderUserLeaderboard(logs = getFilteredAnalyticsLogs()) {
+    const table = el('userLeaderboardTable');
+    if (!table) return;
+
+    const userVisits = {};
+
+    logs.forEach(l => {
+        let name = l.users?.full_name;
+        let role = l.users?.role || 'Other';
+        let subtext = l.users?.program || l.users?.section || '--';
+        let plate = l.vehicles?.plate_number || '--';
+
+        if (!name && l.remarks) {
+            if (l.remarks.includes('Visitor')) {
+                const match = l.remarks.match(/Visitor (?:Exit|Entry):\s*([^|]+)(?:\s*\|\s*Plate:\s*([^|]+))?/i);
+                name = match ? match[1]?.trim() : 'Visitor';
+                if (match?.[2]?.trim() && match[2].trim() !== 'N/A') plate = match[2].trim();
+                role = 'Visitor';
+                subtext = 'Campus Visitor';
+            } else if (l.remarks.includes('Emergency') || l.remarks.includes('EMERGENCY')) {
+                const match = l.remarks.match(/Emergency (?:tag|Response):\s*(.+)/i);
+                name = match ? match[1].trim() : 'Emergency Response';
+                role = 'Emergency';
+                subtext = 'Emergency Vehicle';
+                plate = 'EMERGENCY';
+            }
+        }
+
+        if (!name && adminState.specialTags) {
+            const cleanUid = (l.rfid_uid || '').replace(/\s+/g, '').toUpperCase();
+            const spec = adminState.specialTags.find(s => s.rfid_uid === l.rfid_uid || (s.rfid_uid && s.rfid_uid.replace(/\s+/g, '').toUpperCase() === cleanUid));
+            if (spec) {
+                if (spec.type === 'EMERGENCY') {
+                    name = spec.label || 'Emergency Response';
+                    role = 'Emergency';
+                    subtext = 'First Responder';
+                    plate = 'EMERGENCY';
+                } else if (spec.type === 'VISITOR') {
+                    name = (spec.label && spec.label !== 'Reusable Visitor Tag') ? spec.label : 'Visitor Pass';
+                    role = 'Visitor';
+                    subtext = 'Visitor';
+                    plate = spec.description?.match(/Plate:\s*([^|]+)/)?.[1]?.trim() || 'VISITOR';
+                }
+            }
+        }
+
+        if (!name) {
+            name = l.status === 'DENIED' ? 'Unregistered Card' : 'Authorized User';
+            role = 'General';
+        }
+
+        const key = name + '|' + role;
+        if (!userVisits[key]) {
+            userVisits[key] = {
+                name,
+                role,
+                subtext,
+                plate,
+                count: 0,
+                lastScan: l.timestamp
+            };
+        }
+        userVisits[key].count++;
+        if (new Date(l.timestamp) > new Date(userVisits[key].lastScan)) {
+            userVisits[key].lastScan = l.timestamp;
+            if (plate !== '--') userVisits[key].plate = plate;
+        }
+    });
+
+    let rankedUsers = Object.values(userVisits);
+
+    // Apply Category Filter
+    if (userLeaderboardCategory !== 'ALL') {
+        if (userLeaderboardCategory === 'Staff') {
+            rankedUsers = rankedUsers.filter(u => u.role.toLowerCase().includes('staff') || u.role.toLowerCase().includes('utility') || u.role.toLowerCase().includes('admin'));
+        } else {
+            rankedUsers = rankedUsers.filter(u => u.role.toLowerCase() === userLeaderboardCategory.toLowerCase());
+        }
+    }
+
+    rankedUsers.sort((a, b) => b.count - a.count);
+    const topList = rankedUsers.slice(0, 8);
+
+    if (topList.length > 0) {
+        table.innerHTML = topList.map((u, i) => {
+            let rankBadge = `<span class="px-2 py-0.5 rounded font-black text-xs bg-slate-100 text-slate-600">#${i + 1}</span>`;
+            if (i === 0) rankBadge = `<span class="px-2 py-0.5 rounded font-black text-xs bg-amber-100 text-amber-800 border border-amber-300">🥇 #1</span>`;
+            else if (i === 1) rankBadge = `<span class="px-2 py-0.5 rounded font-black text-xs bg-slate-200 text-slate-800 border border-slate-300">🥈 #2</span>`;
+            else if (i === 2) rankBadge = `<span class="px-2 py-0.5 rounded font-black text-xs bg-amber-50 text-amber-900 border border-amber-200">🥉 #3</span>`;
+
+            let catColor = 'bg-slate-100 text-slate-700';
+            const rLow = u.role.toLowerCase();
+            if (rLow.includes('student')) catColor = 'bg-emerald-100 text-emerald-800';
+            else if (rLow.includes('faculty')) catColor = 'bg-purple-100 text-purple-800';
+            else if (rLow.includes('staff') || rLow.includes('utility')) catColor = 'bg-amber-100 text-amber-800';
+            else if (rLow.includes('visitor')) catColor = 'bg-blue-100 text-blue-800';
+            else if (rLow.includes('emergency')) catColor = 'bg-red-100 text-red-800';
+
+            const lastScanStr = u.lastScan ? new Date(u.lastScan).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '--';
+
+            return `
+                <tr class="border-b border-slate-100/60 hover:bg-white/80 transition-colors">
+                    <td class="p-3 text-center">${rankBadge}</td>
+                    <td class="p-3">
+                        <div class="font-bold text-slate-800 text-xs">${u.name}</div>
+                        <div class="text-[10px] text-slate-400 font-medium">${u.subtext}</div>
+                    </td>
+                    <td class="p-3">
+                        <span class="px-2 py-0.5 rounded text-[10px] font-extrabold uppercase tracking-wide ${catColor}">${u.role}</span>
+                    </td>
+                    <td class="p-3 font-mono text-xs font-bold text-slate-700">${u.plate}</td>
+                    <td class="p-3 text-center font-mono font-black text-emerald-700 text-xs">${u.count}</td>
+                    <td class="p-3 text-right text-[11px] font-mono text-slate-400">${lastScanStr}</td>
+                </tr>
+            `;
+        }).join('');
+    } else {
+        table.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-slate-400 text-xs">No user access data for the selected role in this period.</td></tr>`;
+    }
 }
 
 function renderAnalyticsCharts(filteredLogs = getFilteredAnalyticsLogs()) {
