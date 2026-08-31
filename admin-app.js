@@ -222,9 +222,42 @@ function renderAdmin() {
         if (recentLogs.length) {
             el('adminLogsTable').innerHTML = recentLogs.map(l => {
                 const dateObj  = l.timestamp ? new Date(l.timestamp) : null;
-                const ts       = dateObj ? dateObj.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--';
-                const plate    = l.vehicles?.plate_number || l.remarks?.match(/[A-Z0-9]{3,8}/)?.[0] || '--';
-                const name     = l.users?.full_name || 'Cardholder';
+                let name     = l.users?.full_name;
+                let plate    = l.vehicles?.plate_number;
+
+                if (!name && l.remarks) {
+                    if (l.remarks.includes('Visitor')) {
+                        const match = l.remarks.match(/Visitor (?:Exit|Entry):\s*([^|]+)(?:\s*\|\s*Plate:\s*([^|]+))?/i);
+                        if (match) {
+                            name = match[1]?.trim();
+                            if (match[2]?.trim() && match[2].trim() !== 'N/A') plate = match[2].trim();
+                        } else {
+                            name = 'Visitor';
+                        }
+                    } else if (l.remarks.includes('Emergency') || l.remarks.includes('EMERGENCY')) {
+                        const match = l.remarks.match(/Emergency (?:tag|Response):\s*(.+)/i);
+                        name = match ? match[1].trim() : 'Emergency Response';
+                        plate = 'EMERGENCY';
+                    }
+                }
+
+                if (!name && adminState.specialTags) {
+                    const cleanUid = (l.rfid_uid || '').replace(/\s+/g, '').toUpperCase();
+                    const spec = adminState.specialTags.find(s => s.rfid_uid === l.rfid_uid || (s.rfid_uid && s.rfid_uid.replace(/\s+/g, '').toUpperCase() === cleanUid));
+                    if (spec) {
+                        if (spec.type === 'EMERGENCY') {
+                            name = spec.label || 'Emergency Response';
+                            plate = 'EMERGENCY';
+                        } else if (spec.type === 'VISITOR') {
+                            name = (spec.label && spec.label !== 'Reusable Visitor Tag') ? spec.label : 'Visitor';
+                            plate = spec.description?.match(/Plate:\s*([^|]+)/)?.[1]?.trim() || 'VISITOR PASS';
+                        }
+                    }
+                }
+
+                if (!name) name = l.status === 'DENIED' ? 'Unregistered Card' : 'Authorized User';
+                if (!plate) plate = l.rfid_uid ? l.rfid_uid.substring(0, 12) : '--';
+
                 const dir      = l.direction || 'ENTRY';
                 const isEntry  = dir === 'ENTRY';
                 const isAuth   = l.status === 'AUTHORIZED';
@@ -570,7 +603,7 @@ window.deleteUser = async function(id) {
 // =====================
 // ANALYTICS
 // =====================
-let chart1, chart2, chart3;
+let chart1, chart3;
 let analyticsRange = 'day';
 
 window.setAnalyticsRange = function(range) {
@@ -651,16 +684,7 @@ function initCharts() {
         });
     }
 
-    // 3. Entry vs Exit
-    const ctx2 = el('chartEntryExit');
-    if(ctx2) {
-        if(chart2) chart2.destroy();
-        const entries = filteredLogs.filter(l => l.scan_type === 'ENTRY').length;
-        const exits = filteredLogs.filter(l => l.scan_type === 'EXIT').length;
-        chart2 = new Chart(ctx2,{type:'bar',data:{labels:['Entries','Exits'],datasets:[{label:'Total Activity',data:[entries,exits],backgroundColor:['#22C55E','#EF4444'],borderRadius:8}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,grid:{display:false}}}}});
-    }
-
-    // 4. Peak Hours
+    // 3. Peak Hours
     const ctx3 = el('chartPeakHours');
     if(ctx3) {
         if(chart3) chart3.destroy();

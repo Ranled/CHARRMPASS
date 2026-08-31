@@ -382,6 +382,39 @@ bool checkAuthorizationOnline(String uid) {
   card_vehicleId = "";
   card_userId = "";
 
+  // 1. Check special_tags first (Visitor / Emergency)
+  String specialUrl = String(SUPABASE_URL) + "/rest/v1/special_tags?rfid_uid=eq." +
+                      urlEncode(uid) + "&select=type,label,description";
+  HTTPClient httpSpec;
+  httpSpec.begin(specialUrl);
+  httpSpec.addHeader("apikey", SUPABASE_ANON);
+  httpSpec.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
+  int specCode = httpSpec.GET();
+  if (specCode == 200) {
+    String specBody = httpSpec.getString();
+    DynamicJsonDocument specDoc(512);
+    if (deserializeJson(specDoc, specBody) == DeserializationError::Ok) {
+      JsonArray specArr = specDoc.as<JsonArray>();
+      if (specArr.size() > 0) {
+        card_found = true;
+        card_authorized = true;
+        String specType = String(specArr[0]["type"] | "VISITOR");
+        card_role = specType;
+        if (specType == "EMERGENCY") {
+          card_name = String(specArr[0]["label"] | "Emergency Vehicle");
+          card_plate = "EMERGENCY";
+        } else {
+          card_name = String(specArr[0]["label"] | "Visitor");
+          card_plate = "VISITOR PASS";
+        }
+        httpSpec.end();
+        return true;
+      }
+    }
+  }
+  httpSpec.end();
+
+  // 2. Check registered users & vehicles
   String url = String(SUPABASE_URL) + "/rest/v1/rfid_cards?rfid_uid=eq." +
                urlEncode(uid) +
                "&select=authorization_status,vehicle_id,user_id,"
@@ -557,7 +590,14 @@ void processScan(String uid) {
     digitalWrite(RED_LED, LOW);
     digitalWrite(GREEN_LED, HIGH);
 
-    insertTransactionOnline(uid, "AUTHORIZED", "ENTRY gate scan (Online)");
+    String remarks = "ENTRY gate scan (Online)";
+    if (card_role == "EMERGENCY") {
+      remarks = "Emergency tag: " + (card_name.length() > 0 ? card_name : "Emergency Response");
+    } else if (card_role == "VISITOR") {
+      remarks = "Visitor Entry: " + (card_name.length() > 0 ? card_name : "Visitor") + " | Plate: " + card_plate;
+    }
+
+    insertTransactionOnline(uid, "AUTHORIZED", remarks);
 
     if (card_name.length() > 0) {
       lcd.setCursor(0, 1);

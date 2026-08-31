@@ -52,6 +52,11 @@ async function initState() {
                 appState.totalVehicles = users.length;
             }
 
+            // Load special tags first
+            const { data: st, error: ste } = await supabaseClient.from('special_tags').select('*');
+            if (ste) console.error('Special tags fetch error:', ste);
+            if (st) appState.specialTags = st;
+
             // Load recent access logs
             const today = new Date().toISOString().split('T')[0];
             const { data: logs, error: le } = await supabaseClient
@@ -65,16 +70,64 @@ async function initState() {
                 .limit(50);
             if (le) console.error('Logs fetch error:', le);
             if (logs) {
-                appState.recentScans = logs.map(l => ({
-                    uid:    l.rfid_uid,
-                    name:   l.users?.full_name || 'Unknown',
-                    role:   l.users?.role || '--',
-                    plate:  l.vehicles?.plate_number || l.rfid_uid,
-                    status: l.status === 'DENIED' ? 'DENIED' : 'AUTHORIZED',
-                    event:  l.direction || 'ENTRY',
-                    duration: '--',
-                    time:   new Date(l.timestamp).toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit'})
-                }));
+                appState.recentScans = logs.map(l => {
+                    const cleanUid = (l.rfid_uid || '').replace(/\s+/g, '').toUpperCase();
+                    const special = appState.specialTags.find(s => 
+                        s.rfid_uid === l.rfid_uid || 
+                        (s.rfid_uid && s.rfid_uid.replace(/\s+/g, '').toUpperCase() === cleanUid)
+                    );
+
+                    let name = l.users?.full_name;
+                    let plate = l.vehicles?.plate_number;
+                    let role = l.users?.role;
+
+                    // 1. Check remarks for Visitor or Emergency details
+                    if (l.remarks) {
+                        if (l.remarks.includes('Visitor')) {
+                            const match = l.remarks.match(/Visitor (?:Exit|Entry):\s*([^|]+)(?:\s*\|\s*Plate:\s*([^|]+))?/i);
+                            if (match) {
+                                name = match[1]?.trim();
+                                if (match[2]?.trim() && match[2].trim() !== 'N/A') plate = match[2].trim();
+                            } else {
+                                name = 'Visitor';
+                            }
+                            role = 'VISITOR';
+                        } else if (l.remarks.includes('Emergency') || l.remarks.includes('EMERGENCY')) {
+                            const match = l.remarks.match(/Emergency (?:tag|Response):\s*(.+)/i);
+                            name = match ? match[1].trim() : 'Emergency Response';
+                            plate = 'EMERGENCY';
+                            role = 'EMERGENCY';
+                        }
+                    }
+
+                    // 2. Fallback to special_tags
+                    if (!name && special) {
+                        if (special.type === 'EMERGENCY') {
+                            name = special.label || 'Emergency Response';
+                            plate = 'EMERGENCY';
+                            role = 'EMERGENCY';
+                        } else if (special.type === 'VISITOR') {
+                            name = (special.label && special.label !== 'Reusable Visitor Tag') ? special.label : 'Visitor';
+                            plate = special.description?.match(/Plate:\s*([^|]+)/)?.[1]?.trim() || 'VISITOR PASS';
+                            role = 'VISITOR';
+                        }
+                    }
+
+                    if (!name) name = l.status === 'DENIED' ? 'Unregistered Card' : 'Authorized User';
+                    if (!plate) plate = l.rfid_uid ? l.rfid_uid.substring(0, 12) : '--';
+                    if (!role) role = '--';
+
+                    return {
+                        uid:    l.rfid_uid,
+                        name:   name,
+                        role:   role,
+                        plate:  plate,
+                        status: l.status === 'DENIED' ? 'DENIED' : 'AUTHORIZED',
+                        event:  l.direction || 'ENTRY',
+                        duration: '--',
+                        time:   new Date(l.timestamp).toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit'})
+                    };
+                });
 
                 // Active inside = ENTRY - EXIT (authorized)
                 const entries = logs.filter(l => l.direction === 'ENTRY' && l.status === 'AUTHORIZED').length;
@@ -85,10 +138,6 @@ async function initState() {
                 appState.entriesToday = todayLogs.filter(l => l.direction === 'ENTRY').length;
                 appState.exitsToday   = todayLogs.filter(l => l.direction === 'EXIT').length;
             }
-
-            const { data: st, error: ste } = await supabaseClient.from('special_tags').select('*');
-            if (ste) console.error('Special tags fetch error:', ste);
-            if (st) appState.specialTags = st;
 
             console.log('✅ Guard data loaded from Supabase:', appState.totalVehicles, 'vehicles,', appState.vehiclesInside, 'inside');
         } catch(e) { console.error('Init error:', e); }
@@ -392,20 +441,48 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
         userId = uid;
     }
 
-    // Check Special Tags (Visitor & Emergency)
-    let specialTag = appState.specialTags.find(t => t.rfid_uid === uid);
+    // Check Special Tags (Visitor & Emergency) - flexible space matching
+    const cleanUid = uid.replace(/\s+/g, '').toUpperCase();
+    let specialTag = appState.specialTags.find(t => 
+        t.rfid_uid === uid || 
+        (t.rfid_uid && t.rfid_uid.replace(/\s+/g, '').toUpperCase() === cleanUid)
+    );
     if (!specialTag && isConnected) {
-        const { data: st } = await supabaseClient.from('special_tags').select('*').eq('rfid_uid', uid).maybeSingle();
-        if (st) {
-            specialTag = st;
-            if (!appState.specialTags.some(x => x.rfid_uid === uid)) appState.specialTags.push(st);
+        try {
+            const { data: st } = await supabaseClient
+                .from('special_tags')
+                .select('*')
+                .or(`rfid_uid.eq.${uid},rfid_uid.eq.${cleanUid}`)
+                .maybeSingle();
+            if (st) {
+                specialTag = st;
+                if (!appState.specialTags.some(x => x.id === st.id)) appState.specialTags.push(st);
+            }
+        } catch (e) {
+            console.error('Special tag lookup error:', e);
         }
     }
 
     if (specialTag) {
         if (specialTag.type === 'EMERGENCY') {
-            result = { uid, name: specialTag.label || 'Emergency Vehicle', role: 'EMERGENCY', plate: 'EMERGENCY', type: 'Emergency Response', model: specialTag.description || 'Authorized', color: 'Red', status: 'AUTHORIZED', isEmergency: true };
+            result = { 
+                uid, 
+                name: specialTag.label || 'Emergency Vehicle', 
+                role: 'EMERGENCY', 
+                plate: 'EMERGENCY', 
+                type: 'Emergency Response', 
+                model: specialTag.description || 'Authorized Emergency', 
+                program: 'Emergency Service',
+                section: '--',
+                color: 'Red', 
+                status: 'AUTHORIZED', 
+                isEmergency: true 
+            };
         } else if (specialTag.type === 'VISITOR') {
+            const isAssigned = specialTag.label && specialTag.label !== 'Reusable Visitor Tag';
+            let visitorName = isAssigned ? specialTag.label : 'Visitor';
+            let visitorPlate = specialTag.description?.match(/Plate:\s*([^|]+)/)?.[1]?.trim() || 'VISITOR PASS';
+
             if (isEntry) {
                 // Check if visitor is already inside
                 let lastTxn = null;
@@ -424,11 +501,13 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                     
                     result = {
                         uid,
-                        name: specialTag.label || 'Visitor',
+                        name: visitorName,
                         role: 'VISITOR',
-                        plate: specialTag.description?.match(/Plate:\s*([^|]+)/)?.[1]?.trim() || 'N/A',
+                        plate: visitorPlate,
                         type: 'Visitor Vehicle',
                         model: 'Campus Visitor',
+                        program: 'Campus Visitor',
+                        section: '--',
                         color: '--',
                         status: 'AUTHORIZED',
                         isVisitor: true
@@ -440,17 +519,27 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                     return;
                 }
 
-                // Fresh Visitor Entry -> Open Visitor Entry Form
-                if (!fromRealtimeTxn) {
+                // If unassigned visitor tag, open the registration modal for guard input
+                if (!isAssigned) {
                     openVisitorModal(uid, 'Entry');
-                    return;
                 }
+
+                result = {
+                    uid,
+                    name: visitorName,
+                    role: 'VISITOR',
+                    plate: visitorPlate,
+                    type: 'Visitor Vehicle',
+                    model: 'Campus Visitor',
+                    program: 'Campus Visitor',
+                    section: '--',
+                    color: '--',
+                    status: 'AUTHORIZED',
+                    isVisitor: true
+                };
             } else {
                 // EXIT GATE: AUTOMATICALLY IDENTIFY VISITOR!
-                let visitorName = specialTag.label || 'Visitor';
-                let visitorPlate = specialTag.description?.match(/Plate:\s*([^|]+)/)?.[1]?.trim() || 'N/A';
-
-                if ((!visitorName || visitorName === 'Reusable Visitor Tag') && isConnected) {
+                if ((!isAssigned) && isConnected) {
                     const { data: lastEntry } = await supabaseClient
                         .from('transactions').select('remarks')
                         .eq('rfid_uid', uid).eq('direction', 'ENTRY').eq('status', 'AUTHORIZED')
@@ -469,7 +558,7 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                     name: visitorName,
                     role: 'VISITOR',
                     plate: visitorPlate,
-                    type: visitorPlate !== 'N/A' ? 'Visitor Vehicle' : 'Walk-in / Visitor',
+                    type: visitorPlate !== 'N/A' && visitorPlate !== 'VISITOR PASS' ? 'Visitor Vehicle' : 'Walk-in / Visitor',
                     model: 'Campus Visitor',
                     program: 'Campus Visitor',
                     section: '--',
@@ -543,7 +632,7 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
     if (radar) radar.classList.remove('scanning');
     if (scanData) scanData.classList.remove('opacity-70');
 
-    const isAuth = (fromRealtimeTxn ? fromRealtimeTxn.status === 'AUTHORIZED' : result.status === 'AUTHORIZED');
+    const isAuth = result.status === 'AUTHORIZED' || (fromRealtimeTxn && fromRealtimeTxn.status === 'AUTHORIZED');
 
     if (isAuth) {
         // Check for DUPLICATE ENTRY (User is already inside)

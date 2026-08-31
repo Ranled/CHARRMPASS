@@ -126,14 +126,24 @@ function renderRecentList() {
     const ok      = t.status === 'AUTHORIZED';
     let name    = t.users?.full_name;
     let plate   = t.vehicles?.plate_number;
-    if (!name && t.remarks?.includes('Visitor')) {
-      const match = t.remarks.match(/Visitor (?:Exit|Entry):\s*([^|]+)(?:\s*\|\s*Plate:\s*([^|]+))?/i);
-      if (match) {
-        name = match[1]?.trim();
-        plate = match[2]?.trim() || 'N/A';
+
+    if (!name && t.remarks) {
+      if (t.remarks.includes('Visitor')) {
+        const match = t.remarks.match(/Visitor (?:Exit|Entry):\s*([^|]+)(?:\s*\|\s*Plate:\s*([^|]+))?/i);
+        if (match) {
+          name = match[1]?.trim();
+          if (match[2]?.trim() && match[2].trim() !== 'N/A') plate = match[2].trim();
+        } else {
+          name = 'Visitor Pass';
+        }
+      } else if (t.remarks.includes('Emergency') || t.remarks.includes('EMERGENCY')) {
+        const match = t.remarks.match(/Emergency (?:tag|Response):\s*(.+)/i);
+        name = match ? match[1].trim() : 'Emergency Response';
+        plate = 'EMERGENCY';
       }
     }
-    if (!name) name = 'Unknown RFID';
+
+    if (!name) name = ok ? 'Authorized Driver' : 'Unregistered RFID';
     if (!plate) plate = t.rfid_uid?.substring(0, 12) || '--';
     const timeStr = new Date(t.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
     return `
@@ -202,11 +212,17 @@ function showScanResult(txn) {
     const match = txn.remarks.match(/Visitor (?:Exit|Entry):\s*([^|]+)(?:\s*\|\s*Plate:\s*([^|]+))?/i);
     if (match) {
       name = match[1]?.trim();
-      plate = match[2]?.trim() || 'N/A';
+      plate = match[2]?.trim() || 'VISITOR PASS';
       role = 'VISITOR';
       program = 'Campus Visitor';
       section = 'Visitor Entry';
     }
+  } else if (!name && (txn.remarks?.includes('Emergency') || txn.remarks?.includes('EMERGENCY') || txn.remarks?.includes('Emergency tag'))) {
+    name = 'Emergency Response';
+    plate = 'EMERGENCY';
+    role = 'EMERGENCY';
+    program = 'Emergency Response';
+    section = 'Priority Pass';
   }
 
   if (!name) name = 'Unknown Card';

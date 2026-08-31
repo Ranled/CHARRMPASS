@@ -156,14 +156,24 @@ function renderRecentList() {
     const ok    = t.status === 'AUTHORIZED';
     let name  = t.users?.full_name;
     let plate = t.vehicles?.plate_number;
-    if (!name && t.remarks?.includes('Visitor')) {
-      const match = t.remarks.match(/Visitor (?:Exit|Entry):\s*([^|]+)(?:\s*\|\s*Plate:\s*([^|]+))?/i);
-      if (match) {
-        name = match[1]?.trim();
-        plate = match[2]?.trim() || 'N/A';
+
+    if (!name && t.remarks) {
+      if (t.remarks.includes('Visitor')) {
+        const match = t.remarks.match(/Visitor (?:Exit|Entry):\s*([^|]+)(?:\s*\|\s*Plate:\s*([^|]+))?/i);
+        if (match) {
+          name = match[1]?.trim();
+          if (match[2]?.trim() && match[2].trim() !== 'N/A') plate = match[2].trim();
+        } else {
+          name = 'Visitor Pass';
+        }
+      } else if (t.remarks.includes('Emergency') || t.remarks.includes('EMERGENCY')) {
+        const match = t.remarks.match(/Emergency (?:tag|Response):\s*(.+)/i);
+        name = match ? match[1].trim() : 'Emergency Response';
+        plate = 'EMERGENCY';
       }
     }
-    if (!name) name = 'Unknown RFID';
+
+    if (!name) name = ok ? 'Authorized Driver' : 'Unregistered RFID';
     if (!plate) plate = t.rfid_uid?.substring(0, 12) || '--';
     const timeStr = new Date(t.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
     const dotClass = ok ? 'ok' : 'deny';
@@ -240,11 +250,17 @@ function showScanResult(txn, entryStatus) {
     const match = txn.remarks.match(/Visitor (?:Exit|Entry):\s*([^|]+)(?:\s*\|\s*Plate:\s*([^|]+))?/i);
     if (match) {
       name = match[1]?.trim();
-      plate = match[2]?.trim() || 'N/A';
+      plate = match[2]?.trim() || 'VISITOR PASS';
       role = 'VISITOR';
       program = 'Campus Visitor';
       section = 'Visitor Exit';
     }
+  } else if (!name && (txn.remarks?.includes('Emergency') || txn.remarks?.includes('EMERGENCY') || txn.remarks?.includes('Emergency tag'))) {
+    name = 'Emergency Response';
+    plate = 'EMERGENCY';
+    role = 'EMERGENCY';
+    program = 'Emergency Response';
+    section = 'Priority Pass';
   }
 
   if (!name) name = 'Unknown Card';
@@ -360,15 +376,39 @@ async function processManual() {
 
   if (!isConnected) { showToast('No database connection.', 'error'); return; }
 
-  const { data: card } = await supabaseClient
+  let card = null;
+  const { data: c } = await supabaseClient
     .from('rfid_cards')
     .select(`id, rfid_uid, authorization_status, vehicle_id, user_id,
              vehicles ( plate_number, vehicle_type, vehicle_model ),
              users    ( full_name, role, program, section )`)
     .eq('rfid_uid', uid).maybeSingle();
+  card = c;
 
-  const status  = card?.authorization_status === 'AUTHORIZED' ? 'AUTHORIZED' : 'DENIED';
-  const remarks = card ? (status === 'AUTHORIZED' ? 'Manual exit – guard station' : 'Manual exit – not authorized') : 'Manual exit – unregistered';
+  let isVisitor = false;
+  let visitorName = 'Visitor';
+  let visitorPlate = 'VISITOR PASS';
+
+  if (!card) {
+    const { data: spec } = await supabaseClient
+      .from('special_tags')
+      .select('*')
+      .eq('rfid_uid', uid)
+      .maybeSingle();
+    if (spec) {
+      if (spec.type === 'VISITOR') {
+        isVisitor = true;
+        visitorName = spec.label || 'Visitor';
+        visitorPlate = spec.description?.match(/Plate:\s*([^|]+)/)?.[1]?.trim() || 'VISITOR PASS';
+      }
+    }
+  }
+
+  const status  = (card?.authorization_status === 'AUTHORIZED' || isVisitor) ? 'AUTHORIZED' : 'DENIED';
+  let remarks = card ? (status === 'AUTHORIZED' ? 'Manual exit – guard station' : 'Manual exit – not authorized') : 'Manual exit – unregistered';
+  if (isVisitor) {
+    remarks = `Visitor Exit: ${visitorName} | Plate: ${visitorPlate}`;
+  }
 
   // Check prior entry BEFORE inserting
   const entryStatus = status === 'AUTHORIZED' ? await checkPriorEntry(uid) : 'n/a';
@@ -385,6 +425,14 @@ async function processManual() {
     .single();
 
   if (error) { showToast('DB error: ' + error.message, 'error'); return; }
+
+  if (isVisitor) {
+    await supabaseClient.from('special_tags').update({
+      label: 'Reusable Visitor Tag',
+      description: null
+    }).eq('rfid_uid', uid);
+    showToast(`Visitor "${visitorName}" exit logged. Tag is now vacant for reuse.`, 'success');
+  }
 
   await refreshInsideCount();
   handleNewTransaction(txn, entryStatus);

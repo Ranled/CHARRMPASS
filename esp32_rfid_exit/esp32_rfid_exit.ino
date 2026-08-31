@@ -398,9 +398,15 @@ bool checkAuthorizationOnline(String uid) {
       if (specArr.size() > 0) {
         card_found = true;
         card_authorized = true;
-        card_role = String(specArr[0]["type"] | "VISITOR");
-        card_name = String(specArr[0]["label"] | "Visitor");
-        card_plate = "VISITOR PASS";
+        String specType = String(specArr[0]["type"] | "VISITOR");
+        card_role = specType;
+        if (specType == "EMERGENCY") {
+          card_name = String(specArr[0]["label"] | "Emergency Vehicle");
+          card_plate = "EMERGENCY";
+        } else {
+          card_name = String(specArr[0]["label"] | "Visitor");
+          card_plate = "VISITOR PASS";
+        }
         httpSpec.end();
         return true;
       }
@@ -476,6 +482,26 @@ void insertTransactionOnline(String uid, String status, String remarks) {
   serializeJson(doc, body);
   http.POST(body);
   http.end();
+}
+
+// =======================
+// RESET REUSABLE VISITOR TAG
+// =======================
+void resetVisitorTagOnline(String uid) {
+  String url = String(SUPABASE_URL) + "/rest/v1/special_tags?rfid_uid=eq." + urlEncode(uid) + "&type=eq.VISITOR";
+  HTTPClient http;
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("apikey", SUPABASE_ANON);
+  http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
+  DynamicJsonDocument doc(256);
+  doc["label"] = "Reusable Visitor Tag";
+  doc["description"] = (char*)NULL;
+  String body;
+  serializeJson(doc, body);
+  http.PATCH(body);
+  http.end();
+  Serial.println("[VISITOR] Tag " + uid + " reset to vacant/reusable state.");
 }
 
 // =======================
@@ -588,7 +614,15 @@ void processScan(String uid) {
     digitalWrite(RED_LED, LOW);
     digitalWrite(GREEN_LED, HIGH);
 
-    insertTransactionOnline(uid, "AUTHORIZED", "EXIT gate scan (Online)");
+    String remarks = "EXIT gate scan (Online)";
+    if (card_role == "EMERGENCY") {
+      remarks = "Emergency tag: " + (card_name.length() > 0 ? card_name : "Emergency Response");
+    } else if (card_role == "VISITOR") {
+      remarks = "Visitor Exit: " + (card_name.length() > 0 ? card_name : "Visitor") + " | Plate: " + card_plate;
+      resetVisitorTagOnline(uid);
+    }
+
+    insertTransactionOnline(uid, "AUTHORIZED", remarks);
 
     if (card_name.length() > 0) {
       lcd.setCursor(0, 1);
