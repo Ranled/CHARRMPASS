@@ -60,16 +60,16 @@
                 <div class="lg:hidden font-display font-bold text-xl text-charm-yellow">CP</div>
             </div>
             <nav class="flex-1 py-6 flex flex-col gap-2 px-3 overflow-y-auto custom-scrollbar">
-                <a onclick="switchView('livescan')" class="sidebar-item active cursor-pointer" id="nav-livescan"><i
-                        data-lucide="scan-line" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Live
-                        Scan</span></a>
-                <a onclick="switchView('monitor')" class="sidebar-item cursor-pointer" id="nav-monitor"><i
-                        data-lucide="map" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Parking
-                        Monitor</span></a>
+                <a onclick="switchView('entry')" class="sidebar-item active cursor-pointer" id="nav-entry"><i
+                        data-lucide="log-in" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Entry
+                        Gate</span></a>
+                <a onclick="switchView('exit')" class="sidebar-item cursor-pointer" id="nav-exit"><i
+                        data-lucide="log-out" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Exit
+                        Gate</span></a>
                 <a onclick="switchView('logs')" class="sidebar-item cursor-pointer" id="nav-logs"><i
                         data-lucide="history" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Logs /
                         History</span></a>
-                <a href="settings.html" class="sidebar-item" id="nav-settings"><i data-lucide="settings"
+                <a onclick="openGuardSettingsModal()" class="sidebar-item cursor-pointer" id="nav-settings"><i data-lucide="settings"
                         class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Settings</span></a>
             </nav>
             <div class="p-4 border-t border-white/10 shrink-0">
@@ -119,16 +119,306 @@
             <!-- CONTENT -->
             <div class="flex-1 overflow-y-auto custom-scrollbar relative">
 
-                <!-- VIEW: LIVE SCAN -->
-                <div id="view-livescan" class="app-view p-6 lg:p-8 flex flex-col gap-6 h-full animate-slide-up">
-                    <div>
-                        <h2 class="text-3xl font-display font-extrabold text-slate-800 tracking-tight">Live Scan Monitor
-                        </h2>
-                        <p class="text-slate-500 font-medium mt-1">Real-time gate monitoring and RFID authorization.</p>
+                <!-- VIEW 1: ENTRY GATE MONITOR -->
+                <div id="view-entry" class="app-view p-6 lg:p-8 flex flex-col gap-6 animate-slide-up">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <div class="flex items-center gap-3">
+                                <h2 class="text-3xl font-display font-extrabold text-slate-800 tracking-tight">Entry Gate Monitor</h2>
+                                <span class="px-3 py-1 rounded-full text-xs font-bold bg-green-100 text-green-700 uppercase tracking-wider flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> ENTRY GATE</span>
+                            </div>
+                            <p class="text-slate-500 font-medium mt-1">Real-time incoming vehicle authorization and access recording.</p>
+                        </div>
                     </div>
 
-                    <!-- Top Stats -->
-                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 shrink-0">
+                    <div class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 min-h-[550px] overflow-hidden">
+                        <!-- Scanner Panel (Entry) -->
+                        <div
+                            class="lg:col-span-3 glass-card rounded-3xl p-6 flex flex-col items-center justify-start pt-8 relative overflow-hidden shadow-glass border border-white/50">
+                            <div id="scanGlowEntry"
+                                class="absolute inset-0 bg-slate-100 opacity-50 transition-colors duration-500"></div>
+                            <div class="relative z-10 flex flex-col items-center w-full">
+                                <h3 class="font-display font-bold text-slate-700 tracking-wide mb-6 uppercase text-sm flex items-center gap-2">
+                                    <i data-lucide="log-in" class="w-4 h-4 text-green-600"></i> Entry Scanner Status</h3>
+                                <div id="radarContainerEntry"
+                                    class="relative w-40 h-40 mb-6 flex items-center justify-center">
+                                    <div class="absolute inset-0 rounded-full border-2 border-slate-300 wave-1"></div>
+                                    <div class="absolute inset-4 rounded-full border-2 border-slate-200 wave-2"></div>
+                                    <div class="absolute inset-8 rounded-full border-2 border-slate-100 wave-3"></div>
+                                    <div id="radarCenterEntry"
+                                        class="relative w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center shadow-lg border-4 border-white transition-all duration-300">
+                                        <i data-lucide="nfc" id="radarIconEntry" class="w-10 h-10 text-slate-400"></i>
+                                    </div>
+                                </div>
+                                <div id="scanStatusTextEntry" class="text-xl font-bold font-display text-slate-600 mb-2">
+                                    ENTRY READY</div>
+                                <div id="scanSubtextEntry" class="text-sm font-medium text-slate-400 text-center px-4 h-10">
+                                    Tap card on Entry reader.</div>
+                                <div class="mt-6 pt-4 border-t border-slate-200 w-full flex flex-col gap-2">
+                                    <label
+                                        class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Manual Entry Scan</label>
+                                    <div class="flex gap-2">
+                                        <input type="text" id="demoUidInputEntry" placeholder="Enter RFID UID"
+                                            class="w-full text-sm px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-charm-dark outline-none bg-white/80 uppercase font-mono font-bold">
+                                        <button onclick="processManualGateScan('ENTRY')"
+                                            class="bg-charm-dark text-white px-4 rounded-lg text-sm font-bold hover:bg-opacity-90 transition-colors shadow-md">SCAN</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Scan Result (Entry) -->
+                        <div
+                            class="lg:col-span-6 glass-card rounded-3xl p-6 shadow-glass border border-white/50 flex flex-col relative overflow-hidden">
+                            <div class="flex gap-4 mb-4 border-b border-slate-200 pb-3">
+                                <span class="text-sm font-bold text-charm-dark border-b-2 border-charm-dark pb-1">Entry Scan Result</span>
+                            </div>
+                            <!-- Scan Result View -->
+                            <div class="flex-1 flex flex-col">
+                                <div id="scanResultEmptyEntry"
+                                    class="flex-1 flex flex-col items-center justify-center opacity-60">
+                                    <i data-lucide="scan" class="w-24 h-24 text-slate-300 mb-4"></i>
+                                    <h3 class="text-xl font-display font-bold text-slate-400">Waiting for Entry Scan...</h3>
+                                </div>
+                                <div id="scanResultDataEntry" class="flex-1 flex flex-col hidden gap-4">
+                                    <div
+                                        class="bg-white/80 backdrop-blur-md p-5 rounded-2xl border border-white shadow-sm flex items-start justify-between">
+                                        <div class="flex gap-5">
+                                            <div class="relative">
+                                                <div id="resIconContainerEntry" class="hidden w-20 h-20 rounded-2xl flex items-center justify-center shadow-md border-2 border-white bg-slate-100 text-slate-400">
+                                                    <i data-lucide="user" class="w-10 h-10"></i>
+                                                </div>
+                                                <img id="resProfileImageEntry" src="" alt="Profile"
+                                                    class="w-20 h-20 rounded-2xl object-cover shadow-md border-2 border-white">
+                                                <div id="resBadgeEntry"
+                                                    class="absolute -bottom-2 -right-2 w-8 h-8 rounded-full flex items-center justify-center border-2 border-white text-white shadow-md bg-green-500">
+                                                    <i data-lucide="check" class="w-4 h-4"></i></div>
+                                            </div>
+                                            <div class="flex flex-col justify-center">
+                                                <div id="resNameEntry"
+                                                    class="text-2xl font-display font-bold text-slate-800">--</div>
+                                                <div class="flex items-center gap-2 mt-1"><span id="resRoleEntry"
+                                                        class="px-2.5 py-0.5 rounded text-xs font-bold bg-slate-200 text-slate-700 uppercase">--</span><span
+                                                        id="resProgramEntry" class="text-sm text-slate-500">--</span></div>
+                                                <div
+                                                    class="mt-2 text-xs font-mono text-slate-400 font-semibold bg-slate-100 px-2 py-1 rounded inline-block">
+                                                    UID: <span id="resUidEntry">--</span></div>
+                                            </div>
+                                        </div>
+                                        <div id="resStatusLabelEntry"
+                                            class="px-4 py-2 rounded-xl font-bold text-sm tracking-wide shadow-sm border bg-green-50 border-green-200 text-green-700">
+                                            ✓ ENTRY AUTHORIZED</div>
+                                    </div>
+                                    <div class="bg-white/50 p-6 rounded-2xl border border-white/60">
+                                        <h4
+                                            class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                                            <i data-lucide="info" class="w-4 h-4"></i> Vehicle Details</h4>
+                                        <div class="grid grid-cols-2 lg:grid-cols-4 gap-y-6 gap-x-4">
+                                            <div>
+                                                <div class="text-xs font-semibold text-slate-500 mb-1">Type</div>
+                                                <div id="resVehTypeEntry" class="text-sm font-bold text-slate-800">--</div>
+                                            </div>
+                                            <div>
+                                                <div class="text-xs font-semibold text-slate-500 mb-1">Plate</div>
+                                                <div id="resPlateEntry"
+                                                    class="text-sm font-bold font-mono text-slate-800 bg-charm-yellow/20 px-2 py-0.5 rounded border border-charm-yellow/50 inline-block">
+                                                    --</div>
+                                            </div>
+                                            <div>
+                                                <div class="text-xs font-semibold text-slate-500 mb-1">Model</div>
+                                                <div id="resVehModelEntry" class="text-sm font-bold text-slate-800">--</div>
+                                            </div>
+                                            <div>
+                                                <div class="text-xs font-semibold text-slate-500 mb-1">Color</div>
+                                                <div id="resColorEntry" class="text-sm font-bold text-slate-800">--</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div id="resNoticeEntry"
+                                        class="p-4 rounded-xl bg-green-50 border border-green-200 flex items-center gap-4 mt-auto">
+                                        <div class="w-12 h-12 rounded-xl bg-charm-dark text-white flex items-center justify-center font-display font-bold text-xl shadow-md">ENTRY</div>
+                                        <div>
+                                            <div class="text-xs font-bold text-charm-dark uppercase tracking-wide">
+                                                Entry Logged</div>
+                                            <div class="text-sm font-medium text-slate-700">Vehicle entered campus successfully.
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Recent Entries -->
+                        <div
+                            class="lg:col-span-3 glass-card rounded-3xl p-5 shadow-glass border border-white/50 flex flex-col max-h-[550px] overflow-hidden">
+                            <h3 class="font-display font-bold text-sm text-slate-700 mb-4 uppercase tracking-wide flex items-center gap-2">
+                                <i data-lucide="log-in" class="w-4 h-4 text-green-600"></i> Recent Entries</h3>
+                            <div id="recentScansContainerEntry" class="flex-1 overflow-y-auto custom-scrollbar space-y-2">
+                                <div class="text-center text-slate-400 text-sm py-8"><i data-lucide="inbox"
+                                        class="w-8 h-8 mx-auto mb-2 text-slate-300"></i>No entries yet</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- VIEW 2: EXIT GATE MONITOR -->
+                <div id="view-exit" class="app-view hidden p-6 lg:p-8 flex flex-col gap-6 animate-slide-up">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <div class="flex items-center gap-3">
+                                <h2 class="text-3xl font-display font-extrabold text-slate-800 tracking-tight">Exit Gate Monitor</h2>
+                                <span class="px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700 uppercase tracking-wider flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span> EXIT GATE</span>
+                            </div>
+                            <p class="text-slate-500 font-medium mt-1">Real-time outgoing vehicle departure tracking and logout.</p>
+                        </div>
+                    </div>
+
+                    <div class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 min-h-[550px] overflow-hidden">
+                        <!-- Scanner Panel (Exit) -->
+                        <div
+                            class="lg:col-span-3 glass-card rounded-3xl p-6 flex flex-col items-center justify-start pt-8 relative overflow-hidden shadow-glass border border-white/50">
+                            <div id="scanGlowExit"
+                                class="absolute inset-0 bg-slate-100 opacity-50 transition-colors duration-500"></div>
+                            <div class="relative z-10 flex flex-col items-center w-full">
+                                <h3 class="font-display font-bold text-slate-700 tracking-wide mb-6 uppercase text-sm flex items-center gap-2">
+                                    <i data-lucide="log-out" class="w-4 h-4 text-blue-600"></i> Exit Scanner Status</h3>
+                                <div id="radarContainerExit"
+                                    class="relative w-40 h-40 mb-6 flex items-center justify-center">
+                                    <div class="absolute inset-0 rounded-full border-2 border-slate-300 wave-1"></div>
+                                    <div class="absolute inset-4 rounded-full border-2 border-slate-200 wave-2"></div>
+                                    <div class="absolute inset-8 rounded-full border-2 border-slate-100 wave-3"></div>
+                                    <div id="radarCenterExit"
+                                        class="relative w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center shadow-lg border-4 border-white transition-all duration-300">
+                                        <i data-lucide="nfc" id="radarIconExit" class="w-10 h-10 text-slate-400"></i>
+                                    </div>
+                                </div>
+                                <div id="scanStatusTextExit" class="text-xl font-bold font-display text-slate-600 mb-2">
+                                    EXIT READY</div>
+                                <div id="scanSubtextExit" class="text-sm font-medium text-slate-400 text-center px-4 h-10">
+                                    Tap card on Exit reader.</div>
+                                <div class="mt-6 pt-4 border-t border-slate-200 w-full flex flex-col gap-2">
+                                    <label
+                                        class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Manual Exit Scan</label>
+                                    <div class="flex gap-2">
+                                        <input type="text" id="demoUidInputExit" placeholder="Enter RFID UID"
+                                            class="w-full text-sm px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-charm-dark outline-none bg-white/80 uppercase font-mono font-bold">
+                                        <button onclick="processManualGateScan('EXIT')"
+                                            class="bg-blue-600 text-white px-4 rounded-lg text-sm font-bold hover:bg-blue-700 transition-colors shadow-md">SCAN</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Scan Result (Exit) -->
+                        <div
+                            class="lg:col-span-6 glass-card rounded-3xl p-6 shadow-glass border border-white/50 flex flex-col relative overflow-hidden">
+                            <div class="flex gap-4 mb-4 border-b border-slate-200 pb-3">
+                                <span class="text-sm font-bold text-blue-700 border-b-2 border-blue-600 pb-1">Exit Scan Result</span>
+                            </div>
+                            <!-- Scan Result View -->
+                            <div class="flex-1 flex flex-col">
+                                <div id="scanResultEmptyExit"
+                                    class="flex-1 flex flex-col items-center justify-center opacity-60">
+                                    <i data-lucide="scan" class="w-24 h-24 text-slate-300 mb-4"></i>
+                                    <h3 class="text-xl font-display font-bold text-slate-400">Waiting for Exit Scan...</h3>
+                                </div>
+                                <div id="scanResultDataExit" class="flex-1 flex flex-col hidden gap-4">
+                                    <div
+                                        class="bg-white/80 backdrop-blur-md p-5 rounded-2xl border border-white shadow-sm flex items-start justify-between">
+                                        <div class="flex gap-5">
+                                            <div class="relative">
+                                                <div id="resIconContainerExit" class="hidden w-20 h-20 rounded-2xl flex items-center justify-center shadow-md border-2 border-white bg-slate-100 text-slate-400">
+                                                    <i data-lucide="user" class="w-10 h-10"></i>
+                                                </div>
+                                                <img id="resProfileImageExit" src="" alt="Profile"
+                                                    class="w-20 h-20 rounded-2xl object-cover shadow-md border-2 border-white">
+                                                <div id="resBadgeExit"
+                                                    class="absolute -bottom-2 -right-2 w-8 h-8 rounded-full flex items-center justify-center border-2 border-white text-white shadow-md bg-blue-500">
+                                                    <i data-lucide="check" class="w-4 h-4"></i></div>
+                                            </div>
+                                            <div class="flex flex-col justify-center">
+                                                <div id="resNameExit"
+                                                    class="text-2xl font-display font-bold text-slate-800">--</div>
+                                                <div class="flex items-center gap-2 mt-1"><span id="resRoleExit"
+                                                        class="px-2.5 py-0.5 rounded text-xs font-bold bg-slate-200 text-slate-700 uppercase">--</span><span
+                                                        id="resProgramExit" class="text-sm text-slate-500">--</span></div>
+                                                <div
+                                                    class="mt-2 text-xs font-mono text-slate-400 font-semibold bg-slate-100 px-2 py-1 rounded inline-block">
+                                                    UID: <span id="resUidExit">--</span></div>
+                                            </div>
+                                        </div>
+                                        <div id="resStatusLabelExit"
+                                            class="px-4 py-2 rounded-xl font-bold text-sm tracking-wide shadow-sm border bg-blue-50 border-blue-200 text-blue-700">
+                                            ✓ EXIT AUTHORIZED</div>
+                                    </div>
+                                    <div class="bg-white/50 p-6 rounded-2xl border border-white/60">
+                                        <h4
+                                            class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                                            <i data-lucide="info" class="w-4 h-4"></i> Vehicle Details</h4>
+                                        <div class="grid grid-cols-2 lg:grid-cols-4 gap-y-6 gap-x-4">
+                                            <div>
+                                                <div class="text-xs font-semibold text-slate-500 mb-1">Type</div>
+                                                <div id="resVehTypeExit" class="text-sm font-bold text-slate-800">--</div>
+                                            </div>
+                                            <div>
+                                                <div class="text-xs font-semibold text-slate-500 mb-1">Plate</div>
+                                                <div id="resPlateExit"
+                                                    class="text-sm font-bold font-mono text-slate-800 bg-charm-yellow/20 px-2 py-0.5 rounded border border-charm-yellow/50 inline-block">
+                                                    --</div>
+                                            </div>
+                                            <div>
+                                                <div class="text-xs font-semibold text-slate-500 mb-1">Model</div>
+                                                <div id="resVehModelExit" class="text-sm font-bold text-slate-800">--</div>
+                                            </div>
+                                            <div>
+                                                <div class="text-xs font-semibold text-slate-500 mb-1">Color</div>
+                                                <div id="resColorExit" class="text-sm font-bold text-slate-800">--</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div id="resNoticeExit"
+                                        class="p-4 rounded-xl bg-blue-50 border border-blue-200 flex items-center gap-4 mt-auto">
+                                        <div class="w-12 h-12 rounded-xl bg-blue-600 text-white flex items-center justify-center font-display font-bold text-xl shadow-md">EXIT</div>
+                                        <div>
+                                            <div class="text-xs font-bold text-blue-700 uppercase tracking-wide">
+                                                Exit Logged</div>
+                                            <div class="text-sm font-medium text-slate-700">Vehicle logged out and exited campus safely.
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Recent Exits -->
+                        <div
+                            class="lg:col-span-3 glass-card rounded-3xl p-5 shadow-glass border border-white/50 flex flex-col max-h-[550px] overflow-hidden">
+                            <h3 class="font-display font-bold text-sm text-slate-700 mb-4 uppercase tracking-wide flex items-center gap-2">
+                                <i data-lucide="log-out" class="w-4 h-4 text-blue-600"></i> Recent Exits</h3>
+                            <div id="recentScansContainerExit" class="flex-1 overflow-y-auto custom-scrollbar space-y-2">
+                                <div class="text-center text-slate-400 text-sm py-8"><i data-lucide="inbox"
+                                        class="w-8 h-8 mx-auto mb-2 text-slate-300"></i>No exits yet</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- VIEW 3: LOGS -->
+                <div id="view-logs" class="app-view hidden p-6 lg:p-8 flex flex-col gap-6 animate-slide-up">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h2 class="text-3xl font-display font-extrabold text-slate-800">Scan Logs &amp; History</h2>
+                            <p class="text-slate-500 font-medium mt-1">Complete campus entry and exit transactions &amp; live summary.</p>
+                        </div>
+                        <div class="flex gap-2">
+                            <button onclick="filterLogs('ALL')" id="btnLogAll" class="px-4 py-2 rounded-xl text-xs font-bold bg-charm-dark text-white shadow-sm">All</button>
+                            <button onclick="filterLogs('ENTRY')" id="btnLogEntry" class="px-4 py-2 rounded-xl text-xs font-bold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50">Entries</button>
+                            <button onclick="filterLogs('EXIT')" id="btnLogExit" class="px-4 py-2 rounded-xl text-xs font-bold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50">Exits</button>
+                        </div>
+                    </div>
+
+                    <!-- Summary Stats Grid -->
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
                         <div class="glass-card rounded-2xl p-4 border border-white/60 flex items-center gap-3">
                             <div
                                 class="w-12 h-12 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
@@ -140,7 +430,7 @@
                         </div>
                         <div class="glass-card rounded-2xl p-4 border border-white/60 flex items-center gap-3">
                             <div
-                                class="w-12 h-12 rounded-full bg-charm-light/30 text-charm-dark flex items-center justify-center shrink-0">
+                                class="w-12 h-12 rounded-full bg-green-50 text-green-700 flex items-center justify-center shrink-0">
                                 <i data-lucide="log-in" class="w-5 h-5"></i></div>
                             <div>
                                 <div class="text-[10px] font-semibold text-slate-500 uppercase">Entries Today</div>
@@ -149,7 +439,7 @@
                         </div>
                         <div class="glass-card rounded-2xl p-4 border border-white/60 flex items-center gap-3">
                             <div
-                                class="w-12 h-12 rounded-full bg-orange-50 text-orange-600 flex items-center justify-center shrink-0">
+                                class="w-12 h-12 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
                                 <i data-lucide="log-out" class="w-5 h-5"></i></div>
                             <div>
                                 <div class="text-[10px] font-semibold text-slate-500 uppercase">Exits Today</div>
@@ -162,217 +452,14 @@
                             </div>
                             <div
                                 class="w-12 h-12 rounded-full bg-charm-dark text-charm-yellow flex items-center justify-center shrink-0 z-10">
-                                <i data-lucide="parking-circle" class="w-5 h-5"></i></div>
+                                <i data-lucide="door-open" class="w-5 h-5"></i></div>
                             <div class="z-10">
-                                <div class="text-[10px] font-semibold text-slate-500 uppercase">Available Slots</div>
+                                <div class="text-[10px] font-semibold text-slate-500 uppercase">Vehicles Inside</div>
                                 <div class="text-xl font-display font-bold text-charm-dark" id="statAvailable">--</div>
                             </div>
                         </div>
                     </div>
 
-                    <div class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 min-h-[550px] overflow-hidden">
-                        <!-- Scanner Panel -->
-                        <div
-                            class="lg:col-span-3 glass-card rounded-3xl p-6 flex flex-col items-center justify-start pt-10 relative overflow-hidden shadow-glass border border-white/50">
-                            <div id="scanGlow"
-                                class="absolute inset-0 bg-slate-100 opacity-50 transition-colors duration-500"></div>
-                            <div class="relative z-10 flex flex-col items-center w-full">
-                                <h3 class="font-display font-bold text-slate-700 tracking-wide mb-8 uppercase text-sm">
-                                    Scanner Status</h3>
-                                <div id="radarContainer"
-                                    class="relative w-40 h-40 mb-6 flex items-center justify-center">
-                                    <div class="absolute inset-0 rounded-full border-2 border-slate-300 wave-1"></div>
-                                    <div class="absolute inset-4 rounded-full border-2 border-slate-200 wave-2"></div>
-                                    <div class="absolute inset-8 rounded-full border-2 border-slate-100 wave-3"></div>
-                                    <div id="radarCenter"
-                                        class="relative w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center shadow-lg border-4 border-white transition-all duration-300">
-                                        <i data-lucide="nfc" id="radarIcon" class="w-10 h-10 text-slate-400"></i>
-                                    </div>
-                                </div>
-                                <div id="scanStatusText" class="text-xl font-bold font-display text-slate-600 mb-2">
-                                    READY</div>
-                                <div id="scanSubtext" class="text-sm font-medium text-slate-400 text-center px-4 h-10">
-                                    Place card near reader.</div>
-                                <div class="mt-6 pt-4 border-t border-slate-200 w-full flex flex-col gap-2">
-                                    <label
-                                        class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Manual Input Scan</label>
-                                    <div class="flex gap-2">
-                                        <input type="text" id="demoUidInput" placeholder="Enter UID"
-                                            class="w-full text-sm px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-charm-dark outline-none bg-white/80">
-                                        <button id="btnDemoScan"
-                                            class="bg-charm-dark text-white px-4 rounded-lg text-sm font-bold hover:bg-opacity-90 transition-colors shadow-md">SCAN</button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        <!-- Scan Result / Parking Grid -->
-                        <div
-                            class="lg:col-span-6 glass-card rounded-3xl p-6 shadow-glass border border-white/50 flex flex-col relative overflow-hidden">
-                            <div class="flex gap-4 mb-4 border-b border-slate-200 pb-3">
-                                <button id="tabScanResult"
-                                    class="text-sm font-bold text-charm-dark border-b-2 border-charm-dark pb-1">Scan
-                                    Result</button>
-                                <button id="tabParkingGrid" class="text-sm font-bold text-slate-400 pb-1">Parking
-                                    Slots</button>
-                            </div>
-                            <!-- Scan Result View -->
-                            <div id="viewScanResult" class="flex-1 flex flex-col">
-                                <div id="scanResultEmpty"
-                                    class="flex-1 flex flex-col items-center justify-center opacity-60">
-                                    <i data-lucide="scan" class="w-24 h-24 text-slate-300 mb-4"></i>
-                                    <h3 class="text-xl font-display font-bold text-slate-400">Waiting for Scan...</h3>
-                                </div>
-                                <div id="scanResultData" class="flex-1 flex flex-col hidden gap-4">
-                                    <div
-                                        class="bg-white/80 backdrop-blur-md p-5 rounded-2xl border border-white shadow-sm flex items-start justify-between">
-                                        <div class="flex gap-5">
-                                            <div class="relative">
-                                                <div id="resIconContainer" class="hidden w-20 h-20 rounded-2xl flex items-center justify-center shadow-md border-2 border-white bg-slate-100 text-slate-400">
-                                                    <i data-lucide="user" class="w-10 h-10"></i>
-                                                </div>
-                                                <img id="resProfileImage" src="" alt="Profile"
-                                                    class="w-20 h-20 rounded-2xl object-cover shadow-md border-2 border-white">
-                                                <div id="resBadge"
-                                                    class="absolute -bottom-2 -right-2 w-8 h-8 rounded-full flex items-center justify-center border-2 border-white text-white shadow-md">
-                                                    <i data-lucide="check" class="w-4 h-4"></i></div>
-                                            </div>
-                                            <div class="flex flex-col justify-center">
-                                                <div id="resName"
-                                                    class="text-2xl font-display font-bold text-slate-800">--</div>
-                                                <div class="flex items-center gap-2 mt-1"><span id="resRole"
-                                                        class="px-2.5 py-0.5 rounded text-xs font-bold bg-slate-200 text-slate-700 uppercase">--</span><span
-                                                        id="resProgram" class="text-sm text-slate-500">--</span></div>
-                                                <div
-                                                    class="mt-2 text-xs font-mono text-slate-400 font-semibold bg-slate-100 px-2 py-1 rounded inline-block">
-                                                    UID: <span id="resUid">--</span></div>
-                                            </div>
-                                        </div>
-                                        <div id="resStatusLabel"
-                                            class="px-4 py-2 rounded-xl font-bold text-sm tracking-wide shadow-sm border">
-                                            --</div>
-                                    </div>
-                                    <div class="bg-white/50 p-6 rounded-2xl border border-white/60">
-                                        <h4
-                                            class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                                            <i data-lucide="info" class="w-4 h-4"></i> Vehicle Details</h4>
-                                        <div class="grid grid-cols-2 lg:grid-cols-4 gap-y-6 gap-x-4">
-                                            <div>
-                                                <div class="text-xs font-semibold text-slate-500 mb-1">Type</div>
-                                                <div id="resVehType" class="text-sm font-bold text-slate-800">--</div>
-                                            </div>
-                                            <div>
-                                                <div class="text-xs font-semibold text-slate-500 mb-1">Plate</div>
-                                                <div id="resPlate"
-                                                    class="text-sm font-bold font-mono text-slate-800 bg-charm-yellow/20 px-2 py-0.5 rounded border border-charm-yellow/50 inline-block">
-                                                    --</div>
-                                            </div>
-                                            <div>
-                                                <div class="text-xs font-semibold text-slate-500 mb-1">Model</div>
-                                                <div id="resVehModel" class="text-sm font-bold text-slate-800">--</div>
-                                            </div>
-                                            <div>
-                                                <div class="text-xs font-semibold text-slate-500 mb-1">Color</div>
-                                                <div id="resColor" class="text-sm font-bold text-slate-800">--</div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div id="resSlotNotice"
-                                        class="p-4 rounded-xl bg-charm-light/20 border border-charm-light/50 flex items-center gap-4 hidden mt-auto">
-                                        <div class="w-12 h-12 rounded-xl bg-charm-dark text-white flex items-center justify-center font-display font-bold text-xl shadow-md"
-                                            id="resSlotId">TM1</div>
-                                        <div>
-                                            <div class="text-xs font-bold text-charm-dark uppercase tracking-wide">
-                                                Assigned Parking Slot</div>
-                                            <div class="text-sm font-medium text-slate-700">Vehicle authorized to park.
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <!-- MANUAL SLOT ASSIGNMENT UI -->
-                                    <div id="slotAssignmentUI"
-                                        class="hidden flex-col gap-3 mt-auto p-4 rounded-xl border bg-slate-50 border-slate-200 shadow-sm">
-                                        <label class="text-xs font-bold text-slate-500 uppercase tracking-wide">Assign
-                                            Parking Slot</label>
-                                        <div class="flex flex-col sm:flex-row gap-2">
-                                            <select id="slotSelector"
-                                                class="flex-1 px-3 py-2 border border-slate-300 rounded-lg bg-white font-bold text-slate-700 focus:ring-2 focus:ring-charm-dark outline-none min-w-0"></select>
-                                            <div class="flex gap-2 shrink-0">
-                                                <button id="btnConfirmAssign"
-                                                    class="px-4 py-2 bg-charm-dark text-white rounded-lg text-sm font-bold shadow-md hover:bg-opacity-90 transition-colors whitespace-nowrap">Confirm
-                                                    Entry</button>
-                                                <button id="btnDenyEntryAlt"
-                                                    class="px-4 py-2 bg-charm-red text-white rounded-lg text-sm font-bold shadow-md hover:bg-red-600 transition-colors whitespace-nowrap">Deny</button>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <div class="flex gap-3 mt-2" id="manualOverrideButtons">
-                                        <button id="btnAllow"
-                                            class="flex-1 py-3C rounded-xl bg-charm-green text-white font-bold text-sm flex items-center justify-center gap-2 hover:bg-green-600 transition-colors shadow-md"><i
-                                                data-lucide="check" class="w-4 h-4"></i> Allow Entry</button>
-                                        <button id="btnDeny"
-                                            class="flex-1 py-3 rounded-xl bg-charm-red text-white font-bold text-sm flex items-center justify-center gap-2 hover:bg-red-600 transition-colors shadow-md"><i
-                                                data-lucide="x" class="w-4 h-4"></i> Deny Entry</button>
-                                    </div>
-                                </div>
-                            </div>
-                            <!-- Parking Grid View -->
-                            <div id="viewParkingGrid" class="hidden flex-col flex-1">
-                                <div
-                                    class="flex items-center gap-4 mb-4 p-3 rounded-xl bg-white/50 border border-slate-100">
-                                    <div class="flex-1 text-center border-r border-slate-200">
-                                        <div class="text-2xl font-bold font-display text-charm-green" id="gridAvail">--
-                                        </div>
-                                        <div class="text-[10px] font-bold text-slate-400 uppercase">Available</div>
-                                    </div>
-                                    <div class="flex-1 text-center">
-                                        <div class="text-2xl font-bold font-display text-red-500" id="gridOccup">--
-                                        </div>
-                                        <div class="text-[10px] font-bold text-slate-400 uppercase">Occupied</div>
-                                    </div>
-                                </div>
-                                <div id="liveScanSlots" class="grid grid-cols-5 gap-3 flex-1 content-start"></div>
-                            </div>
-                        </div>
-                        <!-- Recent Scans -->
-                        <div
-                            class="lg:col-span-3 glass-card rounded-3xl p-5 shadow-glass border border-white/50 flex flex-col max-h-[500px] lg:max-h-none overflow-hidden">
-                            <h3 class="font-display font-bold text-sm text-slate-700 mb-4 uppercase tracking-wide">
-                                Recent Scans</h3>
-                            <div id="recentScansContainer" class="flex-1 overflow-y-auto custom-scrollbar space-y-2">
-                                <div class="text-center text-slate-400 text-sm py-8"><i data-lucide="inbox"
-                                        class="w-8 h-8 mx-auto mb-2 text-slate-300"></i>No scans yet</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- VIEW: PARKING MONITOR -->
-                <div id="view-monitor" class="app-view hidden p-6 lg:p-8 flex-col gap-6 animate-slide-up">
-                    <div>
-                        <h2 class="text-3xl font-display font-extrabold text-slate-800">Parking Monitor</h2>
-                        <p class="text-slate-500 font-medium mt-1">Real-time parking slot visualization.</p>
-                    </div>
-                    <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass">
-                        <div class="flex items-center gap-6 mb-6">
-                            <h3 class="font-display font-bold text-lg">TM Building Parking</h3>
-                            <div class="flex gap-3 text-xs font-bold"><span class="flex items-center gap-1"><span
-                                        class="w-3 h-3 rounded bg-charm-green"></span>Available</span><span
-                                    class="flex items-center gap-1"><span
-                                        class="w-3 h-3 rounded bg-red-500"></span>Occupied</span><span
-                                    class="flex items-center gap-1"><span
-                                        class="w-3 h-3 rounded bg-yellow-400"></span>Reserved</span></div>
-                        </div>
-                        <div id="monitorSlotsContainer" class="grid grid-cols-5 md:grid-cols-10 gap-3"></div>
-                    </div>
-                </div>
-
-                <!-- VIEW: LOGS -->
-                <div id="view-logs" class="app-view hidden p-6 lg:p-8 flex-col gap-6 animate-slide-up">
-                    <div>
-                        <h2 class="text-3xl font-display font-extrabold text-slate-800">Scan Logs & History</h2>
-                        <p class="text-slate-500 font-medium mt-1">Complete activity log.</p>
-                    </div>
                     <div
                         class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col min-h-[500px]">
                         <div class="flex-1 overflow-auto rounded-xl border border-slate-100 bg-white/40">
@@ -383,8 +470,8 @@
                                         <th class="p-4 border-b border-slate-200">Time</th>
                                         <th class="p-4 border-b border-slate-200">UID</th>
                                         <th class="p-4 border-b border-slate-200">Name</th>
-                                        <th class="p-4 border-b border-slate-200 text-center">Event</th>
-                                        <th class="p-4 border-b border-slate-200">Slot</th>
+                                        <th class="p-4 border-b border-slate-200">Plate</th>
+                                        <th class="p-4 border-b border-slate-200 text-center">Direction</th>
                                         <th class="p-4 border-b border-slate-200 text-right">Status</th>
                                     </tr>
                                 </thead>
@@ -397,7 +484,7 @@
         </main>
     </div>
 
-    <!-- VIEW: SLOT INFO MODAL -->
+    <!-- VEHICLE INFO MODAL -->
     <div id="slotInfoModal"
         class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 opacity-0 transition-opacity duration-300">
         <div class="bg-white rounded-[2rem] w-full max-w-lg shadow-2xl overflow-hidden transform scale-95 transition-transform duration-300"
@@ -450,36 +537,160 @@
         </div>
     </div>
 
-    <!-- VIEW: PROFILE EDIT MODAL -->
-    <div id="profileEditModal"
+    <!-- VIEW: GUARD SETTINGS & CREDENTIALS MODAL -->
+    <div id="guardSettingsModal"
         class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 opacity-0 transition-opacity duration-300">
         <div
-            class="bg-white rounded-[2rem] w-full max-w-sm shadow-2xl overflow-hidden transform scale-95 transition-transform duration-300">
-            <div class="p-8">
-                <h3 class="text-xl font-display font-bold text-slate-800 mb-6">Edit Guard Profile</h3>
-                <div class="space-y-4">
-                    <div>
-                        <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Full
-                            Name</label>
-                        <input type="text" id="editGuardName"
-                            class="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-charm-dark outline-none text-sm font-bold text-slate-800"
-                            placeholder="e.g. Officer Reyes">
+            class="bg-white rounded-[2rem] w-full max-w-md shadow-2xl overflow-hidden transform scale-95 transition-transform duration-300 border border-slate-100">
+            <div class="p-6 bg-charm-dark text-white flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-charm-mid text-charm-yellow flex items-center justify-center shadow-md">
+                        <i data-lucide="settings" class="w-5 h-5"></i>
                     </div>
                     <div>
-                        <label
-                            class="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Designation
-                            / Role</label>
-                        <input type="text" id="editGuardRole"
-                            class="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-charm-dark outline-none text-sm font-bold text-slate-800"
-                            placeholder="e.g. Main Gate Guard">
+                        <h3 class="text-lg font-display font-bold">Guard Settings</h3>
+                        <p class="text-xs text-charm-light/80 font-medium">Security Station Preferences</p>
                     </div>
                 </div>
-                <div class="flex gap-3 mt-8">
-                    <button onclick="closeProfileModal()"
-                        class="flex-1 px-4 py-3 rounded-xl bg-slate-100 text-slate-600 text-sm font-bold hover:bg-slate-200 transition-colors">Cancel</button>
-                    <button onclick="saveProfile()"
-                        class="flex-1 px-4 py-3 rounded-xl bg-charm-dark text-white text-sm font-bold hover:bg-opacity-90 shadow-md transition-all">Save
-                        Changes</button>
+                <button onclick="closeGuardSettingsModal()" class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-white hover:bg-white/20 transition-colors">
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+            </div>
+            <div class="p-6 space-y-5 max-h-[75vh] overflow-y-auto custom-scrollbar">
+                <!-- Credentials Section -->
+                <div>
+                    <h4 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-1.5">
+                        <i data-lucide="shield" class="w-3.5 h-3.5 text-charm-dark"></i> Guard Account Credentials
+                    </h4>
+                    <div class="space-y-3 p-4 rounded-2xl bg-slate-50 border border-slate-100">
+                        <div>
+                            <label class="text-[10px] font-bold uppercase text-slate-500 block mb-1">Display Name</label>
+                            <input type="text" id="guardDisplayName"
+                                class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-charm-dark outline-none text-sm font-bold text-slate-800 bg-white"
+                                placeholder="e.g. Officer Reyes">
+                        </div>
+                        <div>
+                            <label class="text-[10px] font-bold uppercase text-slate-500 block mb-1">Username</label>
+                            <input type="text" id="guardUsernameInput"
+                                class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-charm-dark outline-none text-sm font-bold text-slate-800 bg-white"
+                                placeholder="e.g. guard">
+                        </div>
+                        <div>
+                            <label class="text-[10px] font-bold uppercase text-slate-500 block mb-1">Password</label>
+                            <div class="relative">
+                                <input type="password" id="guardPasswordInput"
+                                    class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-charm-dark outline-none text-sm font-bold text-slate-800 bg-white pr-10"
+                                    placeholder="Enter new password">
+                                <button type="button" onclick="toggleGuardPass(this)" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-charm-dark">
+                                    <i data-lucide="eye" class="w-4 h-4"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Alert Preferences -->
+                <div>
+                    <h4 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-1.5">
+                        <i data-lucide="bell" class="w-3.5 h-3.5 text-charm-dark"></i> Sound &amp; Alert Preferences
+                    </h4>
+                    <div class="space-y-3 p-4 rounded-2xl bg-slate-50 border border-slate-100">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <div class="text-xs font-bold text-slate-800">Scan Audio Chime</div>
+                                <div class="text-[10px] text-slate-400">Play chime on entry/exit tap</div>
+                            </div>
+                            <input type="checkbox" id="guardSoundToggle" checked class="w-4 h-4 accent-charm-dark cursor-pointer rounded">
+                        </div>
+                        <div class="flex items-center justify-between pt-2 border-t border-slate-200/60">
+                            <div>
+                                <div class="text-xs font-bold text-slate-800">Access Denied Alarm</div>
+                                <div class="text-[10px] text-slate-400">Audible warning on denied cards</div>
+                            </div>
+                            <input type="checkbox" id="guardDeniedToggle" checked class="w-4 h-4 accent-charm-dark cursor-pointer rounded">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Gate Gateway Status -->
+                <div class="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <div class="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center">
+                            <i data-lucide="radio" class="w-4 h-4"></i>
+                        </div>
+                        <div>
+                            <div class="text-xs font-bold text-emerald-900">Dual-Gate Gateways</div>
+                            <div class="text-[10px] text-emerald-700 font-medium">Entry &amp; Exit readers online</div>
+                        </div>
+                    </div>
+                    <span class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-200 text-emerald-800 uppercase">ONLINE</span>
+                </div>
+
+                <div class="flex gap-3 pt-2">
+                    <button onclick="closeGuardSettingsModal()"
+                        class="flex-1 px-4 py-3 rounded-xl bg-slate-100 text-slate-600 text-sm font-bold hover:bg-slate-200 transition-colors">
+                        Cancel
+                    </button>
+                    <button onclick="saveGuardSettings()"
+                        class="flex-1 px-4 py-3 rounded-xl bg-charm-dark text-white text-sm font-bold hover:bg-opacity-90 shadow-md transition-all flex items-center justify-center gap-1.5">
+                        <i data-lucide="save" class="w-4 h-4"></i> Save Settings
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- DUPLICATE ENTRY CONFIRMATION MODAL -->
+    <div id="duplicateEntryModal"
+        class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 opacity-0 transition-opacity duration-300">
+        <div
+            class="bg-white rounded-[2rem] w-full max-w-md shadow-2xl overflow-hidden transform scale-95 transition-transform duration-300 border border-amber-200">
+            <div class="p-6 bg-gradient-to-r from-amber-500 to-orange-500 text-white flex items-center gap-4">
+                <div class="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center shrink-0">
+                    <i data-lucide="alert-triangle" class="w-7 h-7 text-white"></i>
+                </div>
+                <div>
+                    <h3 class="text-lg font-display font-bold leading-tight">Already Entered Campus</h3>
+                    <p class="text-xs text-amber-100 font-medium mt-0.5">Guard Confirmation Required</p>
+                </div>
+            </div>
+            <div class="p-6 space-y-4 bg-white">
+                <div class="p-4 rounded-2xl bg-amber-50 border border-amber-200">
+                    <p class="text-sm font-medium text-amber-900 leading-relaxed" id="dupModalMessage">
+                        This user has already entered campus.
+                    </p>
+                    <div class="mt-3 pt-3 border-t border-amber-200/60 flex items-center justify-between text-xs">
+                        <span class="text-slate-500 font-bold uppercase tracking-wider">Previous Entry:</span>
+                        <span class="font-mono font-bold text-amber-800" id="dupModalPrevTime">--:--</span>
+                    </div>
+                </div>
+
+                <div class="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-2">
+                    <div class="flex justify-between text-xs">
+                        <span class="text-slate-400 font-bold uppercase">Driver:</span>
+                        <span class="font-bold text-slate-800" id="dupModalDriver">--</span>
+                    </div>
+                    <div class="flex justify-between text-xs">
+                        <span class="text-slate-400 font-bold uppercase">Vehicle Plate:</span>
+                        <span class="font-mono font-bold text-charm-dark" id="dupModalPlate">--</span>
+                    </div>
+                    <div class="flex justify-between text-xs">
+                        <span class="text-slate-400 font-bold uppercase">UID:</span>
+                        <span class="font-mono text-slate-500" id="dupModalUid">--</span>
+                    </div>
+                </div>
+
+                <p class="text-xs text-slate-500 text-center font-medium">Do you want to store and allow this re-entry?</p>
+
+                <div class="flex gap-3 pt-2">
+                    <button onclick="closeDuplicateModal(false)"
+                        class="flex-1 px-4 py-3 rounded-xl bg-slate-100 text-slate-600 text-sm font-bold hover:bg-slate-200 transition-colors">
+                        Cancel / Deny
+                    </button>
+                    <button onclick="confirmDuplicateEntry()"
+                        class="flex-1 px-4 py-3 rounded-xl bg-charm-green text-white text-sm font-bold hover:bg-green-600 shadow-md transition-all flex items-center justify-center gap-1.5">
+                        <i data-lucide="check" class="w-4 h-4"></i> Allow Re-Entry
+                    </button>
                 </div>
             </div>
         </div>
@@ -487,32 +698,67 @@
 
     <!-- VIEW: VISITOR ENTRY MODAL -->
     <div id="visitorModal"
-        class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 opacity-0 transition-opacity duration-300">
+        class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 opacity-0 transition-opacity duration-300">
         <div
-            class="bg-white rounded-[2rem] w-full max-w-sm shadow-2xl overflow-hidden transform scale-95 transition-transform duration-300">
-            <div class="p-8">
-                <div class="flex items-center gap-4 mb-6">
-                    <div class="w-12 h-12 rounded-2xl bg-blue-100 text-blue-600 flex items-center justify-center shadow-sm">
-                        <i data-lucide="user-plus" class="w-6 h-6"></i>
+            class="bg-white rounded-[2rem] w-full max-w-md shadow-2xl overflow-hidden transform scale-95 transition-transform duration-300 border border-slate-100">
+            <div class="p-6 bg-gradient-to-r from-blue-600 to-indigo-600 text-white flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-11 h-11 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center shadow-md">
+                        <i data-lucide="user-plus" class="w-6 h-6 text-white"></i>
                     </div>
                     <div>
-                        <h3 class="text-xl font-display font-bold text-slate-800">Visitor Entry</h3>
-                        <p class="text-xs font-bold text-slate-400 uppercase tracking-widest">New Session</p>
+                        <h3 class="text-lg font-display font-bold">Visitor Entry Registration</h3>
+                        <p class="text-xs text-blue-100 font-medium" id="visitorModalSub">Reusable Visitor RFID Tag</p>
                     </div>
                 </div>
-                <div class="space-y-4">
+                <button onclick="closeVisitorModal()" class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-white hover:bg-white/20 transition-colors">
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+            </div>
+            <div class="p-6 space-y-4">
+                <div class="p-3 bg-blue-50/80 rounded-xl border border-blue-100 flex items-center justify-between text-xs">
+                    <span class="text-slate-500 font-bold uppercase tracking-wider">RFID UID:</span>
+                    <span class="font-mono font-bold text-blue-800" id="visitorModalUid">--</span>
+                </div>
+
+                <div class="space-y-3">
                     <div>
-                        <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Visitor Full Name</label>
+                        <label class="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1 block">
+                            Visitor Full Name <span class="text-red-500">*</span>
+                        </label>
                         <input type="text" id="visitorNameInput"
                             class="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-bold text-slate-800"
-                            placeholder="Enter Name of Visitor">
+                            placeholder="e.g. Maria Clara Santos">
+                    </div>
+
+                    <div>
+                        <label class="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1 block">
+                            Vehicle Plate Number <span class="text-slate-400 font-normal">(or "N/A" if none)</span>
+                        </label>
+                        <input type="text" id="visitorPlateInput"
+                            class="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-bold text-slate-800 uppercase font-mono"
+                            placeholder="e.g. ABC-1234 or N/A" value="N/A">
+                    </div>
+
+                    <div>
+                        <label class="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1 block">
+                            Purpose / Note
+                        </label>
+                        <input type="text" id="visitorPurposeInput"
+                            class="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-semibold text-slate-800"
+                            placeholder="e.g. Official Business, Delivery, Inquiry" value="Campus Visitor">
                     </div>
                 </div>
-                <div class="flex gap-3 mt-8">
+
+                <div class="flex gap-3 pt-4 border-t border-slate-100">
                     <button onclick="closeVisitorModal()"
-                        class="flex-1 px-4 py-3 rounded-xl bg-slate-100 text-slate-600 text-sm font-bold hover:bg-slate-200 transition-colors">Cancel</button>
+                        class="flex-1 px-4 py-3 rounded-xl bg-slate-100 text-slate-600 text-sm font-bold hover:bg-slate-200 transition-colors">
+                        Cancel
+                    </button>
                     <button onclick="confirmVisitorEntry()"
-                        class="flex-1 px-4 py-3 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 shadow-md transition-all">Submit Entry</button>
+                        class="flex-1 px-4 py-3 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 shadow-md transition-all flex items-center justify-center gap-1.5">
+                        <i data-lucide="check" class="w-4 h-4"></i> Authorize Entry
+                    </button>
                 </div>
             </div>
         </div>

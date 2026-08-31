@@ -1,12 +1,10 @@
 /*
  * ============================================================
- * CHARRMPASS — ESP32 Unified Dual-Gate RFID Scanner v3.6 (Dual Hardware SPI)
+ * CHARRMPASS — ESP32 ENTRY Gate RFID Scanner v3.6 (Dual Hardware SPI)
  *
- * ONE firmware for BOTH Entry and Exit gates with independent SPI buses:
+ * Dedicated firmware for the ENTRY GATE unit with independent SPI buses:
  *   - VSPI Bus (Pins 18, 19, 23, 5): Dedicated to MFRC522 RFID Reader
  *   - HSPI Bus (Pins 26, 14, 12, 13): Dedicated to MicroSD Card Module
- *
- * Switch GATE_TYPE and GATE_ID below to configure unit.
  *
  * Features:
  *   - Online Mode: Real-time Supabase verification & Whitelist caching to SD.
@@ -37,12 +35,8 @@
  * ============================================================
  */
 
-// =====================================================
-// ▼▼▼  CHANGE THIS ONE LINE TO SWITCH GATE  ▼▼▼
-// =====================================================
-#define GATE_TYPE "ENTRY"               // "ENTRY" or "EXIT"
-#define GATE_ID "CHARRMPASS_GATE_ENTRY" // or "CHARRMPASS_GATE_EXIT"
-// =====================================================
+#define GATE_TYPE "ENTRY"
+#define GATE_ID "CHARRMPASS_GATE_ENTRY"
 
 #include <ArduinoJson.h>
 #include <FS.h>
@@ -129,7 +123,7 @@ void lcdMsg(String line1, String line2) {
 
 void showReady() {
   if (wifiConnected) {
-    lcdMsg("  SCAN CARD   ", String(GATE_TYPE) + " READY...");
+    lcdMsg("  SCAN CARD   ", "ENTRY READY...");
   } else {
     lcdMsg("  SCAN CARD   ", "[OFFLINE] READY");
   }
@@ -388,33 +382,6 @@ bool checkAuthorizationOnline(String uid) {
   card_vehicleId = "";
   card_userId = "";
 
-  if (String(GATE_TYPE) == "EXIT") {
-    String specialUrl = String(SUPABASE_URL) + "/rest/v1/special_tags?rfid_uid=eq." +
-                        urlEncode(uid) + "&select=type,label,description";
-    HTTPClient httpSpec;
-    httpSpec.begin(specialUrl);
-    httpSpec.addHeader("apikey", SUPABASE_ANON);
-    httpSpec.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
-    int specCode = httpSpec.GET();
-    if (specCode == 200) {
-      String specBody = httpSpec.getString();
-      DynamicJsonDocument specDoc(512);
-      if (deserializeJson(specDoc, specBody) == DeserializationError::Ok) {
-        JsonArray specArr = specDoc.as<JsonArray>();
-        if (specArr.size() > 0) {
-          card_found = true;
-          card_authorized = true;
-          card_role = String(specArr[0]["type"] | "VISITOR");
-          card_name = String(specArr[0]["label"] | "Visitor");
-          card_plate = "VISITOR PASS";
-          httpSpec.end();
-          return true;
-        }
-      }
-    }
-    httpSpec.end();
-  }
-
   String url = String(SUPABASE_URL) + "/rest/v1/rfid_cards?rfid_uid=eq." +
                urlEncode(uid) +
                "&select=authorization_status,vehicle_id,user_id,"
@@ -428,7 +395,12 @@ bool checkAuthorizationOnline(String uid) {
 
   int code = http.GET();
   String body = "";
-  if (code == 200) body = http.getString();
+  if (code == 200) {
+    body = http.getString();
+  } else {
+    http.end();
+    return false;
+  }
   http.end();
 
   DynamicJsonDocument doc(1024);
@@ -485,9 +457,9 @@ void insertTransactionOnline(String uid, String status, String remarks) {
 }
 
 // =======================
-// ONLINE GATE STATE CONFLICT CHECK
+// ONLINE DUPLICATE ENTRY CHECK
 // =======================
-bool checkGateConflictOnline(String uid, String &conflictMsg, String &conflictDetail) {
+bool checkDuplicateEntryOnline(String uid, String &conflictDetail) {
   String url = String(SUPABASE_URL) + "/rest/v1/transactions?rfid_uid=eq." +
                urlEncode(uid) +
                "&status=eq.AUTHORIZED&order=timestamp.desc&limit=1&select=direction,timestamp";
@@ -502,14 +474,7 @@ bool checkGateConflictOnline(String uid, String &conflictMsg, String &conflictDe
   if (code == 200) body = http.getString();
   http.end();
 
-  if (body.length() == 0 || body == "[]") {
-    if (String(GATE_TYPE) == "EXIT") {
-      conflictMsg = "NO ENTRY LOGGED";
-      conflictDetail = "VERIFY W/ GUARD";
-      return true;
-    }
-    return false;
-  }
+  if (body.length() == 0 || body == "[]") return false;
 
   DynamicJsonDocument doc(512);
   if (deserializeJson(doc, body) == DeserializationError::Ok) {
@@ -517,21 +482,12 @@ bool checkGateConflictOnline(String uid, String &conflictMsg, String &conflictDe
     if (arr.size() > 0) {
       String lastDir = String(arr[0]["direction"] | "");
       String lastTs  = String(arr[0]["timestamp"] | "");
-      String timeStr = "";
-      if (lastTs.length() >= 16) {
-        timeStr = lastTs.substring(11, 16) + " " + lastTs.substring(5, 10);
-      } else {
-        timeStr = lastTs;
-      }
-
-      if (String(GATE_TYPE) == "ENTRY" && lastDir == "ENTRY") {
-        conflictMsg = "ALREADY GRANTED";
-        conflictDetail = "IN: " + timeStr;
-        return true;
-      }
-      if (String(GATE_TYPE) == "EXIT" && lastDir == "EXIT") {
-        conflictMsg = "ALREADY EXITED";
-        conflictDetail = "OUT: " + timeStr;
+      if (lastDir == "ENTRY") {
+        if (lastTs.length() >= 16) {
+          conflictDetail = "IN: " + lastTs.substring(11, 16) + " " + lastTs.substring(5, 10);
+        } else {
+          conflictDetail = "IN: " + lastTs;
+        }
         return true;
       }
     }
@@ -574,35 +530,34 @@ void processScan(String uid) {
       return;
     }
 
-    // Check State Conflict
-    String conflictMsg = "";
+    // Check Duplicate Entry
     String conflictDetail = "";
-    if (checkGateConflictOnline(uid, conflictMsg, conflictDetail)) {
-      Serial.println("[RESULT] GATE CONFLICT: " + conflictMsg + " - " + conflictDetail);
-      lcdMsg(conflictMsg, conflictDetail);
+    if (checkDuplicateEntryOnline(uid, conflictDetail)) {
+      Serial.println("[RESULT] DUPLICATE ENTRY: " + conflictDetail);
+      lcdMsg("ALREADY GRANTED", conflictDetail);
       tone(BUZZER_PIN, 1200, 200);
       delay(100);
       tone(BUZZER_PIN, 1200, 200);
       blinkLED(RED_LED, 2);
 
-      insertTransactionOnline(uid, "PENDING_CONFIRMATION", String(GATE_TYPE) + " conflict: " + conflictMsg + " (" + conflictDetail + ")");
+      insertTransactionOnline(uid, "PENDING_CONFIRMATION", "Duplicate entry - already inside (" + conflictDetail + ")");
       delay(4000);
       showReady();
       return;
     }
 
     // AUTHORIZED (Online)
-    Serial.println("[RESULT] AUTHORIZED (Cloud) — " + card_name);
+    Serial.println("[RESULT] AUTHORIZED ENTRY (Cloud) — " + card_name);
     String plateLine = (card_plate.length() > 0) ? card_plate : uid.substring(0, 16);
 
-    lcdMsg(String(GATE_TYPE) + " GRANTED", plateLine);
+    lcdMsg("ENTRY GRANTED", plateLine);
     tone(BUZZER_PIN, 2000, 150);
     delay(80);
     tone(BUZZER_PIN, 2500, 150);
     digitalWrite(RED_LED, LOW);
     digitalWrite(GREEN_LED, HIGH);
 
-    insertTransactionOnline(uid, "AUTHORIZED", String(GATE_TYPE) + " scan (Online)");
+    insertTransactionOnline(uid, "AUTHORIZED", "ENTRY gate scan (Online)");
 
     if (card_name.length() > 0) {
       lcd.setCursor(0, 1);
@@ -619,7 +574,7 @@ void processScan(String uid) {
   authorized = checkAuthorizationOffline(uid);
 
   if (authorized) {
-    Serial.println("[RESULT] AUTHORIZED (SD Card) — " + card_name);
+    Serial.println("[RESULT] AUTHORIZED ENTRY (SD Card) — " + card_name);
     String plateLine = (card_plate.length() > 0) ? card_plate : uid.substring(0, 16);
 
     lcdMsg("[OFFLINE] PASS", plateLine);
@@ -629,7 +584,7 @@ void processScan(String uid) {
     digitalWrite(RED_LED, LOW);
     digitalWrite(GREEN_LED, HIGH);
 
-    saveOfflineTransaction(uid, "AUTHORIZED", "Offline " + String(GATE_TYPE) + " Scan");
+    saveOfflineTransaction(uid, "AUTHORIZED", "Offline Entry Scan");
 
     if (card_name.length() > 0) {
       lcd.setCursor(0, 1);
@@ -681,14 +636,12 @@ void connectWiFi() {
 void setup() {
   Serial.begin(115200);
   Serial.println("\n===========================================");
-  Serial.print("  CHARRMPASS — ");
-  Serial.print(GATE_TYPE);
-  Serial.println(" GATE (DUAL SPI BUS)");
+  Serial.println("  CHARRMPASS — ENTRY GATE (DUAL SPI BUS)");
   Serial.println("===========================================\n");
 
   Wire.begin(21, 22);
   lcd.begin(16, 2);
-  lcdMsg("  CHARRMPASS  ", GATE_TYPE);
+  lcdMsg("  CHARRMPASS  ", "ENTRY GATE");
   delay(1500);
 
   // 1. Initialize RFID on VSPI (Default SPI: SCK 18, MISO 19, MOSI 23, SS 5)

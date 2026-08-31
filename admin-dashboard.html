@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin Dashboard - CHARRMPASS</title>
     <link rel="icon" type="image/png" href="logocharrmpark.png">
+
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Poppins:wght@500;600;700;800&display=swap" rel="stylesheet">
@@ -42,10 +43,8 @@
             <nav class="flex-1 py-6 flex flex-col gap-2 px-3 overflow-y-auto custom-scrollbar">
                 <a onclick="adminView('dashboard')" class="sidebar-item active cursor-pointer" id="anav-dashboard"><i data-lucide="layout-dashboard" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Dashboard</span></a>
                 <a onclick="adminView('users')" class="sidebar-item cursor-pointer" id="anav-users"><i data-lucide="users" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">User Management</span></a>
-                <a onclick="adminView('monitor')" class="sidebar-item cursor-pointer" id="anav-monitor"><i data-lucide="map" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Parking Monitor</span></a>
                 <a onclick="adminView('logs')" class="sidebar-item cursor-pointer" id="anav-logs"><i data-lucide="history" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Logs / History</span></a>
                 <a onclick="adminView('analytics')" class="sidebar-item cursor-pointer" id="anav-analytics"><i data-lucide="bar-chart-3" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Analytics</span></a>
-                <a onclick="adminView('slots')" class="sidebar-item cursor-pointer" id="anav-slots"><i data-lucide="square-parking" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Parking Management</span></a>
                 <a onclick="adminView('special')" class="sidebar-item cursor-pointer" id="anav-special"><i data-lucide="tag" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Visitor & Emergency</span></a>
                 <a onclick="adminView('access')" class="sidebar-item cursor-pointer" id="anav-access"><i data-lucide="shield-check" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Access Control</span></a>
                 <a href="settings.html" class="sidebar-item" id="anav-settings"><i data-lucide="settings" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Settings</span></a>
@@ -73,7 +72,7 @@
                         <div class="glass-card rounded-2xl p-5 border border-white/60 flex items-center gap-4 hover:-translate-y-1 transition-transform"><div class="w-14 h-14 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center"><i data-lucide="users" class="w-6 h-6"></i></div><div><div class="text-xs font-semibold text-slate-500 uppercase">Total Users</div><div class="text-2xl font-display font-bold text-slate-800" id="adminStatUsers">--</div></div></div>
                         <div class="glass-card rounded-2xl p-5 border border-charm-yellow/50 flex items-center gap-4 hover:-translate-y-1 transition-transform"><div class="w-14 h-14 rounded-full bg-yellow-50 text-yellow-600 flex items-center justify-center"><i data-lucide="clock" class="w-6 h-6"></i></div><div><div class="text-xs font-semibold text-slate-500 uppercase">Pending Approval</div><div class="text-2xl font-display font-bold text-yellow-600" id="adminStatPending">--</div></div></div>
                         <div class="glass-card rounded-2xl p-5 border border-white/60 flex items-center gap-4 hover:-translate-y-1 transition-transform"><div class="w-14 h-14 rounded-full bg-charm-light/30 text-charm-dark flex items-center justify-center"><i data-lucide="log-in" class="w-6 h-6"></i></div><div><div class="text-xs font-semibold text-slate-500 uppercase">Total Entries</div><div class="text-2xl font-display font-bold text-slate-800" id="adminStatEntries">--</div></div></div>
-                        <div class="glass-card rounded-2xl p-5 border border-white/60 flex items-center gap-4 hover:-translate-y-1 transition-transform"><div class="w-14 h-14 rounded-full bg-charm-dark text-charm-yellow flex items-center justify-center"><i data-lucide="parking-circle" class="w-6 h-6"></i></div><div><div class="text-xs font-semibold text-slate-500 uppercase">Available Slots</div><div class="text-2xl font-display font-bold text-charm-dark" id="adminStatSlots">--</div></div></div>
+                        <div class="glass-card rounded-2xl p-5 border border-white/60 flex items-center gap-4 hover:-translate-y-1 transition-transform"><div class="w-14 h-14 rounded-full bg-charm-dark text-charm-yellow flex items-center justify-center"><i data-lucide="door-open" class="w-6 h-6"></i></div><div><div class="text-xs font-semibold text-slate-500 uppercase">Vehicles Inside</div><div class="text-2xl font-display font-bold text-charm-dark" id="adminStatInside">--</div></div></div>
                     </div>
                     <!-- Pending Registrations -->
                     <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass">
@@ -98,27 +97,25 @@
                     </div>
                 </div>
 
-                <!-- PARKING MONITOR -->
-                <div id="aview-monitor" class="app-view hidden p-6 lg:p-8 flex-col gap-6 animate-slide-up">
-                    <div class="flex justify-between items-center">
-                        <div><h2 class="text-3xl font-display font-extrabold text-slate-800">Parking Monitor</h2><p class="text-slate-500 font-medium">Real-time occupancy by building.</p></div>
-                        <div class="flex gap-3 text-xs font-bold bg-white/50 p-2 rounded-xl border border-white/60 shadow-sm">
-                            <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-charm-green"></span>Available</span>
-                            <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-red-500"></span>Occupied</span>
-                            <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-yellow-400"></span>Maintenance</span>
-                        </div>
-                    </div>
-                    <div id="adminMonitorSlots" class="flex flex-col gap-8">
-                        <!-- Dynamic Building Groups will be rendered here -->
-                    </div>
-                </div>
-
                 <!-- LOGS -->
                 <div id="aview-logs" class="app-view hidden p-6 lg:p-8 flex-col gap-6 animate-slide-up">
                     <div><h2 class="text-3xl font-display font-extrabold text-slate-800">Scan Logs</h2></div>
                     <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col min-h-[500px]">
                         <div class="flex-1 overflow-auto rounded-xl border border-slate-100 bg-white/40">
-                            <table class="w-full text-left border-collapse min-w-[800px]"><thead class="bg-white/80 sticky top-0 text-xs uppercase text-slate-500 font-bold tracking-wider"><tr><th class="p-4 border-b border-slate-200">Time</th><th class="p-4 border-b border-slate-200">UID</th><th class="p-4 border-b border-slate-200">Name</th><th class="p-4 border-b border-slate-200 text-center">Event</th><th class="p-4 border-b border-slate-200">Slot</th><th class="p-4 border-b border-slate-200 text-right">Auth</th></tr></thead><tbody id="adminLogsTable" class="text-sm"></tbody></table>
+                            <table class="w-full text-left border-collapse min-w-[850px]">
+                                <thead class="bg-white/80 sticky top-0 text-xs uppercase text-slate-500 font-bold tracking-wider">
+                                    <tr>
+                                        <th class="p-4 border-b border-slate-200">Time</th>
+                                        <th class="p-4 border-b border-slate-200">UID</th>
+                                        <th class="p-4 border-b border-slate-200">Name</th>
+                                        <th class="p-4 border-b border-slate-200">Plate</th>
+                                        <th class="p-4 border-b border-slate-200 text-center">Direction</th>
+                                        <th class="p-4 border-b border-slate-200 text-center">Status</th>
+                                        <th class="p-4 border-b border-slate-200 text-right">Gate</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="adminLogsTable" class="text-sm"></tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
@@ -171,9 +168,12 @@
                     <div class="px-6 py-6 border-b border-slate-100 bg-white/40">
                         <div class="flex justify-between items-center">
                             <div>
-                                <h2 class="font-display font-bold text-2xl text-slate-800">Access Control</h2>
-                                <p class="text-sm text-slate-500">Manage Guard system accounts</p>
+                                <h2 class="font-display font-bold text-2xl text-slate-800">Guard Accounts &amp; Access Control</h2>
+                                <p class="text-sm text-slate-500">Manage usernames, passwords, and security credentials for campus guards</p>
                             </div>
+                            <button onclick="openAccountModal()" class="px-4 py-2 bg-charm-dark text-white rounded-xl text-sm font-bold shadow-lg hover:opacity-90 flex items-center gap-2">
+                                <i data-lucide="user-plus" class="w-4 h-4"></i> Add Guard Account
+                            </button>
                         </div>
                     </div>
                     <div class="flex-1 overflow-y-auto p-6 custom-scrollbar">
@@ -183,46 +183,12 @@
                     </div>
                 </div>
 
-                <!-- Parking Management View -->
-                <div id="aview-slots" class="app-view hidden flex-col h-full overflow-hidden animate-slide-up">
-                    <div class="px-6 py-6 border-b border-slate-100 bg-white/40">
-                        <div class="flex justify-between items-center">
-                            <div>
-                                <h2 class="font-display font-bold text-2xl text-slate-800">Parking Management</h2>
-                                <p class="text-sm text-slate-500">Add, remove or adjust parking slots</p>
-                            </div>
-                            <button onclick="openSlotManagementModal()" class="px-4 py-2 bg-charm-dark text-white rounded-xl text-sm font-bold shadow-lg hover:opacity-90 flex items-center gap-2">
-                                <i data-lucide="plus" class="w-4 h-4"></i> Add New Slot
-                            </button>
-                        </div>
-                    </div>
-                    <div class="flex-1 overflow-y-auto p-6 custom-scrollbar">
-                        <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass">
-                            <div class="overflow-auto rounded-xl border border-slate-100 bg-white/40">
-                                <table class="w-full text-left border-collapse min-w-[600px]">
-                                    <thead class="bg-white/80 sticky top-0 text-xs uppercase text-slate-500 font-bold tracking-wider">
-                                        <tr>
-                                            <th class="p-4 border-b border-slate-200">Slot Number</th>
-                                            <th class="p-4 border-b border-slate-200">Area / Building</th>
-                                            <th class="p-4 border-b border-slate-200 text-center">Status</th>
-                                            <th class="p-4 border-b border-slate-200 text-right">Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="slotManagementTable" class="text-sm">
-                                        <!-- Slots will be rendered here -->
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
                 <!-- Visitor & Emergency Management View -->
                 <div id="aview-special" class="app-view hidden flex-col h-full overflow-hidden animate-slide-up">
                     <div class="px-6 py-6 border-b border-slate-100 bg-white/40">
                         <div class="flex justify-between items-center">
                             <div>
-                                <h2 class="font-display font-bold text-2xl text-slate-800">Visitor & Emergency Tags</h2>
+                                <h2 class="font-display font-bold text-2xl text-slate-800">Visitor &amp; Emergency Tags</h2>
                                 <p class="text-sm text-slate-500">Manage reusable RFID tags for visitors and emergency vehicles</p>
                             </div>
                             <button onclick="openSpecialTagModal()" class="px-4 py-2 bg-charm-dark text-white rounded-xl text-sm font-bold shadow-lg hover:opacity-90 flex items-center gap-2">
@@ -333,41 +299,7 @@
             window.location.href = 'index.html';
         }
     </script>
-    <!-- Slot Management Modal -->
-    <div id="slotManagementModal" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 opacity-0 transition-opacity">
-        <div class="bg-white rounded-3xl w-full max-w-md shadow-2xl border border-slate-100 flex flex-col transform scale-95 transition-transform" id="slotManagementModalContent">
-            <div class="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-                <h3 class="font-display font-bold text-xl text-slate-800" id="slotModalTitle">Add Parking Slot</h3>
-                <button onclick="closeSlotManagementModal()" class="text-slate-400 hover:text-red-500"><i data-lucide="x" class="w-6 h-6"></i></button>
-            </div>
-            <div class="p-6">
-                <form id="slotForm" class="space-y-4">
-                    <input type="hidden" id="formSlotId">
-                    <div class="space-y-1">
-                        <label class="form-label">Slot Number *</label>
-                        <input type="text" id="formSlotNumber" required placeholder="e.g. TM11" class="form-input font-bold">
-                    </div>
-                    <div class="space-y-1">
-                        <label class="form-label">Area / Row *</label>
-                        <input type="text" id="formSlotRow" required placeholder="e.g. TM" class="form-input">
-                    </div>
-                    <div class="space-y-1">
-                        <label class="form-label">Initial Status</label>
-                        <select id="formSlotStatus" class="form-input">
-                            <option value="AVAILABLE">AVAILABLE</option>
-                            <option value="DISABLED">DISABLED (Under Maintenance)</option>
-                        </select>
-                    </div>
-                    <div class="pt-4 flex justify-end gap-3">
-                        <button type="button" onclick="closeSlotManagementModal()" class="px-4 py-2 text-sm font-bold text-slate-500">Cancel</button>
-                        <button type="submit" class="px-6 py-2 bg-charm-dark text-white rounded-xl text-sm font-bold shadow-md hover:opacity-90">Save Slot</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
 
-    <!-- Account Modal -->
     <div id="accountModal" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 opacity-0 transition-opacity">
         <div class="bg-white rounded-3xl w-full max-w-md shadow-2xl border border-slate-100 flex flex-col transform scale-95 transition-transform" id="accountModalContent">
             <div class="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
@@ -476,14 +408,28 @@
                                 </div>
                             </div>
                         </div>
+
+                        <!-- Assign RFID Card Section -->
+                        <div class="mt-6 p-5 rounded-2xl bg-charm-light/20 border-2 border-charm-dark/20 shadow-sm">
+                            <div class="flex items-center gap-2 mb-2">
+                                <i data-lucide="nfc" class="w-5 h-5 text-charm-dark"></i>
+                                <h5 class="text-sm font-display font-bold text-charm-dark uppercase tracking-wider">Assign Physical RFID Tag (UID) *</h5>
+                            </div>
+                            <p class="text-xs text-slate-500 mb-3">Scan with RFID reader or manually type the physical RFID card UID to assign and issue to this driver.</p>
+                            <div class="flex gap-3">
+                                <div class="relative flex-1">
+                                    <input type="text" id="revRfidUid" placeholder="e.g. A1 B2 C3 D4" class="w-full text-base font-mono font-bold uppercase px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-charm-dark outline-none bg-white shadow-inner tracking-wider">
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
             <div class="p-6 border-t border-slate-100 bg-slate-50/50 flex justify-between items-center">
-                <div class="text-xs font-medium text-slate-400 italic">Please verify all documents are clear and valid.</div>
+                <div class="text-xs font-medium text-slate-400 italic">Please verify all documents and assign an RFID UID.</div>
                 <div class="flex gap-3">
                     <button id="revBtnDeny" class="px-6 py-2.5 rounded-xl bg-red-500 text-white text-sm font-bold shadow-md hover:bg-red-600 transition-colors flex items-center gap-2"><i data-lucide="x-circle" class="w-4 h-4"></i> Deny Registration</button>
-                    <button id="revBtnApprove" class="px-6 py-2.5 rounded-xl bg-charm-green text-white text-sm font-bold shadow-md hover:bg-green-600 transition-colors flex items-center gap-2"><i data-lucide="check-circle" class="w-4 h-4"></i> Approve Registration</button>
+                    <button id="revBtnApprove" class="px-6 py-2.5 rounded-xl bg-charm-dark text-white text-sm font-bold shadow-md hover:bg-opacity-90 transition-colors flex items-center gap-2"><i data-lucide="check-circle" class="w-4 h-4"></i> Approve &amp; Issue RFID</button>
                 </div>
             </div>
         </div>
@@ -528,34 +474,7 @@
         </div>
     </div>
 
-    <!-- Parking Slot Info Modal -->
-    <div id="slotInfoModal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 opacity-0 transition-opacity duration-300">
-        <div class="bg-white rounded-[2rem] w-full max-w-lg shadow-2xl overflow-hidden transform scale-95 transition-transform duration-300" id="slotInfoContent">
-            <div class="relative h-48 bg-charm-dark overflow-hidden">
-                <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent z-10"></div>
-                <img id="modalVehImage" src="" alt="Vehicle" class="w-full h-full object-cover">
-                <button onclick="closeSlotModal()" class="absolute top-4 right-4 z-20 w-10 h-10 rounded-full bg-white/20 backdrop-blur-md text-white flex items-center justify-center hover:bg-white/40 transition-colors">
-                    <i data-lucide="x" class="w-6 h-6"></i>
-                </button>
-                <div class="absolute bottom-4 left-6 z-20 flex items-end gap-4">
-                    <div class="w-20 h-20 rounded-2xl border-4 border-white shadow-xl bg-slate-100 overflow-hidden">
-                        <img id="modalProfileImage" src="" alt="Profile" class="w-full h-full object-cover">
-                    </div>
-                    <div class="mb-1">
-                        <h3 id="modalName" class="text-2xl font-display font-bold text-white leading-tight">--</h3>
-                        <p id="modalRole" class="text-charm-light font-bold text-xs uppercase tracking-widest mt-1">--</p>
-                    </div>
-                </div>
-            </div>
-            <div class="p-8 grid grid-cols-2 gap-6 bg-white">
-                <div class="space-y-1"><label class="text-[10px] font-black uppercase tracking-widest text-slate-400">Program / Section</label><p id="modalProgram" class="font-bold text-slate-800 text-sm">--</p></div>
-                <div class="space-y-1"><label class="text-[10px] font-black uppercase tracking-widest text-slate-400">Plate Number</label><p id="modalPlate" class="font-bold text-charm-dark text-sm">--</p></div>
-                <div class="space-y-1"><label class="text-[10px] font-black uppercase tracking-widest text-slate-400">Vehicle Type</label><p id="modalVehType" class="font-bold text-slate-800 text-sm">--</p></div>
-                <div class="space-y-1"><label class="text-[10px] font-black uppercase tracking-widest text-slate-400">Vehicle Model</label><p id="modalVehModel" class="font-bold text-slate-800 text-sm">--</p></div>
-                <div class="col-span-2 pt-4 border-t border-slate-100 flex justify-center"><div class="px-6 py-2 rounded-full bg-charm-dark text-white text-xs font-black uppercase tracking-[0.2em]">Authorized Occupant</div></div>
-            </div>
-        </div>
-    </div>
+
 
     <script src="supabase-config.js"></script>
     <script src="admin-app.js"></script>

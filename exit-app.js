@@ -154,8 +154,17 @@ function renderRecentList() {
   }
   body.innerHTML = recentExits.slice(0, 20).map(t => {
     const ok    = t.status === 'AUTHORIZED';
-    const name  = t.users?.full_name || 'Unknown RFID';
-    const plate = t.vehicles?.plate_number || t.rfid_uid?.substring(0, 12) || '--';
+    let name  = t.users?.full_name;
+    let plate = t.vehicles?.plate_number;
+    if (!name && t.remarks?.includes('Visitor')) {
+      const match = t.remarks.match(/Visitor (?:Exit|Entry):\s*([^|]+)(?:\s*\|\s*Plate:\s*([^|]+))?/i);
+      if (match) {
+        name = match[1]?.trim();
+        plate = match[2]?.trim() || 'N/A';
+      }
+    }
+    if (!name) name = 'Unknown RFID';
+    if (!plate) plate = t.rfid_uid?.substring(0, 12) || '--';
     const timeStr = new Date(t.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
     const dotClass = ok ? 'ok' : 'deny';
     return `
@@ -221,11 +230,26 @@ function showScanResult(txn, entryStatus) {
   currentScanData = txn;
   const ok      = txn.status === 'AUTHORIZED';
   const hasWarn = ok && (entryStatus === 'ghost' || entryStatus === 'none');
-  const name    = txn.users?.full_name || 'Unknown Card';
-  const program = txn.users?.program   || '--';
-  const section = txn.users?.section   || '--';
-  const role    = txn.users?.role      || '--';
-  const plate   = txn.vehicles?.plate_number  || '—';
+  let name    = txn.users?.full_name;
+  let plate   = txn.vehicles?.plate_number;
+  let role    = txn.users?.role;
+  let program = txn.users?.program   || '--';
+  let section = txn.users?.section   || '--';
+
+  if (!name && txn.remarks?.includes('Visitor')) {
+    const match = txn.remarks.match(/Visitor (?:Exit|Entry):\s*([^|]+)(?:\s*\|\s*Plate:\s*([^|]+))?/i);
+    if (match) {
+      name = match[1]?.trim();
+      plate = match[2]?.trim() || 'N/A';
+      role = 'VISITOR';
+      program = 'Campus Visitor';
+      section = 'Visitor Exit';
+    }
+  }
+
+  if (!name) name = 'Unknown Card';
+  if (!plate) plate = '—';
+  if (!role) role = '--';
   const vtype   = txn.vehicles?.vehicle_type  || '';
   const vmodel  = txn.vehicles?.vehicle_model || '';
   const timeStr = new Date(txn.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });

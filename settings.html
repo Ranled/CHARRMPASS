@@ -25,7 +25,6 @@
                 return;
             }
             const s = JSON.parse(session);
-            // Both Admin and Guard can view settings, but Guard is restricted via UI
             if (s.role !== 'ADMIN' && s.role !== 'GUARD') {
                 window.location.href = 'index.html';
                 return;
@@ -38,325 +37,318 @@
     <div class="relative z-10 min-h-screen flex flex-col pb-12">
         <header class="glass-header border-b border-white/40 px-6 py-4 flex items-center justify-between shadow-sm">
             <div class="flex items-center gap-3">
-                <div class="w-10 h-10 bg-charm-dark rounded-xl flex items-center justify-center"><i data-lucide="settings" class="w-5 h-5 text-charm-yellow"></i></div>
-                <div><h1 class="font-display font-bold text-lg text-charm-dark">CHARRM<span class="text-charm-yellow">PASS</span></h1><p class="text-[10px] text-slate-500 uppercase tracking-widest font-semibold">System Settings</p></div>
+                <div class="w-10 h-10 bg-charm-dark rounded-xl flex items-center justify-center shadow-md">
+                    <i data-lucide="settings" class="w-5 h-5 text-charm-yellow"></i>
+                </div>
+                <div>
+                    <h1 class="font-display font-bold text-lg text-charm-dark">CHARRM<span class="text-charm-yellow">PASS</span></h1>
+                    <p class="text-[10px] text-slate-500 uppercase tracking-widest font-semibold">System Settings &amp; Configuration</p>
+                </div>
             </div>
-            <button onclick="history.back()" class="flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-charm-dark"><i data-lucide="arrow-left" class="w-4 h-4"></i> Back</button>
+            <button onclick="history.back()" class="flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-charm-dark bg-white/60 px-4 py-2 rounded-xl border border-slate-200 shadow-sm transition-all">
+                <i data-lucide="arrow-left" class="w-4 h-4"></i> Back
+            </button>
         </header>
+
         <div class="flex-1 p-6 md:p-10 max-w-4xl mx-auto w-full animate-slide-up">
-            <h2 class="font-display font-extrabold text-3xl text-slate-800 mb-8">Settings</h2>
+            <div class="flex justify-between items-center mb-8">
+                <div>
+                    <h2 class="font-display font-extrabold text-3xl text-slate-800">System Settings</h2>
+                    <p class="text-slate-500 text-sm font-medium mt-1">Configure dual-gate hardware gateways, alerts, and account credentials.</p>
+                </div>
+            </div>
 
             <!-- System Info -->
-            <div class="settings-card mb-6">
-                <h3 class="font-display font-bold text-lg text-slate-800 mb-4 flex items-center gap-2"><i data-lucide="info" class="w-5 h-5 text-charm-dark"></i> System Information</h3>
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div class="p-3 bg-white/60 rounded-xl border border-slate-100"><div class="text-[10px] font-bold text-slate-400 uppercase">Version</div><div class="text-sm font-bold text-slate-800 mt-1">1.0.0-beta</div></div>
-                    <div class="p-3 bg-white/60 rounded-xl border border-slate-100"><div class="text-[10px] font-bold text-slate-400 uppercase">Database</div><div class="text-sm font-bold text-green-600 mt-1" id="settingsDbStatus">Checking...</div></div>
-                    <div class="p-3 bg-white/60 rounded-xl border border-slate-100"><div class="text-[10px] font-bold text-slate-400 uppercase">ESP32 Device</div><div class="text-sm font-bold text-yellow-600 mt-1" id="settingsDeviceStatus">Not Connected</div></div>
-                    <div class="p-3 bg-white/60 rounded-xl border border-slate-100"><div class="text-[10px] font-bold text-slate-400 uppercase">Total Slots</div><div class="text-sm font-bold text-slate-800 mt-1">10</div></div>
-                </div>
-            </div>
-
-            <!-- ESP32 Connection -->
-            <div class="settings-card mb-6 admin-only">
-                <h3 class="font-display font-bold text-lg text-slate-800 mb-4 flex items-center gap-2"><i data-lucide="cpu" class="w-5 h-5 text-charm-dark"></i> ESP32 Device Configuration</h3>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                    <div><label class="form-label">Device Name</label><input type="text" class="form-input" value="Main Gate Scanner" id="deviceName"></div>
-                    <div><label class="form-label">Device Location</label><input type="text" class="form-input" value="TM Building Entrance" id="deviceLocation"></div>
-                    <div><label class="form-label">ESP32 Identifier</label><input type="text" class="form-input font-mono" value="ESP32-CHARRMPASS-01" id="deviceId"></div>
-                    <div><label class="form-label">WiFi Network</label><input type="text" class="form-input" value="FTTx-4a6210" id="wifiSSID" readonly></div>
-                </div>
-                <button onclick="testConnection()" class="px-5 py-2.5 rounded-xl bg-charm-dark text-white text-sm font-bold hover:bg-opacity-90 shadow-md flex items-center gap-2"><i data-lucide="wifi" class="w-4 h-4"></i> Test Connection</button>
-            </div>
-
-            <!-- Parking Configuration -->
-            <div class="settings-card mb-6 admin-only">
-                <h3 class="font-display font-bold text-lg text-slate-800 mb-4 flex items-center justify-between gap-2">
-                    <span class="flex items-center gap-2"><i data-lucide="parking-circle" class="w-5 h-5 text-charm-dark"></i> Parking Areas</span>
-                    <button onclick="addParkingArea()" class="px-3 py-1.5 rounded-lg bg-charm-green/10 text-charm-green text-xs font-bold hover:bg-charm-green hover:text-white transition-all flex items-center gap-1">
-                        <i data-lucide="plus" class="w-3 h-3"></i> Add Area
-                    </button>
+            <div class="settings-card mb-6 bg-white/80 backdrop-blur-md rounded-3xl p-6 border border-white/60 shadow-glass">
+                <h3 class="font-display font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
+                    <i data-lucide="info" class="w-5 h-5 text-charm-dark"></i> System Status
                 </h3>
-                <div id="parkingAreasList" class="space-y-4">
-                    <!-- Area Item -->
-                    <div class="p-4 bg-white/60 rounded-2xl border border-slate-100 group">
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div><label class="form-label">Area / Building Name</label><input type="text" class="form-input area-name" value="TM Building" placeholder="e.g. TM Building"></div>
-                            <div><label class="form-label">Prefix</label><input type="text" class="form-input area-prefix font-mono" value="TM" placeholder="e.g. TM"></div>
-                            <div><label class="form-label">No. of Slots</label><input type="number" class="form-input area-slots" value="10" min="1" max="50"></div>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div class="p-3 bg-white/60 rounded-xl border border-slate-100">
+                        <div class="text-[10px] font-bold text-slate-400 uppercase">System</div>
+                        <div class="text-sm font-bold text-slate-800 mt-1">CHARRMPASS 2.0</div>
+                    </div>
+                    <div class="p-3 bg-white/60 rounded-xl border border-slate-100">
+                        <div class="text-[10px] font-bold text-slate-400 uppercase">Database</div>
+                        <div class="text-sm font-bold text-green-600 mt-1" id="settingsDbStatus">Connected</div>
+                    </div>
+                    <div class="p-3 bg-white/60 rounded-xl border border-slate-100">
+                        <div class="text-[10px] font-bold text-slate-400 uppercase">Entry Gate</div>
+                        <div class="text-sm font-bold text-green-600 mt-1" id="settingsEntryStatus">Online (Ready)</div>
+                    </div>
+                    <div class="p-3 bg-white/60 rounded-xl border border-slate-100">
+                        <div class="text-[10px] font-bold text-slate-400 uppercase">Exit Gate</div>
+                        <div class="text-sm font-bold text-blue-600 mt-1" id="settingsExitStatus">Online (Ready)</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Dual-Gate ESP32 Hardware Configuration -->
+            <div class="settings-card mb-6 admin-only bg-white/80 backdrop-blur-md rounded-3xl p-6 border border-white/60 shadow-glass">
+                <h3 class="font-display font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
+                    <i data-lucide="cpu" class="w-5 h-5 text-charm-dark"></i> Dual-Gate ESP32 Gateways
+                </h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
+                    <!-- Entry Gate Reader -->
+                    <div class="p-4 rounded-2xl bg-green-50/50 border border-green-200">
+                        <div class="flex items-center gap-2 text-xs font-bold text-green-800 uppercase mb-3">
+                            <i data-lucide="log-in" class="w-4 h-4 text-green-600"></i> Entry Gate Reader
+                        </div>
+                        <div class="space-y-3">
+                            <div>
+                                <label class="text-[10px] font-bold uppercase text-slate-400 block mb-1">Device Name</label>
+                                <input type="text" class="form-input text-sm" value="Campus Main Entrance Gate" id="entryGateName">
+                            </div>
+                            <div>
+                                <label class="text-[10px] font-bold uppercase text-slate-400 block mb-1">ESP32 Identifier</label>
+                                <input type="text" class="form-input text-sm font-mono" value="ESP32-CHARRMPASS-ENTRY" id="entryGateId">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Exit Gate Reader -->
+                    <div class="p-4 rounded-2xl bg-blue-50/50 border border-blue-200">
+                        <div class="flex items-center gap-2 text-xs font-bold text-blue-800 uppercase mb-3">
+                            <i data-lucide="log-out" class="w-4 h-4 text-blue-600"></i> Exit Gate Reader
+                        </div>
+                        <div class="space-y-3">
+                            <div>
+                                <label class="text-[10px] font-bold uppercase text-slate-400 block mb-1">Device Name</label>
+                                <input type="text" class="form-input text-sm" value="Campus Main Departure Gate" id="exitGateName">
+                            </div>
+                            <div>
+                                <label class="text-[10px] font-bold uppercase text-slate-400 block mb-1">ESP32 Identifier</label>
+                                <input type="text" class="form-input text-sm font-mono" value="ESP32-CHARRMPASS-EXIT" id="exitGateId">
+                            </div>
                         </div>
                     </div>
                 </div>
-                <div class="mt-6 pt-6 border-t border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div><label class="form-label">Scan Cooldown (seconds)</label><input type="number" class="form-input" value="5" id="scanCooldown" min="1" max="30"></div>
-                    <div><label class="form-label">Auto-assign Slots</label><div class="toggle-switch active mt-2" id="toggleAutoAssign" onclick="this.classList.toggle('active')"></div></div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-slate-100">
+                    <div>
+                        <label class="text-xs font-bold text-slate-500 block mb-1">Scan Cooldown (Seconds)</label>
+                        <input type="number" class="form-input" value="3" id="scanCooldown" min="1" max="15">
+                    </div>
+                    <div>
+                        <label class="text-xs font-bold text-slate-500 block mb-1">WiFi SSID (Firmware Reference)</label>
+                        <input type="text" class="form-input" value="FTTx-4a6210" id="wifiSSID">
+                    </div>
                 </div>
             </div>
 
-            <!-- Notifications -->
-            <div class="settings-card mb-6">
-                <h3 class="font-display font-bold text-lg text-slate-800 mb-4 flex items-center gap-2"><i data-lucide="bell" class="w-5 h-5 text-charm-dark"></i> Notifications</h3>
-                <div class="space-y-4">
-                    <div class="flex items-center justify-between p-3 bg-white/60 rounded-xl border border-slate-100"><div><div class="text-sm font-bold text-slate-800">Sound Alerts</div><div class="text-xs text-slate-500">Play sound on scan</div></div><div class="toggle-switch active" onclick="this.classList.toggle('active')"></div></div>
-                    <div class="flex items-center justify-between p-3 bg-white/60 rounded-xl border border-slate-100"><div><div class="text-sm font-bold text-slate-800">Unauthorized Alerts</div><div class="text-xs text-slate-500">Alert on denied scans</div></div><div class="toggle-switch active" onclick="this.classList.toggle('active')"></div></div>
-                    <div class="flex items-center justify-between p-3 bg-white/60 rounded-xl border border-slate-100"><div><div class="text-sm font-bold text-slate-800">Parking Full Alert</div><div class="text-xs text-slate-500">Alert when all slots occupied</div></div><div class="toggle-switch" onclick="this.classList.toggle('active')"></div></div>
+            <!-- Sound & Scan Alerts -->
+            <div class="settings-card mb-6 bg-white/80 backdrop-blur-md rounded-3xl p-6 border border-white/60 shadow-glass">
+                <h3 class="font-display font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
+                    <i data-lucide="bell" class="w-5 h-5 text-charm-dark"></i> Audio &amp; Visual Alerts
+                </h3>
+                <div class="space-y-3">
+                    <div class="flex items-center justify-between p-3.5 bg-white/60 rounded-2xl border border-slate-100">
+                        <div>
+                            <div class="text-sm font-bold text-slate-800">Gate Authorization Audio</div>
+                            <div class="text-xs text-slate-500">Play pleasant chime tone upon valid RFID entry or exit</div>
+                        </div>
+                        <input type="checkbox" id="toggleSoundAuth" checked class="w-5 h-5 accent-charm-dark cursor-pointer rounded">
+                    </div>
+                    <div class="flex items-center justify-between p-3.5 bg-white/60 rounded-2xl border border-slate-100">
+                        <div>
+                            <div class="text-sm font-bold text-slate-800">Access Denied Alerts</div>
+                            <div class="text-xs text-slate-500">Play alert buzzer sound when an unregistered card is tapped</div>
+                        </div>
+                        <input type="checkbox" id="toggleSoundDenied" checked class="w-5 h-5 accent-charm-dark cursor-pointer rounded">
+                    </div>
+                    <div class="flex items-center justify-between p-3.5 bg-white/60 rounded-2xl border border-slate-100">
+                        <div>
+                            <div class="text-sm font-bold text-slate-800">Duplicate Entry Warnings</div>
+                            <div class="text-xs text-slate-500">Alert guard with confirmation prompt if already-entered user taps again</div>
+                        </div>
+                        <input type="checkbox" id="toggleDupAlert" checked class="w-5 h-5 accent-charm-dark cursor-pointer rounded">
+                    </div>
                 </div>
             </div>
 
-            <!-- System Accounts -->
-            <div class="settings-card mb-6 admin-only">
-                <h3 class="font-display font-bold text-lg text-slate-800 mb-4 flex items-center gap-2"><i data-lucide="users" class="w-5 h-5 text-charm-dark"></i> System Accounts (RBAC)</h3>
+            <!-- System Accounts (RBAC) -->
+            <div class="settings-card mb-6 admin-only bg-white/80 backdrop-blur-md rounded-3xl p-6 border border-white/60 shadow-glass">
+                <h3 class="font-display font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
+                    <i data-lucide="shield-check" class="w-5 h-5 text-charm-dark"></i> System Accounts &amp; Credentials
+                </h3>
                 <div class="space-y-6">
                     <!-- Admin Account -->
                     <div class="p-4 bg-white/60 rounded-2xl border border-slate-100">
-
-                    <!-- Guard Account -->
-                    <div class="p-4 bg-white/60 rounded-2xl border border-slate-100">
-                        <div class="flex items-center justify-between mb-4">
-                            <div class="flex items-center gap-3">
-                                <div class="w-10 h-10 bg-yellow-100 rounded-xl flex items-center justify-center"><i data-lucide="shield-check" class="w-5 h-5 text-yellow-600"></i></div>
-                                <div><div class="text-sm font-bold text-slate-800">Security Guard</div><div class="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Scan & Monitoring</div></div>
+                        <div class="flex items-center gap-3 mb-4">
+                            <div class="w-10 h-10 bg-purple-100 text-purple-700 rounded-xl flex items-center justify-center">
+                                <i data-lucide="user-check" class="w-5 h-5"></i>
+                            </div>
+                            <div>
+                                <div class="text-sm font-bold text-slate-800">Administrator Account</div>
+                                <div class="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Full Control &amp; Approvals</div>
                             </div>
                         </div>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div><label class="form-label">Username</label><input type="text" class="form-input" id="guardUsername" value="guard"></div>
                             <div>
-                                <label class="form-label">Password</label>
+                                <label class="text-xs font-bold text-slate-500 block mb-1">Admin Username</label>
+                                <input type="text" class="form-input" id="adminUsername" value="admin">
+                            </div>
+                            <div>
+                                <label class="text-xs font-bold text-slate-500 block mb-1">Admin Password</label>
+                                <div class="relative">
+                                    <input type="password" class="form-input pr-12" id="adminPassword" value="admin123">
+                                    <button type="button" onclick="togglePass('adminPassword', this)" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-charm-dark">
+                                        <i data-lucide="eye" class="w-4 h-4"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Guard Account -->
+                    <div class="p-4 bg-white/60 rounded-2xl border border-slate-100">
+                        <div class="flex items-center gap-3 mb-4">
+                            <div class="w-10 h-10 bg-green-100 text-green-700 rounded-xl flex items-center justify-center">
+                                <i data-lucide="shield" class="w-5 h-5"></i>
+                            </div>
+                            <div>
+                                <div class="text-sm font-bold text-slate-800">Security Guard Account</div>
+                                <div class="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Dual-Gate Monitor &amp; Scans</div>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="text-xs font-bold text-slate-500 block mb-1">Guard Username</label>
+                                <input type="text" class="form-input" id="guardUsername" value="guard">
+                            </div>
+                            <div>
+                                <label class="text-xs font-bold text-slate-500 block mb-1">Guard Password</label>
                                 <div class="relative">
                                     <input type="password" class="form-input pr-12" id="guardPassword" value="guard123">
-                                    <button type="button" onclick="togglePass('guardPassword', this)" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-charm-dark transition-colors">
-                                        <i data-lucide="eye" class="w-5 h-5"></i>
+                                    <button type="button" onclick="togglePass('guardPassword', this)" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-charm-dark">
+                                        <i data-lucide="eye" class="w-4 h-4"></i>
                                     </button>
                                 </div>
                             </div>
                         </div>
                     </div>
                 </div>
-                <div class="mt-4 p-3 bg-blue-50 rounded-xl border border-blue-100 flex gap-3">
-                    <i data-lucide="info" class="w-5 h-5 text-blue-500 shrink-0 mt-0.5"></i>
-                    <p class="text-xs text-blue-700 leading-relaxed font-medium">Changing these credentials will update the system-wide access. Make sure to keep the new passwords secure.</p>
-                </div>
             </div>
 
-            <!-- Save -->
+            <!-- Save Buttons -->
             <div class="flex justify-end gap-3 mb-10">
-                <button onclick="history.back()" class="px-6 py-3 rounded-xl bg-white border border-slate-200 text-sm font-bold text-slate-600 hover:bg-slate-50">Cancel</button>
-                <button onclick="saveSettings()" class="px-6 py-3 rounded-xl bg-charm-dark text-white text-sm font-bold hover:bg-opacity-90 shadow-md flex items-center gap-2"><i data-lucide="save" class="w-4 h-4"></i> Save Settings</button>
+                <button onclick="history.back()" class="px-6 py-3 rounded-xl bg-white border border-slate-200 text-sm font-bold text-slate-600 hover:bg-slate-50 transition-colors">Cancel</button>
+                <button onclick="saveSettings()" class="px-6 py-3 rounded-xl bg-charm-dark text-white text-sm font-bold hover:bg-opacity-90 shadow-lg flex items-center gap-2 transition-all">
+                    <i data-lucide="save" class="w-4 h-4"></i> Save Settings
+                </button>
             </div>
         </div>
     </div>
+
     <script src="supabase-config.js"></script>
     <script>
         initSupabase();
         lucide.createIcons();
-        document.getElementById('settingsDbStatus').textContent = isConnected ? 'Connected' : 'Demo Mode';
-        document.getElementById('settingsDbStatus').className = `text-sm font-bold mt-1 ${isConnected?'text-green-600':'text-yellow-600'}`;
-
-        function testConnection() {
-            const btn = event.target.closest('button');
-            btn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Testing...';
-            lucide.createIcons();
-            setTimeout(() => {
-                document.getElementById('settingsDeviceStatus').textContent = 'Online';
-                document.getElementById('settingsDeviceStatus').className = 'text-sm font-bold text-green-600 mt-1';
-                btn.innerHTML = '<i data-lucide="check" class="w-4 h-4"></i> Connected!';
-                lucide.createIcons();
-                showToast('ESP32 device connected successfully!','success');
-            }, 2000);
-        }
-
-        function addParkingArea(name = '', prefix = '', slots = 10) {
-            const list = document.getElementById('parkingAreasList');
-            const div = document.createElement('div');
-            div.className = 'p-4 bg-white/60 rounded-2xl border border-slate-100 group animate-slide-up relative';
-            div.innerHTML = `
-                <button onclick="this.parentElement.remove()" class="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-lg">
-                    <i data-lucide="x" class="w-3 h-3"></i>
-                </button>
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div><label class="form-label">Area / Building Name</label><input type="text" class="form-input area-name" value="${name}" placeholder="e.g. TM Building"></div>
-                    <div><label class="form-label">Prefix</label><input type="text" class="form-input area-prefix font-mono" value="${prefix}" placeholder="e.g. TM"></div>
-                    <div><label class="form-label">No. of Slots</label><input type="number" class="form-input area-slots" value="${slots}" min="1" max="50"></div>
-                </div>
-            `;
-            list.appendChild(div);
-            lucide.createIcons();
-        }
-
-        let adminId = null;
-        let guardId = null;
-
-        async function saveSettings() {
-            const areaElements = document.querySelectorAll('#parkingAreasList > div');
-            const areas = Array.from(areaElements).map(el => ({
-                name: el.querySelector('.area-name').value,
-                prefix: el.querySelector('.area-prefix').value.toUpperCase(),
-                slots_count: parseInt(el.querySelector('.area-slots').value)
-            })).filter(a => a.name && a.prefix);
-
-            const settings = {
-                deviceName: document.getElementById('deviceName').value,
-                deviceLocation: document.getElementById('deviceLocation').value,
-                deviceId: document.getElementById('deviceId').value,
-                parkingAreas: areas,
-                scanCooldown: document.getElementById('scanCooldown').value,
-                autoAssign: document.getElementById('toggleAutoAssign').classList.contains('active')
-            };
-
-            const adminU = document.getElementById('adminUsername')?.value;
-            const adminP = document.getElementById('adminPassword')?.value;
-            const guardU = document.getElementById('guardUsername').value;
-            const guardP = document.getElementById('guardPassword').value;
-
-            if (isConnected) {
-                try {
-                    showToast('Syncing with Supabase...', 'info');
-                    const now = new Date().toISOString();
-                    
-                    // 1. Update Accounts (Upsert on role)
-                    if (adminU && adminP) {
-                        await supabaseClient.from('system_accounts').upsert({ 
-                            username: adminU, password: adminP, role: 'ADMIN', updated_at: now 
-                        }, { onConflict: 'role' });
-                    }
-
-                    const { error: guardErr } = await supabaseClient.from('system_accounts').upsert({ 
-                        username: guardU, password: guardP, role: 'GUARD', updated_at: now 
-                    }, { onConflict: 'role' });
-
-                    if (adminErr) console.error('Admin sync error:', adminErr);
-                    if (guardErr) console.error('Guard sync error:', guardErr);
-
-                    // 2. Sync Parking Areas
-                    const { data: currentAreas } = await supabaseClient.from('parking_areas').select('prefix');
-                    const currentPrefixes = currentAreas ? currentAreas.map(a => a.prefix) : [];
-                    const newPrefixes = areas.map(a => a.prefix);
-                    
-                    const toDelete = currentPrefixes.filter(p => !newPrefixes.includes(p));
-                    if (toDelete.length > 0) {
-                        await supabaseClient.from('parking_areas').delete().in('prefix', toDelete);
-                    }
-
-                    const { error: areaErr } = await supabaseClient
-                        .from('parking_areas')
-                        .upsert(areas, { onConflict: 'prefix' });
-
-                    if (areaErr) console.error('Upsert area error:', areaErr);
-
-                    if (adminErr || guardErr || areaErr) {
-                        throw new Error('Database sync failed. Check your Supabase connection and SQL schema.');
-                    }
-                    
-                    showToast('All changes saved to database!', 'success');
-                    
-                    // Re-fetch to update IDs if they were newly created
-                    if (isConnected) {
-                        const { data: newAccData } = await supabaseClient.from('system_accounts').select('*');
-                        if (newAccData) {
-                            newAccData.forEach(acc => {
-                                if (acc.role === 'ADMIN') adminId = acc.id;
-                                if (acc.role === 'GUARD') guardId = acc.id;
-                            });
-                        }
-                    }
-                } catch (e) {
-                    console.error('Update error:', e);
-                    showToast(`Sync Error: ${e.message}`, 'error');
-                }
-            }
-
-            localStorage.setItem('charrmpass_settings', JSON.stringify(settings));
-        }
-
-        // Load existing
-        window.addEventListener('DOMContentLoaded', async () => {
-            // Load from LocalStorage first (for UI speed)
-            const saved = localStorage.getItem('charrmpass_settings');
-            if (saved) {
-                const s = JSON.parse(saved);
-                if (s.deviceName) document.getElementById('deviceName').value = s.deviceName;
-                if (s.deviceLocation) document.getElementById('deviceLocation').value = s.deviceLocation;
-                if (s.deviceId) document.getElementById('deviceId').value = s.deviceId;
-                if (s.scanCooldown) document.getElementById('scanCooldown').value = s.scanCooldown;
-                if (s.autoAssign !== undefined) {
-                    const toggle = document.getElementById('toggleAutoAssign');
-                    if (s.autoAssign) toggle.classList.add('active');
-                    else toggle.classList.remove('active');
-                }
-                if (s.parkingAreas && s.parkingAreas.length > 0) {
-                    document.getElementById('parkingAreasList').innerHTML = '';
-                    s.parkingAreas.forEach(a => addParkingArea(a.name, a.prefix, a.slots_count || a.slots || 10));
-                }
-            }
-
-            // Sync from Supabase (Source of Truth)
-            if (isConnected) {
-                try {
-                    // Load Areas
-                    const { data: areasData } = await supabaseClient.from('parking_areas').select('*');
-                    if (areasData && areasData.length > 0) {
-                        document.getElementById('parkingAreasList').innerHTML = '';
-                        areasData.forEach(a => addParkingArea(a.name, a.prefix, a.slots_count));
-                    }
-
-                    // Load Credentials
-                    const { data: accData } = await supabaseClient.from('system_accounts').select('*');
-                    if (accData) {
-                        accData.forEach(acc => {
-                            if (acc.role === 'ADMIN') {
-                                adminId = acc.id;
-                                if (document.getElementById('adminUsername')) {
-                                    document.getElementById('adminUsername').value = acc.username;
-                                    document.getElementById('adminPassword').value = acc.password;
-                                }
-                            } else if (acc.role === 'GUARD') {
-                                guardId = acc.id;
-                                document.getElementById('guardUsername').value = acc.username;
-                                document.getElementById('guardPassword').value = acc.password;
-                            }
-                        });
-                    }
-                } catch (e) {
-                    console.warn('Sync failed:', e);
-                }
-            }
-
-            // Handle Guard UI restrictions
-            const session = JSON.parse(sessionStorage.getItem('charrmpass_session'));
-            if (session && session.role === 'GUARD') {
-                // Hide admin-only sections
-                document.querySelectorAll('.admin-only').forEach(el => el.classList.add('hidden'));
-                
-                // Disable save button
-                const saveBtn = document.querySelector('button[onclick="saveSettings()"]');
-                if (saveBtn) {
-                    saveBtn.disabled = true;
-                    saveBtn.innerHTML = '<i data-lucide="lock" class="w-4 h-4"></i> Admin Only';
-                    saveBtn.className = "px-6 py-3 rounded-xl bg-slate-200 text-slate-400 text-sm font-bold cursor-not-allowed flex items-center gap-2";
-                    lucide.createIcons();
-                }
-
-                // Update Header
-                const subTitle = document.querySelector('p.text-slate-500.uppercase');
-                if (subTitle) subTitle.textContent = "General Information";
-            }
-        });
 
         function togglePass(id, btn) {
             const input = document.getElementById(id);
-            // Lucide replaces <i> with <svg>, so we look for both
-            const icon = btn.querySelector('svg') || btn.querySelector('i');
-            if (input && icon) {
-                if (input.type === 'password') {
-                    input.type = 'text';
-                    icon.setAttribute('data-lucide', 'eye-off');
-                } else {
-                    input.type = 'password';
-                    icon.setAttribute('data-lucide', 'eye');
+            if (!input) return;
+            const isPass = input.type === 'password';
+            input.type = isPass ? 'text' : 'password';
+            btn.innerHTML = isPass ? '<i data-lucide="eye-off" class="w-4 h-4"></i>' : '<i data-lucide="eye" class="w-4 h-4"></i>';
+            lucide.createIcons();
+        }
+
+        async function loadSettings() {
+            // 1. Load from localStorage
+            const saved = localStorage.getItem('charrmpass_settings');
+            if (saved) {
+                try {
+                    const s = JSON.parse(saved);
+                    if (s.entryGateName) document.getElementById('entryGateName').value = s.entryGateName;
+                    if (s.entryGateId) document.getElementById('entryGateId').value = s.entryGateId;
+                    if (s.exitGateName) document.getElementById('exitGateName').value = s.exitGateName;
+                    if (s.exitGateId) document.getElementById('exitGateId').value = s.exitGateId;
+                    if (s.scanCooldown) document.getElementById('scanCooldown').value = s.scanCooldown;
+                    if (s.soundAuth !== undefined) document.getElementById('toggleSoundAuth').checked = s.soundAuth;
+                    if (s.soundDenied !== undefined) document.getElementById('toggleSoundDenied').checked = s.soundDenied;
+                    if (s.dupAlert !== undefined) document.getElementById('toggleDupAlert').checked = s.dupAlert;
+                } catch(e){}
+            }
+
+            // 2. Load accounts from Supabase
+            if (isConnected) {
+                try {
+                    const { data: accounts } = await supabaseClient.from('system_accounts').select('*');
+                    if (accounts) {
+                        accounts.forEach(acc => {
+                            if (acc.role === 'ADMIN' && document.getElementById('adminUsername')) {
+                                document.getElementById('adminUsername').value = acc.username || 'admin';
+                                document.getElementById('adminPassword').value = acc.password || '';
+                            }
+                            if (acc.role === 'GUARD' && document.getElementById('guardUsername')) {
+                                document.getElementById('guardUsername').value = acc.username || 'guard';
+                                document.getElementById('guardPassword').value = acc.password || '';
+                            }
+                        });
+                    }
+                } catch(err) {
+                    console.error('Error fetching system accounts:', err);
                 }
-                if (window.lucide) lucide.createIcons();
+            }
+
+            // Guard UI restrictions
+            const session = JSON.parse(sessionStorage.getItem('charrmpass_session'));
+            if (session && session.role === 'GUARD') {
+                document.querySelectorAll('.admin-only').forEach(el => el.classList.add('hidden'));
             }
         }
+
+        async function saveSettings() {
+            const settings = {
+                entryGateName: document.getElementById('entryGateName').value,
+                entryGateId: document.getElementById('entryGateId').value,
+                exitGateName: document.getElementById('exitGateName').value,
+                exitGateId: document.getElementById('exitGateId').value,
+                scanCooldown: document.getElementById('scanCooldown').value,
+                wifiSSID: document.getElementById('wifiSSID').value,
+                soundAuth: document.getElementById('toggleSoundAuth').checked,
+                soundDenied: document.getElementById('toggleSoundDenied').checked,
+                dupAlert: document.getElementById('toggleDupAlert').checked
+            };
+            localStorage.setItem('charrmpass_settings', JSON.stringify(settings));
+
+            const adminU = document.getElementById('adminUsername')?.value.trim();
+            const adminP = document.getElementById('adminPassword')?.value.trim();
+            const guardU = document.getElementById('guardUsername')?.value.trim();
+            const guardP = document.getElementById('guardPassword')?.value.trim();
+
+            if (isConnected) {
+                try {
+                    showToast('Saving settings & updating credentials in database...', 'info');
+                    const now = new Date().toISOString();
+
+                    if (adminU && adminP) {
+                        const { error: aErr } = await supabaseClient.from('system_accounts').upsert({
+                            username: adminU, password: adminP, role: 'ADMIN', updated_at: now
+                        }, { onConflict: 'role' });
+                        if (aErr) throw aErr;
+                    }
+
+                    if (guardU && guardP) {
+                        const { error: gErr } = await supabaseClient.from('system_accounts').upsert({
+                            username: guardU, password: guardP, role: 'GUARD', updated_at: now
+                        }, { onConflict: 'role' });
+                        if (gErr) throw gErr;
+                    }
+
+                    showToast('Settings & system credentials saved successfully!', 'success');
+                } catch(e) {
+                    console.error('Save error:', e);
+                    showToast('Database Error: ' + e.message, 'error');
+                    return;
+                }
+            } else {
+                showToast('Settings saved locally (Demo mode).', 'success');
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', loadSettings);
     </script>
 </body>
 </html>

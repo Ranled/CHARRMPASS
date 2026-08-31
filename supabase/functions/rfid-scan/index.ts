@@ -1,6 +1,8 @@
 // supabase/functions/rfid-scan/index.ts
-// CHARRMPASS — Edge Function v2.0
-// Handles automatic ENTRY / EXIT logic and Visitor/Emergency tags.
+// CHARRMPASS — Edge Function v3.0
+// Handles ENTRY / EXIT logic using the transactions table.
+// Authorization: AUTHORIZED / PENDING / DENIED
+// Special tags: VISITOR / EMERGENCY
 // Uses SERVICE_ROLE_KEY for safe atomic writes.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
@@ -11,7 +13,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// LCD payload helper
+// LCD payload helper — 4 lines for the physical LCD display
 function lcdPayload(line1: string, line2: string, line3: string, line4: string) {
   return { lcd_line1: line1, lcd_line2: line2, lcd_line3: line3, lcd_line4: line4 }
 }
@@ -28,7 +30,7 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     )
 
-    const { rfid_uid, device_id } = await req.json()
+    const { rfid_uid, device_id, gate_type } = await req.json()
 
     if (!rfid_uid) {
       return new Response(JSON.stringify({
@@ -48,6 +50,23 @@ serve(async (req) => {
         .eq('esp32_identifier', device_id)
     }
 
+    const now     = new Date()
+    const timeStr = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' })
+
+    // Resolve direction: prefer gate_type sent by the device,
+    // fallback to looking up the gate's registered type in the devices table.
+    let direction = 'ENTRY'
+    if (gate_type && (gate_type === 'ENTRY' || gate_type === 'EXIT')) {
+      direction = gate_type
+    } else if (device_id) {
+      const { data: device } = await supabase
+        .from('devices')
+        .select('gate_type')
+        .eq('esp32_identifier', device_id)
+        .maybeSingle()
+      if (device?.gate_type) direction = device.gate_type
+    }
+
     // ─── 2. CHECK SPECIAL TAGS (Visitor / Emergency) ──────────────────────────
     const { data: specialTag } = await supabase
       .from('special_tags')
@@ -56,56 +75,96 @@ serve(async (req) => {
       .maybeSingle()
 
     if (specialTag) {
-      const now = new Date()
-      const timeStr = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' })
-
-      // Check if already inside (open session)
-      const { data: openLog } = await supabase
-        .from('parking_logs')
-        .select('id, entry_time')
+      // Check last transaction to deduce ENTRY vs EXIT if gate direction is generic
+      const { data: lastTxn } = await supabase
+        .from('transactions')
+        .select('direction, timestamp, remarks')
         .eq('rfid_uid', uid)
-        .is('exit_time', null)
+        .eq('status', 'AUTHORIZED')
+        .order('timestamp', { ascending: false })
+        .limit(1)
         .maybeSingle()
 
-      if (openLog) {
-        // EXIT: close the session
-        const entryTime = new Date(openLog.entry_time)
-        const durationMinutes = Math.round((now.getTime() - entryTime.getTime()) / 60000)
-        await supabase.from('parking_logs').update({
-          exit_time: now.toISOString(),
-          duration_minutes: durationMinutes,
-          status: 'COMPLETED'
-        }).eq('id', openLog.id)
+      const isExitGate = direction === 'EXIT' || (!direction && lastTxn?.direction === 'ENTRY')
+      const action = isExitGate ? 'EXIT' : 'ENTRY'
 
-        return new Response(JSON.stringify({
-          status: 'AUTHORIZED',
-          action: 'EXIT',
-          tag_type: specialTag.type,
-          label: specialTag.label || specialTag.type,
-          duration_minutes: durationMinutes,
-          ...lcdPayload('CHARRMPASS', 'AUTHORIZED', specialTag.label || specialTag.type, `EXIT  ${timeStr}`)
-        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-      } else {
-        // ENTRY: open new session
-        await supabase.from('parking_logs').insert({
-          rfid_uid: uid,
-          vehicle_id: null,
-          user_id: null,
-          entry_time: now.toISOString(),
-          exit_time: null,
-          status: 'ACTIVE',
-          device_id: device_id || null,
-          remarks: `${specialTag.type} card: ${specialTag.label || ''}`
-        })
+      if (specialTag.type === 'VISITOR') {
+        if (action === 'EXIT') {
+          // Automatic Visitor Identification & Exit
+          const visitorName = specialTag.label || 'Visitor'
+          const visitorPlate = specialTag.description?.match(/Plate:\s*([^|]+)/)?.[1]?.trim() || 'N/A'
 
-        return new Response(JSON.stringify({
-          status: 'AUTHORIZED',
-          action: 'ENTRY',
-          tag_type: specialTag.type,
-          label: specialTag.label || specialTag.type,
-          ...lcdPayload('CHARRMPASS', 'AUTHORIZED', specialTag.label || specialTag.type, `ENTRY ${timeStr}`)
-        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+          await supabase.from('transactions').insert({
+            rfid_uid:  uid,
+            direction: 'EXIT',
+            gate:      device_id || 'EXIT_GATE',
+            status:    'AUTHORIZED',
+            remarks:   `Visitor Exit: ${visitorName} | Plate: ${visitorPlate}`
+          })
+
+          // Reset the reusable tag so it's immediately available for next visitor
+          await supabase.from('special_tags').update({
+            label: 'Reusable Visitor Tag',
+            description: null
+          }).eq('rfid_uid', uid)
+
+          return new Response(JSON.stringify({
+            status:   'AUTHORIZED',
+            action:   'EXIT',
+            tag_type: 'VISITOR',
+            label:    visitorName,
+            plate:    visitorPlate,
+            message:  `Visitor ${visitorName} exited. Tag ${uid} is now available for reuse.`,
+            ...lcdPayload('VISITOR EXIT', 'SAFE TRAVELS!', visitorName.substring(0, 16).toUpperCase(), 'TAG RETURNED')
+          }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        } else {
+          // Visitor Entry
+          const isAssigned = specialTag.label && specialTag.label !== 'Reusable Visitor Tag'
+          if (!isAssigned) {
+            return new Response(JSON.stringify({
+              status:   'VISITOR_PROMPT',
+              action:   'ENTRY',
+              tag_type: 'VISITOR',
+              message:  'Please register visitor name and plate at Guard Station.',
+              ...lcdPayload('VISITOR ENTRY', 'PLEASE WAIT', 'GUARD REGISTER', 'NAME & PLATE')
+            }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+          }
+
+          // Already assigned visitor entry
+          await supabase.from('transactions').insert({
+            rfid_uid:  uid,
+            direction: 'ENTRY',
+            gate:      device_id || 'ENTRY_GATE',
+            status:    'AUTHORIZED',
+            remarks:   `Visitor Entry: ${specialTag.label} | ${specialTag.description || 'N/A'}`
+          })
+
+          return new Response(JSON.stringify({
+            status:   'AUTHORIZED',
+            action:   'ENTRY',
+            tag_type: 'VISITOR',
+            label:    specialTag.label,
+            ...lcdPayload('VISITOR ENTRY', 'AUTHORIZED', specialTag.label.substring(0, 16).toUpperCase(), `ENTRY  ${timeStr}`)
+          }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        }
       }
+
+      // Emergency Tag
+      await supabase.from('transactions').insert({
+        rfid_uid:  uid,
+        direction: action,
+        gate:      device_id || direction,
+        status:    'AUTHORIZED',
+        remarks:   `${specialTag.type} tag: ${specialTag.label || 'Emergency Response'}`
+      })
+
+      return new Response(JSON.stringify({
+        status:   'AUTHORIZED',
+        action:   action,
+        tag_type: specialTag.type,
+        label:    specialTag.label || specialTag.type,
+        ...lcdPayload('EMERGENCY PASS', 'AUTHORIZED', (specialTag.label || specialTag.type).substring(0, 16), `${action}  ${timeStr}`)
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
 
     // ─── 3. LOOK UP RFID CARD → VEHICLE → USER ────────────────────────────────
@@ -121,146 +180,145 @@ serve(async (req) => {
 
     // ─── 4. NOT REGISTERED ────────────────────────────────────────────────────
     if (!card) {
-      await supabase.from('parking_logs').insert({
-        rfid_uid: uid,
-        vehicle_id: null,
-        user_id: null,
-        entry_time: new Date().toISOString(),
-        exit_time: new Date().toISOString(),
-        duration_minutes: 0,
-        status: 'DENIED',
-        device_id: device_id || null,
-        remarks: 'RFID not registered in system'
+      await supabase.from('transactions').insert({
+        rfid_uid:  uid,
+        direction: direction,
+        gate:      device_id || direction,
+        status:    'DENIED',
+        remarks:   'RFID not registered in system'
       })
 
       return new Response(JSON.stringify({
-        status: 'UNAUTHORIZED',
+        status:  'UNAUTHORIZED',
         message: 'RFID not registered.',
         ...lcdPayload('CHARRMPASS', '-----------', 'ACCESS DENIED', 'INVALID CARD')
       }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
 
-    // ─── 5. PENDING / DENIED STATUS ───────────────────────────────────────────
+    // ─── 5. PENDING STATUS ────────────────────────────────────────────────────
     if (card.authorization_status === 'PENDING') {
-      await supabase.from('parking_logs').insert({
-        rfid_uid: uid,
+      await supabase.from('transactions').insert({
+        rfid_uid:   uid,
         vehicle_id: (card.vehicles as any)?.id || null,
-        user_id: (card.users as any)?.id || null,
-        entry_time: new Date().toISOString(),
-        exit_time: new Date().toISOString(),
-        duration_minutes: 0,
-        status: 'DENIED',
-        device_id: device_id || null,
-        remarks: 'Registration pending admin approval'
+        user_id:    (card.users as any)?.id    || null,
+        direction:  direction,
+        gate:       device_id || direction,
+        status:     'DENIED',
+        remarks:    'Registration pending admin approval'
       })
 
       return new Response(JSON.stringify({
-        status: 'PENDING',
+        status:  'PENDING',
         message: 'Account pending admin approval.',
-        user: { name: (card.users as any)?.full_name },
+        user:    { name: (card.users as any)?.full_name },
         ...lcdPayload('CHARRMPASS', (card.users as any)?.full_name?.split(' ')[0] || 'USER', 'PENDING', 'NOT APPROVED')
       }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
 
+    // ─── 6. DENIED STATUS ─────────────────────────────────────────────────────
     if (card.authorization_status === 'DENIED') {
-      await supabase.from('parking_logs').insert({
-        rfid_uid: uid,
+      await supabase.from('transactions').insert({
+        rfid_uid:   uid,
         vehicle_id: (card.vehicles as any)?.id || null,
-        user_id: (card.users as any)?.id || null,
-        entry_time: new Date().toISOString(),
-        exit_time: new Date().toISOString(),
-        duration_minutes: 0,
-        status: 'DENIED',
-        device_id: device_id || null,
-        remarks: 'Registration denied by admin'
+        user_id:    (card.users as any)?.id    || null,
+        direction:  direction,
+        gate:       device_id || direction,
+        status:     'DENIED',
+        remarks:    'Registration denied by admin'
       })
 
       return new Response(JSON.stringify({
-        status: 'DENIED',
-        message: 'Access denied.',
-        user: { name: (card.users as any)?.full_name },
+        status:  'DENIED',
+        message: 'Access denied by administrator.',
+        user:    { name: (card.users as any)?.full_name },
         ...lcdPayload('CHARRMPASS', (card.users as any)?.full_name?.split(' ')[0] || 'USER', 'DENIED', 'SEE ADMIN')
       }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
 
-    // ─── 6. AUTHORIZED — DETERMINE ENTRY vs EXIT ──────────────────────────────
+    // ─── 7. AUTHORIZED (Check for Duplicate Entry) ──────────────────────────
     const vehicle = card.vehicles as any
     const user    = card.users    as any
     const plate   = vehicle?.plate_number || uid
-    const now     = new Date()
-    const timeStr = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' })
 
-    // Find open session for this RFID (exit_time IS NULL)
-    const { data: openSession } = await supabase
-      .from('parking_logs')
-      .select('id, entry_time')
-      .eq('rfid_uid', uid)
-      .is('exit_time', null)
-      .maybeSingle()
+    if (direction === 'ENTRY') {
+      const { data: lastTxn } = await supabase
+        .from('transactions')
+        .select('id, direction, timestamp, status')
+        .eq('rfid_uid', uid)
+        .eq('status', 'AUTHORIZED')
+        .order('timestamp', { ascending: false })
+        .limit(1)
+        .maybeSingle()
 
-    if (openSession) {
-      // ── EXIT ────────────────────────────────────────────────────────────────
-      const entryTime      = new Date(openSession.entry_time)
-      const durationMinutes = Math.round((now.getTime() - entryTime.getTime()) / 60000)
+      if (lastTxn && lastTxn.direction === 'ENTRY') {
+        const prevEntryDate = new Date(lastTxn.timestamp)
+        const prevTimeStr = prevEntryDate.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' })
+        const prevDateStr = prevEntryDate.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit' })
+        const formattedStamp = `${prevTimeStr} ${prevDateStr}`
 
-      await supabase.from('parking_logs').update({
-        exit_time:        now.toISOString(),
-        duration_minutes: durationMinutes,
-        status:           'COMPLETED'
-      }).eq('id', openSession.id)
+        await supabase.from('transactions').insert({
+          rfid_uid:   uid,
+          vehicle_id: vehicle?.id || null,
+          user_id:    user?.id    || null,
+          direction:  'ENTRY',
+          gate:       device_id  || direction,
+          status:     'PENDING_CONFIRMATION',
+          remarks:    `Duplicate entry scan - already inside since ${formattedStamp}`
+        })
 
-      return new Response(JSON.stringify({
-        status:           'AUTHORIZED',
-        action:           'EXIT',
-        plate:            plate,
-        duration_minutes: durationMinutes,
-        user: {
-          name:    user?.full_name,
-          role:    user?.role,
-          program: user?.program,
-          section: user?.section,
-        },
-        vehicle: {
-          type:  vehicle?.vehicle_type,
-          model: vehicle?.vehicle_model,
-          plate: plate,
-          color: vehicle?.vehicle_color,
-        },
-        ...lcdPayload('CHARRMPASS', 'AUTHORIZED', plate, `EXIT  ${timeStr}`)
-      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-
-    } else {
-      // ── ENTRY ───────────────────────────────────────────────────────────────
-      await supabase.from('parking_logs').insert({
-        rfid_uid:   uid,
-        vehicle_id: vehicle?.id  || null,
-        user_id:    user?.id     || null,
-        entry_time: now.toISOString(),
-        exit_time:  null,
-        status:     'ACTIVE',
-        device_id:  device_id || null,
-        remarks:    `Authorized ENTRY for ${user?.full_name || uid}`
-      })
-
-      return new Response(JSON.stringify({
-        status: 'AUTHORIZED',
-        action: 'ENTRY',
-        plate:  plate,
-        user: {
-          name:    user?.full_name,
-          role:    user?.role,
-          program: user?.program,
-          section: user?.section,
-        },
-        vehicle: {
-          type:  vehicle?.vehicle_type,
-          model: vehicle?.vehicle_model,
-          plate: plate,
-          color: vehicle?.vehicle_color,
-        },
-        ...lcdPayload('CHARRMPASS', 'AUTHORIZED', plate, `ENTRY ${timeStr}`)
-      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        return new Response(JSON.stringify({
+          status:          'ALREADY_INSIDE',
+          action:          'ENTRY_ALERT',
+          message:         `Already granted entry at ${formattedStamp}. Guard confirmation needed.`,
+          previous_entry:  lastTxn.timestamp,
+          plate:           plate,
+          user: {
+            name:          user?.full_name,
+            role:          user?.role,
+            program:       user?.program,
+            section:       user?.section,
+            profile_image: user?.profile_image,
+          },
+          vehicle: {
+            type:  vehicle?.vehicle_type,
+            model: vehicle?.vehicle_model,
+            plate: plate,
+            color: vehicle?.vehicle_color,
+          },
+          ...lcdPayload('ALREADY GRANTED', 'ENTRY AT:', formattedStamp, 'WAIT FOR GUARD')
+        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+      }
     }
+
+    await supabase.from('transactions').insert({
+      rfid_uid:   uid,
+      vehicle_id: vehicle?.id || null,
+      user_id:    user?.id    || null,
+      direction:  direction,
+      gate:       device_id  || direction,
+      status:     'AUTHORIZED',
+      remarks:    `${direction} scan — ${user?.full_name || uid}`
+    })
+
+    return new Response(JSON.stringify({
+      status:  'AUTHORIZED',
+      action:  direction,
+      plate:   plate,
+      user: {
+        name:          user?.full_name,
+        role:          user?.role,
+        program:       user?.program,
+        section:       user?.section,
+        profile_image: user?.profile_image,
+      },
+      vehicle: {
+        type:  vehicle?.vehicle_type,
+        model: vehicle?.vehicle_model,
+        plate: plate,
+        color: vehicle?.vehicle_color,
+      },
+      ...lcdPayload('CHARRMPASS', 'AUTHORIZED', plate, `${direction} ${timeStr}`)
+    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
 
   } catch (error) {
     console.error('RFID Scan Error:', error)
@@ -270,3 +328,4 @@ serve(async (req) => {
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 })
   }
 })
+

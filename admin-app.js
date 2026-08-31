@@ -8,7 +8,7 @@ if (typeof updateDBBadge === 'function') updateDBBadge();
 if (window.lucide) lucide.createIcons();
 const el = id => document.getElementById(id);
 
-let adminState = { users: [], pendingUsers: [], logs: [], accounts: [], specialTags: [], activeVehicles: [] };
+let adminState = { users: [], pendingUsers: [], logs: [], accounts: [], specialTags: [], activeVehicles: 0 };
 
 // Demo data (fallback)
 const demoUsers = [
@@ -19,11 +19,7 @@ const demoUsers = [
     { id:'5', full_name:'Pedro Garcia', role:'Student', rfid_uid:'', program:'BSA', section:'1A', vehicle_type:'Car', vehicle_model:'Vios', plate_number:'JKL-012', vehicle_color:'Blue', authorization_status:'PENDING', age:19, sex:'Male', address:'Tangalan, Aklan', created_at:'2024-05-14' },
 ];
 
-function generateSlots() {
-    const s = [];
-    for (let i=1;i<=10;i++) s.push({ id:`TM${i}`, slot_number:`TM${String(i).padStart(2,'0')}`, status: 'AVAILABLE', slot_row: 'TM' });
-    return s;
-}
+
 
 // =====================
 // VIEW SWITCHING
@@ -40,35 +36,7 @@ function adminView(v) {
 }
 window.adminView = adminView;
 
-function renderSlotsManagement() {
-    const table = el('slotManagementTable');
-    if (!table) return;
 
-    if (!adminState.slots.length) {
-        table.innerHTML = '<tr><td colspan="4" class="p-8 text-center text-slate-400">No parking slots found</td></tr>';
-        return;
-    }
-
-    const sorted = [...adminState.slots].sort((a, b) => a.slot_number.localeCompare(b.slot_number, undefined, {numeric: true, sensitivity: 'base'}));
-
-    table.innerHTML = sorted.map(s => {
-        const isOccupied = s.status === 'OCCUPIED';
-        const statusClass = s.status === 'AVAILABLE' ? 'bg-green-100 text-green-700' : s.status === 'OCCUPIED' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-700';
-        
-        return `
-            <tr class="hover:bg-white/60 border-b border-slate-100/50 transition-colors">
-                <td class="p-4"><div class="font-bold text-slate-800">${s.slot_number}</div></td>
-                <td class="p-4 text-slate-500">${s.slot_row || '--'}</td>
-                <td class="p-4 text-center"><span class="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${statusClass}">${s.status}</span></td>
-                <td class="p-4 text-right whitespace-nowrap">
-                    <button onclick="editSlot('${s.id}')" class="p-2 text-slate-400 hover:text-charm-dark transition-colors" title="Edit Slot"><i data-lucide="edit-3" class="w-4 h-4"></i></button>
-                    <button onclick="deleteSlot('${s.id}', '${s.status}')" class="p-2 text-slate-400 hover:text-red-500 transition-colors ${isOccupied ? 'opacity-30 cursor-not-allowed' : ''}" title="${isOccupied ? 'Cannot delete occupied slot' : 'Delete Slot'}"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
-                </td>
-            </tr>
-        `;
-    }).join('');
-    lucide.createIcons();
-}
 
 // =====================
 // LOAD DATA
@@ -146,14 +114,15 @@ async function loadData() {
 // RENDER
 // =====================
 function renderAdmin() {
-    const activeCount = typeof adminState.activeVehicles === 'number' ? adminState.activeVehicles : (adminState.activeVehicles?.length || 0);
+    const activeCount = typeof adminState.activeVehicles === 'number' ? adminState.activeVehicles : 0;
     const today = new Date().toISOString().split('T')[0];
     const todayEntries = adminState.logs.filter(l => l.direction === 'ENTRY' && l.timestamp?.startsWith(today));
+    const todayExits   = adminState.logs.filter(l => l.direction === 'EXIT'  && l.timestamp?.startsWith(today));
 
     if(el('adminStatUsers'))   el('adminStatUsers').textContent   = adminState.users.length;
     if(el('adminStatPending')) el('adminStatPending').textContent = adminState.pendingUsers.length;
     if(el('adminStatEntries')) el('adminStatEntries').textContent = todayEntries.length;
-    if(el('adminStatSlots'))   el('adminStatSlots').textContent   = activeCount + ' inside';
+    if(el('adminStatInside'))  el('adminStatInside').textContent  = activeCount;
 
     // Update charts if viewing analytics
     const analyticsView = el('aview-analytics');
@@ -204,87 +173,84 @@ function renderAdmin() {
             </td></tr>`).join('') : '<tr><td colspan="7" class="p-8 text-center text-slate-400">No authorized users found</td></tr>';
     }
 
-    // Slots Monitor - Grouped by Building/Row
-    const renderSlots = (id) => {
-        const c = el(id); if(!c) return;
-        const groups = {};
-        adminState.slots.forEach(s => {
-            const row = (s.slot_row || 'Other').toUpperCase();
-            if (!groups[row]) groups[row] = [];
-            groups[row].push(s);
-        });
-        const rows = Object.keys(groups).sort();
-        c.innerHTML = rows.map(row => {
-            const slots = groups[row].sort((a,b) => a.slot_number.localeCompare(b.slot_number, undefined, {numeric:true}));
-            return `
-                <div class="col-span-full glass-card rounded-3xl p-6 border border-white/60 shadow-glass mb-6">
-                    <div class="flex items-center justify-between mb-6">
-                        <h3 class="font-display font-bold text-lg text-slate-800 flex items-center gap-2">
-                            <i data-lucide="building-2" class="w-5 h-5 text-charm-dark"></i>
-                            ${row} BUILDING
-                        </h3>
-                        <span class="text-[10px] font-black uppercase tracking-widest text-slate-400 bg-slate-50 px-2 py-1 rounded-lg border border-slate-100">
-                            ${slots.length} Total Slots
-                        </span>
-                    </div>
-                    <div class="grid grid-cols-5 md:grid-cols-10 gap-3">
-                        ${slots.map(s => {
-                            const a = s.status==='AVAILABLE', o = s.status==='OCCUPIED';
-                            const bg = a?'bg-charm-light/20 border-charm-light/40 text-charm-dark':o?'bg-red-50 border-red-200 text-red-600':'bg-yellow-50 border-yellow-200 text-yellow-700';
-                            const dot = a?'bg-charm-green':o?'bg-red-500':'bg-yellow-400';
-                            let occupant = '';
-                            if (o && s.current_vehicle) {
-                                const u = adminState.users.find(x => x.rfid_uid === s.current_vehicle);
-                                occupant = `<div class="text-[9px] font-bold mt-1 text-slate-700 truncate w-full text-center px-1">${u ? u.full_name : s.current_vehicle}</div>`;
-                            }
-                            return `<div onclick="${o?'showSlotInfo(\''+s.current_vehicle+'\')':''}" class="rounded-xl p-3 border ${bg} flex flex-col items-center justify-center slot-card relative h-24 ${o?'cursor-pointer hover:scale-105 transition-transform':''}"><div class="w-full flex justify-end mb-1"><div class="w-2 h-2 rounded-full ${dot}"></div></div><div class="text-lg font-display font-bold">${s.slot_number}</div><div class="text-[10px] font-bold uppercase mt-1 ${occupant?'hidden':''}">${s.status}</div>${occupant}</div>`;
-                        }).join('')}
-                    </div>
-                </div>
-            `;
-        }).join('');
-    };
-    renderSlots('adminMonitorSlots');
-    renderSlotsManagement();
-
-    // Accounts
+    // Accounts (Guard Management)
     if(el('accountsGrid')) {
         const guardAccounts = adminState.accounts.filter(acc => acc.role === 'GUARD');
         if (guardAccounts.length > 0) {
             el('accountsGrid').innerHTML = guardAccounts.map(acc => `
-                <div class="glass-card p-6 rounded-3xl border border-white/60 shadow-glass flex flex-col items-center text-center animate-slide-up">
-                    <div class="w-16 h-16 rounded-full bg-charm-mid text-white flex items-center justify-center mb-4 shadow-lg">
+                <div class="glass-card p-6 rounded-3xl border border-white/60 shadow-glass flex flex-col items-center text-center animate-slide-up relative group">
+                    <button onclick="deleteAccount('${acc.id}')" class="absolute top-4 right-4 p-2 rounded-xl text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors" title="Delete Guard Account">
+                        <i data-lucide="trash-2" class="w-4 h-4"></i>
+                    </button>
+                    <div class="w-16 h-16 rounded-2xl bg-charm-dark text-charm-yellow flex items-center justify-center mb-4 shadow-lg">
                         <i data-lucide="shield-check" class="w-8 h-8"></i>
                     </div>
-                    <h3 class="font-display font-bold text-lg text-slate-800">${acc.username}</h3>
-                    <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700 uppercase tracking-widest mt-1">${acc.role}</span>
-                    <div class="mt-6 flex gap-2 w-full">
-                        <button onclick="openAccountModal('${acc.id}')" class="flex-1 px-3 py-2 rounded-xl bg-slate-100 text-slate-600 text-xs font-bold hover:bg-slate-200 transition-colors flex items-center justify-center gap-1">
-                            <i data-lucide="edit-3" class="w-3.5 h-3.5"></i> Edit Guard Account
+                    <h3 class="font-display font-bold text-xl text-slate-800">${acc.username}</h3>
+                    <span class="px-3 py-0.5 rounded-full text-[10px] font-extrabold bg-green-100 text-green-800 uppercase tracking-widest mt-1">SECURITY GUARD</span>
+                    
+                    <div class="w-full mt-5 pt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+                        <span class="font-semibold uppercase tracking-wider text-[10px] text-slate-400">Password:</span>
+                        <span class="font-mono font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded">${acc.password || '••••••••'}</span>
+                    </div>
+
+                    <div class="mt-5 flex gap-2 w-full">
+                        <button onclick="openAccountModal('${acc.id}')" class="flex-1 px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-bold hover:bg-charm-dark hover:text-white transition-all flex items-center justify-center gap-1.5 shadow-sm">
+                            <i data-lucide="key-round" class="w-3.5 h-3.5"></i> Change Password / Username
                         </button>
                     </div>
                 </div>
             `).join('');
         } else {
-            el('accountsGrid').innerHTML = `<div class="col-span-full py-20 flex flex-col items-center justify-center text-slate-400"><i data-lucide="shield-off" class="w-10 h-10 mb-4 opacity-20"></i><p class="font-bold">No guard accounts found.</p></div>`;
+            el('accountsGrid').innerHTML = `
+                <div class="col-span-full py-16 flex flex-col items-center justify-center text-slate-400">
+                    <div class="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mb-3">
+                        <i data-lucide="shield-off" class="w-8 h-8 text-slate-300"></i>
+                    </div>
+                    <p class="font-bold text-slate-700 mb-1 text-base">No Guard Accounts Found</p>
+                    <p class="text-xs text-slate-400 mb-5 max-w-sm text-center">Create security guard credentials to allow officers to log into the Guard Station dashboard.</p>
+                    <button onclick="openAccountModal()" class="px-5 py-2.5 bg-charm-dark text-white rounded-xl text-xs font-bold shadow-md hover:opacity-90 flex items-center gap-1.5">
+                        <i data-lucide="plus" class="w-4 h-4"></i> Create Guard Account
+                    </button>
+                </div>
+            `;
         }
     }
 
     // Logs
     if(el('adminLogsTable')) {
-        const recentLogs = adminState.logs.slice(0, 30);
+        const recentLogs = adminState.logs.slice(0, 50);
         if (recentLogs.length) {
             el('adminLogsTable').innerHTML = recentLogs.map(l => {
-                const ts       = l.timestamp ? new Date(l.timestamp).toLocaleTimeString('en-US',{hour12:false}) : '--';
-                const plate    = l.vehicles?.plate_number || l.rfid_uid || '--';
-                const name     = l.users?.full_name || 'Unknown';
-                const dir      = l.direction || '--';
+                const dateObj  = l.timestamp ? new Date(l.timestamp) : null;
+                const ts       = dateObj ? dateObj.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--';
+                const plate    = l.vehicles?.plate_number || l.remarks?.match(/[A-Z0-9]{3,8}/)?.[0] || '--';
+                const name     = l.users?.full_name || 'Cardholder';
+                const dir      = l.direction || 'ENTRY';
                 const isEntry  = dir === 'ENTRY';
-                const isActive = dir === 'ENTRY' && l.status === 'AUTHORIZED';
-                return `<tr class="hover:bg-white/60 border-b border-slate-100/50"><td class="p-4 text-slate-500">${ts}</td><td class="p-4 font-mono text-xs text-slate-400">${l.rfid_uid || '--'}</td><td class="p-4 font-bold text-slate-800">${name}</td><td class="p-4 font-mono text-xs text-slate-600">${plate}</td><td class="p-4 text-center"><span class="px-2 py-1 rounded text-[10px] font-bold ${isEntry?'bg-green-100 text-green-700':'bg-blue-100 text-blue-700'}">${dir}</span></td><td class="p-4 text-center"><span class="px-2 py-1 rounded text-[10px] font-bold ${l.status==='AUTHORIZED'?'bg-green-50 text-green-600':'bg-red-50 text-red-600'}">${l.status||'--'}</span></td><td class="p-4 text-right"><span class="text-[10px] font-bold ${l.gate?.includes('ENTRY')?'text-green-500':'text-blue-500'}">${l.gate||'--'}</span></td></tr>`;
+                const isAuth   = l.status === 'AUTHORIZED';
+                const statusBg = isAuth ? 'bg-green-100 text-green-700' : (l.status === 'PENDING_CONFIRMATION' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700');
+                const gateName = l.gate || (isEntry ? 'ENTRY_GATE' : 'EXIT_GATE');
+
+                return `
+                    <tr class="hover:bg-white/60 border-b border-slate-100/50 transition-colors">
+                        <td class="p-4 text-xs font-mono font-medium text-slate-500">${ts}</td>
+                        <td class="p-4 font-mono text-xs font-bold text-slate-500">${l.rfid_uid || '--'}</td>
+                        <td class="p-4 font-bold text-slate-800">${name}</td>
+                        <td class="p-4 font-mono text-xs font-bold text-charm-dark bg-charm-yellow/10 px-2 py-0.5 rounded inline-block my-3">${plate}</td>
+                        <td class="p-4 text-center">
+                            <span class="px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase ${isEntry ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'}">${dir}</span>
+                        </td>
+                        <td class="p-4 text-center">
+                            <span class="px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase ${statusBg}">${l.status || '--'}</span>
+                        </td>
+                        <td class="p-4 text-right">
+                            <span class="text-xs font-bold font-mono ${gateName.includes('ENTRY') ? 'text-emerald-600' : 'text-blue-600'}">${gateName}</span>
+                        </td>
+                    </tr>
+                `;
             }).join('');
         } else {
-            el('adminLogsTable').innerHTML = '<tr><td colspan="7" class="p-8 text-center text-slate-400">No transactions found</td></tr>';
+            el('adminLogsTable').innerHTML = '<tr><td colspan="7" class="p-8 text-center text-slate-400 font-medium">No transactions found</td></tr>';
         }
     }
 
@@ -402,92 +368,196 @@ window.closeUserModal = function() {
     setTimeout(() => modal.classList.add('hidden'), 300);
 };
 
+window.saveUser = function() {
+    const form = el('userForm');
+    if (form) {
+        if (!form.checkValidity()) {
+            form.reportValidity();
+            return;
+        }
+        form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    }
+};
+
 el('userForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const userId = el('formUserId').value;
-    const user = adminState.users.find(u => u.id === userId);
     const newUid = el('formUid').value.trim().toUpperCase();
 
+    if (!newUid) {
+        showToast('Please enter an RFID UID.', 'error');
+        el('formUid').focus();
+        return;
+    }
+
     const userData = {
-        full_name: el('formName').value,
-        age: parseInt(el('formAge').value),
+        full_name: el('formName').value.trim(),
+        age: parseInt(el('formAge').value) || null,
         sex: el('formSex').value,
-        address: el('formAddress').value,
-        program: el('formProgram').value,
-        section: el('formSection').value,
+        address: el('formAddress').value.trim(),
+        program: el('formProgram').value.trim() || null,
+        section: el('formSection').value.trim() || null,
         role: el('formRole').value,
         updated_at: new Date().toISOString()
     };
     const vehicleData = {
         vehicle_type: el('formVehType').value,
-        plate_number: el('formPlate').value.trim().toUpperCase(),
-        vehicle_model: el('formVehModel').value,
-        vehicle_color: el('formVehColor').value,
+        plate_number: el('formPlate').value.trim().toUpperCase() || 'NO-PLATE',
+        vehicle_model: el('formVehModel').value.trim() || '--',
+        vehicle_color: el('formVehColor').value.trim() || '--',
     };
 
     try {
-        showToast('Saving user...', 'info');
-        // Update user table
-        const { error: uErr } = await supabaseClient.from('users').update(userData).eq('id', userId);
-        if (uErr) throw uErr;
+        showToast('Saving user & RFID assignment...', 'info');
 
-        // Update vehicle table if vehicle_id exists
-        if (user?.vehicle_id) {
-            const { error: vErr } = await supabaseClient.from('vehicles').update(vehicleData).eq('id', user.vehicle_id);
+        if (userId) {
+            // ─── EDIT EXISTING USER ───
+            const user = adminState.users.find(u => u.id === userId);
+            
+            // 1. Update user
+            const { error: uErr } = await supabaseClient.from('users').update(userData).eq('id', userId);
+            if (uErr) throw uErr;
+
+            // 2. Update or insert vehicle
+            if (user?.vehicle_id) {
+                const { error: vErr } = await supabaseClient.from('vehicles').update(vehicleData).eq('id', user.vehicle_id);
+                if (vErr) throw vErr;
+            } else {
+                const { data: newV, error: vErr } = await supabaseClient.from('vehicles').insert([{ user_id: userId, ...vehicleData }]).select().single();
+                if (vErr) throw vErr;
+            }
+
+            // 3. Update or upsert RFID Card UID
+            if (user?.rfid_card_id) {
+                const { error: cErr } = await supabaseClient.from('rfid_cards').update({
+                    rfid_uid: newUid,
+                    authorization_status: 'AUTHORIZED',
+                    updated_at: new Date().toISOString()
+                }).eq('id', user.rfid_card_id);
+                if (cErr) throw cErr;
+            } else {
+                const { error: cErr } = await supabaseClient.from('rfid_cards').insert([{
+                    rfid_uid: newUid,
+                    user_id: userId,
+                    vehicle_id: user?.vehicle_id || null,
+                    authorization_status: 'AUTHORIZED'
+                }]);
+                if (cErr) throw cErr;
+            }
+
+            showToast(`User updated! RFID UID ${newUid} assigned.`, 'success');
+        } else {
+            // ─── ADD BRAND NEW USER ───
+            // 1. Insert user
+            const { data: newUser, error: uErr } = await supabaseClient.from('users').insert([userData]).select().single();
+            if (uErr) throw uErr;
+
+            // 2. Insert vehicle
+            const { data: newV, error: vErr } = await supabaseClient.from('vehicles').insert([{ user_id: newUser.id, ...vehicleData }]).select().single();
             if (vErr) throw vErr;
-        }
 
-        // Update RFID UID + set AUTHORIZED in rfid_cards
-        if (user?.rfid_card_id && newUid) {
-            const { error: cErr } = await supabaseClient.from('rfid_cards').update({
+            // 3. Insert RFID Card
+            const { error: cErr } = await supabaseClient.from('rfid_cards').insert([{
                 rfid_uid: newUid,
-                authorization_status: 'AUTHORIZED',
-                updated_at: new Date().toISOString()
-            }).eq('id', user.rfid_card_id);
+                user_id: newUser.id,
+                vehicle_id: newV.id,
+                authorization_status: 'AUTHORIZED'
+            }]);
             if (cErr) throw cErr;
+
+            showToast(`User created and RFID UID ${newUid} assigned!`, 'success');
         }
 
-        showToast('User saved successfully!', 'success');
         closeUserModal();
         await loadData();
     } catch (err) {
-        showToast('Error: ' + err.message, 'error');
+        showToast('Error saving user: ' + err.message, 'error');
     }
 });
 
 window.approveUser = async function(id) {
+    const u = adminState.pendingUsers.find(x => x.id === id);
+    if (!u) return;
+
+    // Check if the review modal is open and has a UID entered
+    let assignedUid = '';
+    const revInput = el('revRfidUid');
+    if (revInput && revInput.value) {
+        assignedUid = revInput.value.trim().toUpperCase();
+    } else if (u.rfid_uid && !u.rfid_uid.startsWith('UNASSIGNED_')) {
+        assignedUid = u.rfid_uid;
+    }
+
+    // If no UID is provided, open the Review Modal so the Admin can assign one
+    if (!assignedUid) {
+        openReviewModal(id);
+        setTimeout(() => {
+            if (el('revRfidUid')) {
+                el('revRfidUid').focus();
+                showToast('Please enter or scan the physical RFID UID to issue.', 'info');
+            }
+        }, 350);
+        return;
+    }
+
     try {
-        showToast('Approving user...', 'info');
-        // Authorize the rfid_card linked to this user
-        const { error } = await supabaseClient
+        showToast(`Approving & issuing RFID ${assignedUid}...`, 'info');
+
+        // Check if card record already exists for this user
+        const { data: existingCard } = await supabaseClient
             .from('rfid_cards')
-            .update({ authorization_status: 'AUTHORIZED', updated_at: new Date().toISOString() })
-            .eq('user_id', id);
-        if (error) throw error;
-        showToast('User approved! Assign RFID UID via Edit button.', 'success');
+            .select('id')
+            .eq('user_id', id)
+            .maybeSingle();
+
+        if (existingCard) {
+            const { error } = await supabaseClient
+                .from('rfid_cards')
+                .update({
+                    rfid_uid: assignedUid,
+                    authorization_status: 'AUTHORIZED',
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', existingCard.id);
+            if (error) throw error;
+        } else {
+            const { error } = await supabaseClient
+                .from('rfid_cards')
+                .insert([{
+                    rfid_uid: assignedUid,
+                    user_id: id,
+                    vehicle_id: u.vehicle_id || null,
+                    authorization_status: 'AUTHORIZED'
+                }]);
+            if (error) throw error;
+        }
+
+        closeReviewModal();
+        showToast(`Approved! RFID Tag ${assignedUid} issued to ${u.full_name}.`, 'success');
         await loadData();
-    } catch (err) { showToast('Error: ' + err.message, 'error'); }
+    } catch (err) {
+        showToast('Error approving registration: ' + err.message, 'error');
+    }
 };
 
 window.denyRegistration = async function(id) {
     if (!confirm('Are you sure you want to deny this registration?')) return;
     try {
         showToast('Denying registration...', 'info');
-        // Set rfid_card to DENIED (do not delete the user record)
         const { error } = await supabaseClient
             .from('rfid_cards')
             .update({ authorization_status: 'DENIED', updated_at: new Date().toISOString() })
             .eq('user_id', id);
         if (error) throw error;
+        closeReviewModal();
         showToast('Registration denied.', 'success');
         await loadData();
     } catch (err) { showToast('Error: ' + err.message, 'error'); }
 };
 
 window.deleteUser = async function(id) {
-    if (!confirm('Delete this user and all their data permanently?')) return;
+    if (!confirm('Delete this user and all their vehicle/RFID data permanently?')) return;
     try {
-        // Cascade deletes vehicles, rfid_cards (via FK ON DELETE CASCADE)
         const { error } = await supabaseClient.from('users').delete().eq('id', id);
         if (error) throw error;
         showToast('User deleted.', 'success');
@@ -495,93 +565,7 @@ window.deleteUser = async function(id) {
     } catch (err) { showToast('Error: ' + err.message, 'error'); }
 };
 
-// =====================
-// SLOT ACTIONS
-// =====================
-window.openSlotManagementModal = function(slot = null) {
-    const modal = el('slotManagementModal');
-    el('slotForm').reset();
-    el('formSlotId').value = '';
-    el('slotModalTitle').textContent = slot ? 'Edit Parking Slot' : 'Add Parking Slot';
-    
-    if (slot) {
-        el('formSlotId').value = slot.id;
-        el('formSlotNumber').value = slot.slot_number;
-        el('formSlotRow').value = slot.slot_row;
-        el('formSlotStatus').value = slot.status === 'OCCUPIED' ? 'AVAILABLE' : slot.status;
-    }
 
-    modal.classList.remove('hidden');
-    setTimeout(() => {
-        modal.classList.add('opacity-100');
-        el('slotManagementModalContent').classList.remove('scale-95');
-    }, 10);
-};
-
-window.closeSlotManagementModal = function() {
-    const modal = el('slotManagementModal');
-    modal.classList.remove('opacity-100');
-    el('slotManagementModalContent').classList.add('scale-95');
-    setTimeout(() => modal.classList.add('hidden'), 300);
-};
-
-window.editSlot = function(id) {
-    const slot = adminState.slots.find(s => s.id === id);
-    if (slot) openSlotManagementModal(slot);
-};
-
-el('slotForm')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const id = el('formSlotId').value;
-    const num = el('formSlotNumber').value.trim();
-    const row = el('formSlotRow').value.trim();
-    const status = el('formSlotStatus').value;
-
-    const payload = {
-        slot_number: num,
-        slot_row: row,
-        status: status,
-        updated_at: new Date().toISOString()
-    };
-
-    console.log('💾 Attempting to save slot:', payload);
-
-    try {
-        showToast('Saving slot...', 'info');
-        let result;
-        if (id) {
-            console.log('🔄 Updating existing slot ID:', id);
-            result = await supabaseClient.from('parking_slots').update(payload).eq('id', id);
-        } else {
-            console.log('➕ Inserting new slot...');
-            result = await supabaseClient.from('parking_slots').insert(payload);
-        }
-
-        if (result.error) {
-            console.error('❌ Supabase Save Error:', result.error);
-            throw result.error;
-        }
-
-        console.log('✅ Slot saved successfully!', result.data);
-        showToast('Slot saved successfully!', 'success');
-        closeSlotManagementModal();
-        await loadData();
-    } catch (err) {
-        console.error('❌ Catch Block Error:', err);
-        showToast('Save Failed: ' + (err.message || 'Unknown error'), 'error');
-    }
-});
-
-window.deleteSlot = async function(id, status) {
-    if (status === 'OCCUPIED') { showToast('Cannot delete an occupied slot!', 'error'); return; }
-    if (!confirm('Delete this parking slot?')) return;
-    try {
-        const { error } = await supabaseClient.from('parking_slots').delete().eq('id', id);
-        if (error) throw error;
-        showToast('Slot deleted.', 'success');
-        await loadData();
-    } catch (err) { showToast('Error: ' + err.message, 'error'); }
-};
 
 // =====================
 // ANALYTICS
@@ -779,9 +763,14 @@ window.openReviewModal = function(id) {
     el('revImgIdFront').src = u.id_front_image || 'https://images.unsplash.com/photo-1633158829585-23ba8f7c8caf?auto=format&fit=crop&q=60&w=400';
     el('revImgIdBack').src = u.id_back_image || 'https://images.unsplash.com/photo-1621252179027-94459d278660?auto=format&fit=crop&q=60&w=400';
 
+    // RFID UID Assignment Input
+    if (el('revRfidUid')) {
+        el('revRfidUid').value = (u.rfid_uid && !u.rfid_uid.startsWith('UNASSIGNED_')) ? u.rfid_uid : '';
+    }
+
     // Buttons
-    el('revBtnApprove').onclick = () => { closeReviewModal(); approveUser(u.id); };
-    el('revBtnDeny').onclick = () => { closeReviewModal(); denyRegistration(u.id); };
+    el('revBtnApprove').onclick = () => { approveUser(u.id); };
+    el('revBtnDeny').onclick = () => { denyRegistration(u.id); };
 
     const modal = el('reviewModal');
     modal.classList.remove('hidden');
@@ -802,67 +791,122 @@ window.zoomImage = function(container) {
     el('zoomModal').classList.remove('hidden');
 };
 
-// Account Modal logic
-window.openAccountModal = function(id) {
+// Account Modal logic (Guard Credentials Management)
+window.openAccountModal = function(id = null) {
     const m = el('accountModal');
+    if (!m) return;
     el('accountForm').reset();
-    if(id) {
+    const modalTitle = el('accountModalContent')?.querySelector('h3');
+    
+    if (id) {
         const acc = adminState.accounts.find(a => a.id === id);
-        if(acc) {
+        if (acc) {
             el('formAccId').value = acc.id;
-            el('formAccUser').value = acc.username;
-            el('formAccPass').value = acc.password;
-            el('formAccRole').value = acc.role;
+            el('formAccUser').value = acc.username || '';
+            el('formAccPass').value = acc.password || '';
+            el('formAccRole').value = acc.role || 'GUARD';
+            if (modalTitle) modalTitle.textContent = `Edit Guard Account (${acc.username})`;
         }
+    } else {
+        el('formAccId').value = '';
+        el('formAccUser').value = '';
+        el('formAccPass').value = '';
+        el('formAccRole').value = 'GUARD';
+        if (modalTitle) modalTitle.textContent = 'Add New Guard Account';
     }
+
     m.classList.remove('hidden');
-    setTimeout(() => { m.classList.remove('opacity-0'); el('accountModalContent').classList.remove('scale-95'); }, 10);
+    setTimeout(() => { 
+        m.classList.remove('opacity-0'); 
+        el('accountModalContent').classList.remove('scale-95'); 
+    }, 10);
+    lucide.createIcons();
 };
 
 window.closeAccountModal = function() {
     const m = el('accountModal');
-    m.classList.add('opacity-0'); el('accountModalContent').classList.add('scale-95');
+    if (!m) return;
+    m.classList.add('opacity-0'); 
+    el('accountModalContent').classList.add('scale-95');
     setTimeout(() => m.classList.add('hidden'), 300);
+};
+
+window.deleteAccount = async function(id) {
+    if (!id) return;
+    const acc = adminState.accounts.find(a => a.id === id);
+    const name = acc?.username || 'this account';
+    if (!confirm(`Are you sure you want to delete guard account "${name}"?`)) return;
+
+    if (isConnected) {
+        try {
+            const { error } = await supabaseClient.from('system_accounts').delete().eq('id', id);
+            if (error) throw error;
+            showToast(`Guard account "${name}" deleted!`, 'success');
+            await loadData();
+            renderAll();
+        } catch(e) {
+            showToast('Error deleting account: ' + e.message, 'error');
+        }
+    } else {
+        adminState.accounts = adminState.accounts.filter(a => a.id !== id);
+        showToast(`Guard account deleted (Demo mode).`, 'info');
+        renderAll();
+    }
 };
 
 el('accountForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const id = el('formAccId').value;
-    const data = { username: el('formAccUser').value, password: el('formAccPass').value, role: el('formAccRole').value, updated_at: new Date().toISOString() };
+    const username = el('formAccUser').value.trim();
+    const password = el('formAccPass').value.trim();
+    const role = el('formAccRole').value || 'GUARD';
+
+    if (!username || !password) {
+        showToast('Username and password are required', 'warning');
+        return;
+    }
+
     try {
-        const { error } = await supabaseClient.from('system_accounts').upsert({ id: id || undefined, ...data }, { onConflict: 'role' });
-        if (error) throw error;
-        showToast('Account updated!', 'success');
-        closeAccountModal(); await loadData();
-    } catch(err) { showToast('Error: ' + err.message, 'error'); }
+        if (isConnected) {
+            const now = new Date().toISOString();
+            if (id) {
+                const { error } = await supabaseClient
+                    .from('system_accounts')
+                    .update({ username, password, role, updated_at: now })
+                    .eq('id', id);
+                if (error) throw error;
+                showToast(`Guard account "${username}" updated!`, 'success');
+            } else {
+                const { error } = await supabaseClient
+                    .from('system_accounts')
+                    .insert({ username, password, role, updated_at: now });
+                if (error) throw error;
+                showToast(`New guard account "${username}" created!`, 'success');
+            }
+            closeAccountModal(); 
+            await loadData();
+            renderAll();
+        } else {
+            showToast('Changes saved locally (Demo mode).', 'info');
+            closeAccountModal();
+        }
+    } catch(err) { 
+        showToast('Error saving guard account: ' + err.message, 'error'); 
+    }
 });
 
 window.togglePass = function(id, btn) {
     const input = el(id);
-    if (input) input.type = input.type === 'password' ? 'text' : 'password';
+    if (!input) return;
+    const isPass = input.type === 'password';
+    input.type = isPass ? 'text' : 'password';
+    if (btn) {
+        btn.innerHTML = isPass ? '<i data-lucide="eye-off" class="w-4 h-4"></i>' : '<i data-lucide="eye" class="w-4 h-4"></i>';
+        lucide.createIcons();
+    }
 };
 
-window.showSlotInfo = function(uid) {
-    const u = adminState.users.find(x => x.rfid_uid === uid);
-    if (!u) return;
-    el('modalName').textContent = u.full_name;
-    el('modalRole').textContent = u.role;
-    el('modalProgram').textContent = `${u.program} • ${u.section}`;
-    el('modalPlate').textContent = u.plate_number;
-    el('modalVehType').textContent = u.vehicle_type;
-    el('modalVehModel').textContent = u.vehicle_model;
-    el('modalVehImage').src = u.motorcycle_image || '';
-    el('modalProfileImage').src = u.profile_image || '';
-    const m = el('slotInfoModal');
-    m.classList.remove('hidden');
-    setTimeout(() => { m.classList.add('opacity-100'); el('slotInfoContent').classList.remove('scale-95'); }, 10);
-};
 
-window.closeSlotModal = function() {
-    const m = el('slotInfoModal');
-    m.classList.remove('opacity-100'); el('slotInfoContent').classList.add('scale-95');
-    setTimeout(() => m.classList.add('hidden'), 300);
-};
 
 setupRealtime();
 loadData();
