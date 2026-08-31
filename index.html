@@ -74,51 +74,50 @@
     <div id="toastContainer" class="fixed top-5 right-5 z-50 flex flex-col gap-3 pointer-events-none"></div>
 
     <!-- Header / Brand & University Identity Section -->
-    <header class="relative z-10 w-full max-w-lg text-center flex flex-col items-center pt-1">
+    <header class="relative z-10 w-full max-w-xl text-center flex flex-col items-center pt-2 mb-2">
         <!-- Logo with subtle warm glow -->
         <div
-            class="w-14 h-14 md:w-16 md:h-16 bg-[#0E5C4A]/90 border border-emerald-400/30 rounded-2xl mb-2.5 flex items-center justify-center backdrop-blur-md shadow-logo-glow transition-transform duration-300 hover:scale-105">
+            class="w-16 h-16 bg-gradient-to-br from-[#0E5C4A] to-[#147a63] border-2 border-emerald-400/40 rounded-2xl mb-3 flex items-center justify-center backdrop-blur-md shadow-lg shadow-emerald-950/50 transition-transform duration-300 hover:scale-105">
             <img src="logocharrmpark.png" alt="CHARMMPASS Logo"
-                class="w-10 h-10 md:w-11 md:h-11 object-contain drop-shadow"
-                onerror="this.style.display='none'; this.parentElement.innerHTML='<i data-lucide=&quot;shield-check&quot; class=&quot;w-7 h-7 text-[#F5B335]&quot;></i>'; lucide.createIcons();">
+                class="w-11 h-11 object-contain drop-shadow"
+                onerror="this.style.display='none'; this.parentElement.innerHTML='<i data-lucide=&quot;shield-check&quot; class=&quot;w-8 h-8 text-[#F5B335]&quot;></i>'; lucide.createIcons();">
         </div>
 
         <!-- System Title -->
         <h1
-            class="font-display font-extrabold text-2xl md:text-3xl text-white tracking-tight leading-tight mb-1 drop-shadow-sm">
+            class="font-display font-black text-3xl md:text-4xl text-white tracking-tight leading-tight mb-1 drop-shadow-md">
             CHARMM<span class="text-[#F5B335]">PASS</span>
         </h1>
 
         <!-- Clean Subtitle & University Badge -->
-        <p class="text-emerald-100/90 text-xs md:text-sm font-medium tracking-wide">
-            A Web-Based Smart Vehicle Entry and Exit Monitoring System Using RFID Technology for Aklan State University
-            - Ibajay Campus
-
+        <p class="text-slate-200 text-xs md:text-sm font-medium tracking-wide max-w-md drop-shadow">
+            A Web-Based Smart Vehicle Entry and Exit Monitoring System Using RFID Technology
         </p>
-        <span class="text-emerald-300/75 text-[10px] font-semibold uppercase tracking-widest mt-1">
+        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-950/70 border border-emerald-400/30 text-emerald-300 text-[11px] font-bold uppercase tracking-widest mt-2 backdrop-blur-md shadow-sm">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
             Aklan State University • Ibajay Campus
         </span>
     </header>
 
     <!-- Main Content Container -->
-    <main class="relative z-10 w-full max-w-[420px] landing-main-container my-auto py-2 flex flex-col items-center">
+    <main class="relative z-10 w-full max-w-[440px] landing-main-container my-auto py-2 flex flex-col items-center">
 
         <!-- VIEW 1: Initial Welcome Hero (SIGN IN Button) -->
         <div id="landingView" class="w-full transition-all duration-200 ease-out transform opacity-100 scale-100">
             <div class="premium-card w-full">
                 <!-- Compact Translucent Green Header -->
-                <div class="card-header-translucent px-6 py-4 text-center text-white">
-                    <h2 class="font-display font-bold text-xl md:text-2xl tracking-tight">
+                <div class="card-header-translucent text-center">
+                    <h2 class="font-display font-extrabold text-2xl tracking-tight text-white mb-1">
                         Welcome
                     </h2>
-                    <p class="text-emerald-100/80 text-xs mt-0.5 font-medium">
+                    <p class="text-emerald-100 text-xs font-medium">
                         Sign in to continue to CHARRMPASS
                     </p>
                 </div>
 
                 <!-- Card Body -->
-                <div class="card-body-surface p-6 md:p-7 text-center">
-                    <p class="text-slate-600 text-xs md:text-sm font-normal mb-5 leading-relaxed">
+                <div class="card-body-surface p-6 md:p-8 text-center bg-white">
+                    <p class="text-slate-600 text-xs md:text-sm font-medium mb-6 leading-relaxed">
                         Monitor vehicle entry, RFID verification, and campus security in one unified platform.
                     </p>
 
@@ -132,8 +131,8 @@
 
                         <!-- Secondary Outlined Registration Button -->
                         <a href="register.html"
-                            class="btn-secondary-action w-full flex items-center justify-center gap-2 cursor-pointer">
-                            <i data-lucide="user-plus" class="w-4 h-4 text-emerald-800"></i>
+                            class="w-full py-3 px-4 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-[#0E5C4A] border border-emerald-200/80 font-bold text-xs md:text-sm flex items-center justify-center gap-2 transition-all shadow-sm">
+                            <i data-lucide="user-plus" class="w-4 h-4 text-emerald-700"></i>
                             <span>Register Vehicle (Student / Faculty)</span>
                         </a>
                     </div>
@@ -146,25 +145,25 @@
             <div class="premium-card w-full">
 
                 <!-- Compact Translucent Green Header with Back Navigation -->
-                <div class="card-header-translucent px-6 py-4 relative text-center text-white">
+                <div class="card-header-translucent text-center relative">
                     <!-- Back Button -->
                     <button type="button" id="backToWelcomeBtn" onclick="showLandingView()"
-                        class="absolute left-4 top-1/2 -translate-y-1/2 px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 active:bg-white/30 text-white transition-colors flex items-center gap-1 text-xs font-semibold focus:outline-none"
+                        class="absolute left-4 top-1/2 -translate-y-1/2 px-2.5 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 active:bg-white/35 text-white transition-colors flex items-center gap-1.5 text-xs font-semibold focus:outline-none"
                         title="Back to Overview">
-                        <i data-lucide="arrow-left" class="w-3.5 h-3.5 text-[#F5B335]"></i>
+                        <i data-lucide="arrow-left" class="w-4 h-4 text-[#F5B335]"></i>
                         <span>Back</span>
                     </button>
 
-                    <h2 class="font-display font-bold text-xl md:text-2xl tracking-tight">
+                    <h2 class="font-display font-extrabold text-2xl tracking-tight text-white mb-1">
                         Sign In
                     </h2>
-                    <p class="text-emerald-100/80 text-xs mt-0.5 font-medium">
+                    <p class="text-emerald-100 text-xs font-medium">
                         Enter your credentials to access system
                     </p>
                 </div>
 
                 <!-- Card Body (Form) -->
-                <div class="card-body-surface p-6 md:p-7">
+                <div class="card-body-surface p-6 md:p-8 bg-white">
                     <form id="loginForm" class="space-y-4">
                         <!-- USERNAME Input -->
                         <div>
