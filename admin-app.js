@@ -260,6 +260,7 @@ function renderAdmin() {
         if (recentLogs.length) {
             el('adminLogsTable').innerHTML = recentLogs.map(l => {
                 const dateObj  = l.timestamp ? new Date(l.timestamp) : null;
+                const ts       = dateObj ? dateObj.toLocaleTimeString('en-US', {hour12:false, hour:'2-digit', minute:'2-digit'}) : '--';
                 let name     = l.users?.full_name;
                 let plate    = l.vehicles?.plate_number;
 
