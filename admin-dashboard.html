@@ -45,6 +45,7 @@
                 <a onclick="adminView('users')" class="sidebar-item cursor-pointer" id="anav-users"><i data-lucide="users" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">User Management</span></a>
                 <a onclick="adminView('logs')" class="sidebar-item cursor-pointer" id="anav-logs"><i data-lucide="history" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Logs / History</span></a>
                 <a onclick="adminView('analytics')" class="sidebar-item cursor-pointer" id="anav-analytics"><i data-lucide="bar-chart-3" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Analytics</span></a>
+                <a onclick="adminView('reports')" class="sidebar-item cursor-pointer" id="anav-reports"><i data-lucide="file-text" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Reports</span></a>
                 <a onclick="adminView('special')" class="sidebar-item cursor-pointer" id="anav-special"><i data-lucide="tag" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Visitor & Emergency</span></a>
                 <a onclick="adminView('access')" class="sidebar-item cursor-pointer" id="anav-access"><i data-lucide="shield-check" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Access Control</span></a>
                 <a href="settings.html" class="sidebar-item" id="anav-settings"><i data-lucide="settings" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Settings</span></a>
@@ -121,43 +122,604 @@
                 </div>
 
     <style>
-        .active-range { background: white !important; color: #0E4B3A !important; shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1) !important; font-weight: 800 !important; }
+        .active-range { background: #0E4B3A !important; color: white !important; font-weight: 800 !important; shadow: 0 4px 10px rgba(14,75,58,0.2) !important; }
+        .active-granularity { background: #0E4B3A !important; color: white !important; font-weight: 700 !important; }
+        @media print {
+            body { background: white !important; color: black !important; }
+            aside, header, #toastContainer, .no-print, button, .analytics-tab { display: none !important; }
+            main { height: auto !important; overflow: visible !important; }
+            .print-only { display: block !important; }
+            #reportDocumentPreview { box-shadow: none !important; border: none !important; margin: 0 !important; padding: 0 !important; width: 100% !important; max-width: 100% !important; }
+        }
     </style>
 
-                <!-- ANALYTICS -->
+                <!-- ============================================== -->
+                <!-- 📊 ANALYTICS VIEW -->
+                <!-- ============================================== -->
                 <div id="aview-analytics" class="app-view hidden p-6 lg:p-8 flex-col gap-6 animate-slide-up">
-                    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <!-- Header with Range Presets -->
+                    <div class="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-white/70 backdrop-blur-md p-6 rounded-3xl border border-white/60 shadow-glass">
                         <div>
-                            <h2 class="text-3xl font-display font-extrabold text-slate-800">Analytics</h2>
-                            <p class="text-slate-500 font-medium mt-1">Detailed trends including Visitor & Emergency data.</p>
+                            <div class="flex items-center gap-3">
+                                <h2 class="text-3xl font-display font-extrabold text-slate-800 tracking-tight">Analytics</h2>
+                                <span class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 uppercase tracking-wider flex items-center gap-1.5">
+                                    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Real-time Intelligence
+                                </span>
+                            </div>
+                            <p class="text-slate-500 font-medium text-sm mt-1">Monitor campus vehicle activity, access patterns, and security events.</p>
                         </div>
-                        <div class="flex bg-slate-200/50 p-1 rounded-xl border border-slate-200 shadow-inner">
-                            <button onclick="setAnalyticsRange('day')" class="analytics-tab px-4 py-1.5 rounded-lg text-xs font-bold transition-all active-range" id="tab-day">Day</button>
-                            <button onclick="setAnalyticsRange('week')" class="analytics-tab px-4 py-1.5 rounded-lg text-xs font-bold transition-all" id="tab-week">Week</button>
-                            <button onclick="setAnalyticsRange('month')" class="analytics-tab px-4 py-1.5 rounded-lg text-xs font-bold transition-all" id="tab-month">Month</button>
-                            <button onclick="setAnalyticsRange('annual')" class="analytics-tab px-4 py-1.5 rounded-lg text-xs font-bold transition-all" id="tab-annual">Annual</button>
+                        <!-- Range Presets Toolbar -->
+                        <div class="flex flex-wrap items-center gap-1.5 bg-slate-100/90 p-1.5 rounded-2xl border border-slate-200/80">
+                            <button onclick="setAnalyticsPreset('today')" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all active-range" id="tab-today">Today</button>
+                            <button onclick="setAnalyticsPreset('yesterday')" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="tab-yesterday">Yesterday</button>
+                            <button onclick="setAnalyticsPreset('7days')" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="tab-7days">Last 7 Days</button>
+                            <button onclick="setAnalyticsPreset('30days')" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="tab-30days">Last 30 Days</button>
+                            <button onclick="setAnalyticsPreset('thisMonth')" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="tab-thisMonth">This Month</button>
+                            <button onclick="setAnalyticsPreset('lastMonth')" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="tab-lastMonth">Last Month</button>
+                            <button onclick="toggleCustomRangePicker()" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900 flex items-center gap-1" id="tab-custom">
+                                <span>Custom</span> <i data-lucide="calendar" class="w-3.5 h-3.5"></i>
+                            </button>
                         </div>
                     </div>
-                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        <div class="glass-card rounded-3xl p-5 border border-white/60 h-80 flex flex-col"><h4 class="text-sm font-bold text-slate-700 mb-2">User Types (Pie)</h4><div class="flex-1 relative pb-2"><canvas id="chartUserTypes"></canvas></div></div>
-                        <div class="glass-card rounded-3xl p-5 border border-white/60 h-80 flex flex-col"><h4 class="text-sm font-bold text-slate-700 mb-2">Peak Hours (Line)</h4><div class="flex-1 relative"><canvas id="chartPeakHours"></canvas></div></div>
+
+                    <!-- Collapsible Custom Date Picker Panel -->
+                    <div id="customDatePanel" class="hidden bg-white/90 backdrop-blur-md p-5 rounded-2xl border border-emerald-200 shadow-lg flex flex-wrap items-center gap-4 animate-slide-up">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs font-bold text-slate-500 uppercase">From:</span>
+                            <input type="date" id="analyticsFromDate" class="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-semibold text-slate-700 bg-white focus:ring-2 focus:ring-charm-dark outline-none">
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs font-bold text-slate-500 uppercase">To:</span>
+                            <input type="date" id="analyticsToDate" class="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-semibold text-slate-700 bg-white focus:ring-2 focus:ring-charm-dark outline-none">
+                        </div>
+                        <button onclick="applyCustomDateRange()" class="px-4 py-1.5 bg-charm-dark text-white rounded-xl text-xs font-bold hover:bg-opacity-90 shadow-sm flex items-center gap-1.5">
+                            <i data-lucide="check" class="w-3.5 h-3.5"></i> Apply Range
+                        </button>
+                        <span id="activeRangeLabel" class="text-xs font-mono font-semibold text-emerald-800 bg-emerald-50 px-3 py-1 rounded-lg ml-auto border border-emerald-200">
+                            Showing: Today
+                        </span>
                     </div>
-                    
-                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-4">
-                        <!-- Student Ranking -->
-                        <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col h-80">
-                            <h3 class="font-display font-bold text-lg text-slate-800 mb-4 flex items-center gap-2"><i data-lucide="graduation-cap" class="w-5 h-5 text-charm-dark"></i> Top Student Activity</h3>
-                            <div class="flex-1 overflow-auto rounded-xl border border-slate-100 bg-white/40">
-                                <table class="w-full text-left border-collapse"><thead class="bg-white/80 sticky top-0 text-[10px] uppercase text-slate-500 font-bold tracking-wider"><tr><th class="p-3 border-b border-slate-200 text-center">Rank</th><th class="p-3 border-b border-slate-200">Name</th><th class="p-3 border-b border-slate-200 text-center">Program</th><th class="p-3 border-b border-slate-200 text-center">Total Logs</th></tr></thead><tbody id="studentRankingTable" class="text-sm"></tbody></table>
+
+                    <!-- 1. Primary Analytics Summary Cards (Top 4) -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+                        <!-- Total Entries -->
+                        <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col justify-between hover:-translate-y-1 transition-all">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-bold uppercase tracking-wider text-slate-400">Total Entries</span>
+                                <div class="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-black">
+                                    <i data-lucide="log-in" class="w-5 h-5"></i>
+                                </div>
+                            </div>
+                            <div class="mt-4">
+                                <div class="text-3xl font-display font-black text-slate-800" id="anStatEntries">0</div>
+                                <div class="flex items-center gap-1.5 text-xs font-bold text-emerald-600 mt-1" id="anTrendEntries">
+                                    <i data-lucide="trending-up" class="w-3.5 h-3.5"></i> Authorized vehicle entries
+                                </div>
                             </div>
                         </div>
-                        
-                        <!-- Faculty Ranking -->
-                        <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col h-80">
-                            <h3 class="font-display font-bold text-lg text-slate-800 mb-4 flex items-center gap-2"><i data-lucide="briefcase" class="w-5 h-5 text-charm-mid"></i> Top Faculty/Staff Activity</h3>
-                            <div class="flex-1 overflow-auto rounded-xl border border-slate-100 bg-white/40">
-                                <table class="w-full text-left border-collapse"><thead class="bg-white/80 sticky top-0 text-[10px] uppercase text-slate-500 font-bold tracking-wider"><tr><th class="p-3 border-b border-slate-200 text-center">Rank</th><th class="p-3 border-b border-slate-200">Name</th><th class="p-3 border-b border-slate-200 text-center">Role</th><th class="p-3 border-b border-slate-200 text-center">Total Logs</th></tr></thead><tbody id="facultyRankingTable" class="text-sm"></tbody></table>
+
+                        <!-- Total Exits -->
+                        <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col justify-between hover:-translate-y-1 transition-all">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-bold uppercase tracking-wider text-slate-400">Total Exits</span>
+                                <div class="w-10 h-10 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center font-black">
+                                    <i data-lucide="log-out" class="w-5 h-5"></i>
+                                </div>
                             </div>
+                            <div class="mt-4">
+                                <div class="text-3xl font-display font-black text-slate-800" id="anStatExits">0</div>
+                                <div class="flex items-center gap-1.5 text-xs font-bold text-blue-600 mt-1" id="anTrendExits">
+                                    <i data-lucide="trending-up" class="w-3.5 h-3.5"></i> Recorded campus departures
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Unique Vehicles -->
+                        <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col justify-between hover:-translate-y-1 transition-all">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-bold uppercase tracking-wider text-slate-400">Unique Vehicles</span>
+                                <div class="w-10 h-10 rounded-2xl bg-purple-50 text-purple-600 flex items-center justify-center font-black">
+                                    <i data-lucide="car-front" class="w-5 h-5"></i>
+                                </div>
+                            </div>
+                            <div class="mt-4">
+                                <div class="text-3xl font-display font-black text-slate-800" id="anStatUnique">0</div>
+                                <div class="text-xs font-semibold text-slate-500 mt-1">Distinct plates in period</div>
+                            </div>
+                        </div>
+
+                        <!-- Currently Inside -->
+                        <div class="glass-card rounded-3xl p-6 border border-amber-200/80 shadow-glass flex flex-col justify-between bg-amber-50/40 hover:-translate-y-1 transition-all">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-bold uppercase tracking-wider text-amber-800">Currently Inside</span>
+                                <div class="w-10 h-10 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center font-black">
+                                    <i data-lucide="warehouse" class="w-5 h-5"></i>
+                                </div>
+                            </div>
+                            <div class="mt-4">
+                                <div class="text-3xl font-display font-black text-charm-dark" id="anStatInside">0</div>
+                                <div class="flex items-center gap-1 text-xs font-bold text-amber-700 mt-1">
+                                    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Active vehicles on campus
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 2. Secondary Operational & Security Statistics Bar -->
+                    <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+                        <div class="bg-white/70 backdrop-blur-md p-4 rounded-2xl border border-white/80 shadow-sm text-center">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase">Registered Users</div>
+                            <div class="text-lg font-bold text-slate-800 mt-0.5" id="secRegVehicles">0</div>
+                        </div>
+                        <div class="bg-white/70 backdrop-blur-md p-4 rounded-2xl border border-white/80 shadow-sm text-center">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase">Visitor Passes</div>
+                            <div class="text-lg font-bold text-blue-700 mt-0.5" id="secVisitors">0</div>
+                        </div>
+                        <div class="bg-white/70 backdrop-blur-md p-4 rounded-2xl border border-white/80 shadow-sm text-center">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase">Faculty/Staff</div>
+                            <div class="text-lg font-bold text-purple-700 mt-0.5" id="secStaff">0</div>
+                        </div>
+                        <div class="bg-white/70 backdrop-blur-md p-4 rounded-2xl border border-white/80 shadow-sm text-center">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase">Students</div>
+                            <div class="text-lg font-bold text-emerald-700 mt-0.5" id="secStudents">0</div>
+                        </div>
+                        <div class="bg-white/70 backdrop-blur-md p-4 rounded-2xl border border-white/80 shadow-sm text-center">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase">Failed / Denied</div>
+                            <div class="text-lg font-bold text-red-600 mt-0.5" id="secFailedScans">0</div>
+                        </div>
+                        <div class="bg-white/70 backdrop-blur-md p-4 rounded-2xl border border-white/80 shadow-sm text-center">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase">Unregistered Cards</div>
+                            <div class="text-lg font-bold text-amber-700 mt-0.5" id="secUnregCards">0</div>
+                        </div>
+                        <div class="bg-white/70 backdrop-blur-md p-4 rounded-2xl border border-white/80 shadow-sm text-center col-span-2 sm:col-span-2 lg:col-span-1">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase">Avg Scan Speed</div>
+                            <div class="text-lg font-bold text-charm-dark mt-0.5" id="secAvgSpeed">1.8s</div>
+                        </div>
+                    </div>
+
+                    <!-- 3. Chart Row 1: Vehicle Traffic Trend & Peak Hours -->
+                    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                        <!-- Vehicle Traffic (Line Trend) -->
+                        <div class="lg:col-span-7 glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col">
+                            <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+                                <div>
+                                    <h3 class="font-display font-bold text-lg text-slate-800 flex items-center gap-2">
+                                        <i data-lucide="activity" class="w-5 h-5 text-emerald-700"></i> Vehicle Traffic Trend
+                                    </h3>
+                                    <p class="text-xs text-slate-400">Comparing incoming entries vs outgoing exits</p>
+                                </div>
+                                <div class="flex bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
+                                    <button onclick="setTrafficGranularity('daily')" class="gran-tab px-3 py-1 rounded-lg font-bold active-granularity" id="gran-daily">Daily</button>
+                                    <button onclick="setTrafficGranularity('weekly')" class="gran-tab px-3 py-1 rounded-lg font-bold text-slate-600 hover:text-slate-900" id="gran-weekly">Weekly</button>
+                                    <button onclick="setTrafficGranularity('monthly')" class="gran-tab px-3 py-1 rounded-lg font-bold text-slate-600 hover:text-slate-900" id="gran-monthly">Monthly</button>
+                                </div>
+                            </div>
+                            <div class="flex-1 min-h-[300px] relative">
+                                <canvas id="chartTrafficTrend"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Peak Hours Distribution -->
+                        <div class="lg:col-span-5 glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col">
+                            <div class="flex items-center justify-between mb-4">
+                                <div>
+                                    <h3 class="font-display font-bold text-lg text-slate-800 flex items-center gap-2">
+                                        <i data-lucide="clock" class="w-5 h-5 text-amber-600"></i> Peak Hours Activity
+                                    </h3>
+                                    <p class="text-xs text-slate-400">Campus gate hourly volume distribution</p>
+                                </div>
+                                <div class="px-3 py-1 rounded-xl bg-amber-100 text-amber-800 text-xs font-black" id="peakHourBadge">
+                                    Peak: 7 AM - 8 AM
+                                </div>
+                            </div>
+                            <div class="flex-1 min-h-[300px] relative">
+                                <canvas id="chartPeakHours"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 4. Chart Row 2: Vehicle Type & User Type Share -->
+                    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                        <!-- Vehicle Types -->
+                        <div class="lg:col-span-6 glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col">
+                            <div class="flex items-center justify-between mb-4">
+                                <div>
+                                    <h3 class="font-display font-bold text-lg text-slate-800 flex items-center gap-2">
+                                        <i data-lucide="pie-chart" class="w-5 h-5 text-blue-600"></i> Vehicle Types Distribution
+                                    </h3>
+                                    <p class="text-xs text-slate-400">Motorcycle vs Car vs SUV vs Others</p>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-1 sm:grid-cols-12 gap-4 items-center">
+                                <div class="sm:col-span-7 h-64 relative">
+                                    <canvas id="chartVehicleTypes"></canvas>
+                                </div>
+                                <div class="sm:col-span-5 space-y-2.5" id="vehTypeBreakdownList">
+                                    <!-- Dynamic List will be injected here -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- User Types -->
+                        <div class="lg:col-span-6 glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col">
+                            <div class="flex items-center justify-between mb-4">
+                                <div>
+                                    <h3 class="font-display font-bold text-lg text-slate-800 flex items-center gap-2">
+                                        <i data-lucide="users" class="w-5 h-5 text-purple-600"></i> User Type Access Share
+                                    </h3>
+                                    <p class="text-xs text-slate-400">Students, Faculty, Staff, and Visitors</p>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-1 sm:grid-cols-12 gap-4 items-center">
+                                <div class="sm:col-span-7 h-64 relative">
+                                    <canvas id="chartUserTypes"></canvas>
+                                </div>
+                                <div class="sm:col-span-5 space-y-2.5" id="userTypeBreakdownList">
+                                    <!-- Dynamic List will be injected here -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 5. Row 3: Security & Failed Scans + Currently Inside Breakdown -->
+                    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                        <!-- Gate Activity & Security Attempts -->
+                        <div class="lg:col-span-7 glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col">
+                            <h3 class="font-display font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
+                                <i data-lucide="shield-alert" class="w-5 h-5 text-red-600"></i> Gate Security & Access Attempts
+                            </h3>
+                            <p class="text-xs text-slate-400 mb-4">Comparison of authorized verifications against denied scans</p>
+                            
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
+                                <div class="bg-emerald-50/70 p-4 rounded-2xl border border-emerald-200/80">
+                                    <div class="text-xs font-bold text-emerald-800 uppercase flex items-center gap-1.5">
+                                        <i data-lucide="check-circle" class="w-4 h-4 text-emerald-600"></i> Entry Gate Activity
+                                    </div>
+                                    <div class="mt-2 text-2xl font-black text-slate-800" id="gateEntrySuccess">0</div>
+                                    <div class="text-xs font-semibold text-slate-500 mt-0.5">Successful: <span id="gateEntryPassCount" class="text-emerald-700 font-bold">0</span> • Denied: <span id="gateEntryFailCount" class="text-red-600 font-bold">0</span></div>
+                                </div>
+
+                                <div class="bg-blue-50/70 p-4 rounded-2xl border border-blue-200/80">
+                                    <div class="text-xs font-bold text-blue-800 uppercase flex items-center gap-1.5">
+                                        <i data-lucide="log-out" class="w-4 h-4 text-blue-600"></i> Exit Gate Activity
+                                    </div>
+                                    <div class="mt-2 text-2xl font-black text-slate-800" id="gateExitSuccess">0</div>
+                                    <div class="text-xs font-semibold text-slate-500 mt-0.5">Successful: <span id="gateExitPassCount" class="text-blue-700 font-bold">0</span> • Denied: <span id="gateExitFailCount" class="text-red-600 font-bold">0</span></div>
+                                </div>
+                            </div>
+
+                            <!-- Security Denial Reasons Table -->
+                            <div class="flex-1 overflow-auto rounded-xl border border-slate-100 bg-white/50">
+                                <table class="w-full text-left border-collapse text-xs">
+                                    <thead class="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider">
+                                        <tr>
+                                            <th class="p-3">Denial Reason</th>
+                                            <th class="p-3 text-center">Incidents</th>
+                                            <th class="p-3 text-right">% of Denials</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="denialReasonsTable">
+                                        <!-- Injected dynamically -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Currently Inside Breakdown & Longest Stay -->
+                        <div class="lg:col-span-5 glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col justify-between">
+                            <div>
+                                <h3 class="font-display font-bold text-lg text-slate-800 mb-1 flex items-center gap-2">
+                                    <i data-lucide="map-pin" class="w-5 h-5 text-amber-600"></i> Vehicles Inside Campus
+                                </h3>
+                                <p class="text-xs text-slate-400 mb-4">Live inventory of vehicles currently on campus</p>
+                                
+                                <div class="grid grid-cols-2 gap-3 mb-4">
+                                    <div class="p-3 rounded-xl bg-slate-50 border border-slate-100 text-center">
+                                        <div class="text-[10px] font-bold text-slate-400 uppercase">Students</div>
+                                        <div class="text-lg font-black text-emerald-800" id="insideStudents">0</div>
+                                    </div>
+                                    <div class="p-3 rounded-xl bg-slate-50 border border-slate-100 text-center">
+                                        <div class="text-[10px] font-bold text-slate-400 uppercase">Faculty/Staff</div>
+                                        <div class="text-lg font-black text-purple-800" id="insideStaff">0</div>
+                                    </div>
+                                    <div class="p-3 rounded-xl bg-slate-50 border border-slate-100 text-center">
+                                        <div class="text-[10px] font-bold text-slate-400 uppercase">Visitors</div>
+                                        <div class="text-lg font-black text-blue-800" id="insideVisitors">0</div>
+                                    </div>
+                                    <div class="p-3 rounded-xl bg-slate-50 border border-slate-100 text-center">
+                                        <div class="text-[10px] font-bold text-slate-400 uppercase">Emergency</div>
+                                        <div class="text-lg font-black text-red-800" id="insideEmergency">0</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Longest Stay Card -->
+                            <div class="p-4 rounded-2xl bg-amber-50/80 border border-amber-200 mt-2">
+                                <div class="flex items-center justify-between">
+                                    <span class="text-[10px] font-black uppercase text-amber-800 tracking-wider flex items-center gap-1">
+                                        <i data-lucide="timer" class="w-3.5 h-3.5"></i> Longest Current Stay
+                                    </span>
+                                    <span class="text-xs font-mono font-bold px-2 py-0.5 rounded bg-amber-200 text-amber-900" id="longestStayDuration">--</span>
+                                </div>
+                                <div class="mt-2 flex items-center justify-between">
+                                    <div>
+                                        <div class="font-bold text-slate-800 text-sm" id="longestStayOwner">No vehicles currently inside</div>
+                                        <div class="text-xs font-mono text-slate-500" id="longestStayPlate">Plate: --</div>
+                                    </div>
+                                    <div class="text-right text-[11px] font-medium text-slate-500" id="longestStayTime">
+                                        Entered: --
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 6. Row 4: Top Frequent Vehicles & Guard Activity -->
+                    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                        <!-- Top Frequent Vehicles -->
+                        <div class="lg:col-span-6 glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col">
+                            <h3 class="font-display font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
+                                <i data-lucide="award" class="w-5 h-5 text-charm-yellow"></i> Most Frequent Vehicles
+                            </h3>
+                            <div class="flex-1 overflow-auto rounded-xl border border-slate-100 bg-white/40">
+                                <table class="w-full text-left border-collapse text-xs">
+                                    <thead class="bg-white/80 sticky top-0 uppercase text-slate-500 font-bold tracking-wider">
+                                        <tr>
+                                            <th class="p-3 text-center">Rank</th>
+                                            <th class="p-3">Plate &amp; Owner</th>
+                                            <th class="p-3">Type</th>
+                                            <th class="p-3 text-center">Total Visits</th>
+                                            <th class="p-3 text-right">Last Scan</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="frequentVehiclesTable" class="text-sm">
+                                        <!-- Injected dynamically -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Guard Operational Monitoring -->
+                        <div class="lg:col-span-6 glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col">
+                            <h3 class="font-display font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
+                                <i data-lucide="shield" class="w-5 h-5 text-charm-dark"></i> Guard Operational Monitoring
+                            </h3>
+                            <div class="flex-1 overflow-auto rounded-xl border border-slate-100 bg-white/40">
+                                <table class="w-full text-left border-collapse text-xs">
+                                    <thead class="bg-white/80 sticky top-0 uppercase text-slate-500 font-bold tracking-wider">
+                                        <tr>
+                                            <th class="p-3">Guard Officer</th>
+                                            <th class="p-3 text-center">Total Scans</th>
+                                            <th class="p-3 text-center">Entries</th>
+                                            <th class="p-3 text-center">Exits</th>
+                                            <th class="p-3 text-right">Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="guardActivityTable" class="text-sm">
+                                        <!-- Injected dynamically -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+
+                <!-- ============================================== -->
+                <!-- 📄 REPORTS VIEW -->
+                <!-- ============================================== -->
+                <div id="aview-reports" class="app-view hidden p-6 lg:p-8 flex-col gap-6 animate-slide-up">
+                    <!-- Header -->
+                    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white/70 backdrop-blur-md p-6 rounded-3xl border border-white/60 shadow-glass">
+                        <div>
+                            <div class="flex items-center gap-3">
+                                <h2 class="text-3xl font-display font-extrabold text-slate-800 tracking-tight">Official Reports</h2>
+                                <span class="px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-800 uppercase tracking-wider flex items-center gap-1">
+                                    <i data-lucide="file-check" class="w-3.5 h-3.5"></i> Audit &amp; Compliance
+                                </span>
+                            </div>
+                            <p class="text-slate-500 font-medium text-sm mt-1">Generate, download, and print official CHARRMPASS access records and summaries.</p>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <button onclick="exportCurrentReportCSV()" class="px-4 py-2.5 rounded-xl bg-white border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-50 transition-all flex items-center gap-2 shadow-sm">
+                                <i data-lucide="download" class="w-4 h-4 text-slate-500"></i> Export CSV
+                            </button>
+                            <button onclick="openReportModal()" class="px-5 py-2.5 rounded-xl bg-charm-dark text-white text-xs font-bold hover:bg-opacity-90 transition-all flex items-center gap-2 shadow-md">
+                                <i data-lucide="plus" class="w-4 h-4 text-charm-yellow"></i> Generate Custom Report
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 1-Click Quick Reports Grid -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div onclick="generateQuickReport('today')" class="glass-card p-5 rounded-3xl border border-white/60 shadow-glass hover:-translate-y-1 transition-all cursor-pointer group bg-gradient-to-br from-white/90 to-emerald-50/50">
+                            <div class="flex items-center justify-between mb-3">
+                                <div class="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold">
+                                    <i data-lucide="calendar" class="w-5 h-5"></i>
+                                </div>
+                                <span class="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">Quick PDF</span>
+                            </div>
+                            <h4 class="font-bold text-slate-800 text-sm group-hover:text-emerald-800 transition-colors">Today's Activity Report</h4>
+                            <p class="text-xs text-slate-400 mt-0.5">Complete vehicle scan log for today</p>
+                        </div>
+
+                        <div onclick="generateQuickReport('yesterday')" class="glass-card p-5 rounded-3xl border border-white/60 shadow-glass hover:-translate-y-1 transition-all cursor-pointer group bg-gradient-to-br from-white/90 to-blue-50/50">
+                            <div class="flex items-center justify-between mb-3">
+                                <div class="w-10 h-10 rounded-2xl bg-blue-100 text-blue-800 flex items-center justify-center font-bold">
+                                    <i data-lucide="clock" class="w-5 h-5"></i>
+                                </div>
+                                <span class="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded bg-blue-100 text-blue-800">Quick PDF</span>
+                            </div>
+                            <h4 class="font-bold text-slate-800 text-sm group-hover:text-blue-800 transition-colors">Yesterday's Summary</h4>
+                            <p class="text-xs text-slate-400 mt-0.5">Past 24-hour campus traffic review</p>
+                        </div>
+
+                        <div onclick="generateQuickReport('week')" class="glass-card p-5 rounded-3xl border border-white/60 shadow-glass hover:-translate-y-1 transition-all cursor-pointer group bg-gradient-to-br from-white/90 to-purple-50/50">
+                            <div class="flex items-center justify-between mb-3">
+                                <div class="w-10 h-10 rounded-2xl bg-purple-100 text-purple-800 flex items-center justify-center font-bold">
+                                    <i data-lucide="calendar-range" class="w-5 h-5"></i>
+                                </div>
+                                <span class="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded bg-purple-100 text-purple-800">Weekly</span>
+                            </div>
+                            <h4 class="font-bold text-slate-800 text-sm group-hover:text-purple-800 transition-colors">Weekly Access Audit</h4>
+                            <p class="text-xs text-slate-400 mt-0.5">Past 7 days traffic &amp; security stats</p>
+                        </div>
+
+                        <div onclick="generateQuickReport('month')" class="glass-card p-5 rounded-3xl border border-white/60 shadow-glass hover:-translate-y-1 transition-all cursor-pointer group bg-gradient-to-br from-white/90 to-amber-50/50">
+                            <div class="flex items-center justify-between mb-3">
+                                <div class="w-10 h-10 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold">
+                                    <i data-lucide="file-spreadsheet" class="w-5 h-5"></i>
+                                </div>
+                                <span class="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded bg-amber-100 text-amber-800">Monthly</span>
+                            </div>
+                            <h4 class="font-bold text-slate-800 text-sm group-hover:text-amber-800 transition-colors">Monthly Comprehensive Report</h4>
+                            <p class="text-xs text-slate-400 mt-0.5">Full administrative records for current month</p>
+                        </div>
+                    </div>
+
+                    <!-- Live Official Report Document Preview Container -->
+                    <div class="glass-card rounded-3xl p-6 lg:p-8 border border-white/60 shadow-glass flex flex-col">
+                        <div class="flex flex-wrap items-center justify-between gap-4 mb-6 pb-4 border-b border-slate-200/80 no-print">
+                            <div>
+                                <h3 class="font-display font-bold text-xl text-slate-800 flex items-center gap-2">
+                                    <i data-lucide="file-text" class="w-5 h-5 text-charm-dark"></i> Official Document Live Preview
+                                </h3>
+                                <p class="text-xs text-slate-400">Ready to print or download with official ASU-Ibajay formatting</p>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <button onclick="printOfficialReport()" class="px-4 py-2.5 rounded-xl bg-slate-800 text-white text-xs font-bold hover:bg-black transition-all flex items-center gap-2 shadow-md">
+                                    <i data-lucide="printer" class="w-4 h-4 text-charm-yellow"></i> Print Official Report
+                                </button>
+                                <button onclick="exportCurrentReportCSV()" class="px-4 py-2.5 rounded-xl bg-emerald-700 text-white text-xs font-bold hover:bg-emerald-800 transition-all flex items-center gap-2 shadow-md">
+                                    <i data-lucide="file-spreadsheet" class="w-4 h-4"></i> Download CSV / Excel
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Formal Printable Document Preview Area -->
+                        <div id="reportDocumentPreview" class="bg-white p-8 lg:p-12 rounded-2xl border border-slate-200 shadow-sm max-w-5xl mx-auto w-full text-slate-800">
+                            <!-- Official Header -->
+                            <div class="text-center border-b-2 border-slate-800 pb-5 mb-6">
+                                <div class="flex items-center justify-center gap-4 mb-2">
+                                    <img src="logocharrmpark.png" alt="ASU Logo" class="w-16 h-16 object-contain" onerror="this.style.display='none'">
+                                    <div>
+                                        <h4 class="font-display font-bold text-sm uppercase tracking-widest text-slate-700">Republic of the Philippines</h4>
+                                        <h2 class="font-display font-black text-xl text-[#0E5C4A] uppercase tracking-wide">Aklan State University</h2>
+                                        <h5 class="text-xs font-bold text-slate-600 uppercase tracking-wider">Ibajay Campus • Ibajay, Aklan</h5>
+                                    </div>
+                                </div>
+                                <div class="mt-4 pt-3 border-t border-slate-200">
+                                    <h3 class="font-display font-black text-xl text-slate-900 tracking-tight" id="repDocTitle">VEHICLE ACCESS &amp; TRAFFIC ACTIVITY REPORT</h3>
+                                    <p class="text-xs font-bold text-slate-500 mt-0.5" id="repDocPeriod">Period: Loading...</p>
+                                </div>
+                            </div>
+
+                            <!-- Report Metadata Bar -->
+                            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs mb-6 font-medium">
+                                <div><span class="text-slate-400 block font-bold uppercase text-[10px]">Report ID:</span> <span id="repDocId" class="font-mono font-bold text-slate-800">CRP-REP-2026</span></div>
+                                <div><span class="text-slate-400 block font-bold uppercase text-[10px]">Generated On:</span> <span id="repDocGeneratedAt" class="font-bold text-slate-800">--</span></div>
+                                <div><span class="text-slate-400 block font-bold uppercase text-[10px]">Generated By:</span> <span id="repDocGeneratedBy" class="font-bold text-slate-800">Administrator</span></div>
+                                <div><span class="text-slate-400 block font-bold uppercase text-[10px]">Total Records:</span> <span id="repDocTotalRecords" class="font-bold text-emerald-700">0 Logs</span></div>
+                            </div>
+
+                            <!-- Executive Summary Stats Table -->
+                            <div class="mb-8">
+                                <h4 class="font-display font-bold text-sm uppercase tracking-wider text-slate-800 mb-3 flex items-center gap-2 border-b border-slate-200 pb-1">
+                                    <i data-lucide="bar-chart-2" class="w-4 h-4 text-emerald-700"></i> Executive Summary Statistics
+                                </h4>
+                                <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
+                                    <div class="p-3.5 rounded-xl border border-slate-200 bg-slate-50">
+                                        <div class="text-[10px] font-bold text-slate-500 uppercase">Total Entries</div>
+                                        <div class="text-2xl font-black text-emerald-800" id="repSumEntries">0</div>
+                                    </div>
+                                    <div class="p-3.5 rounded-xl border border-slate-200 bg-slate-50">
+                                        <div class="text-[10px] font-bold text-slate-500 uppercase">Total Exits</div>
+                                        <div class="text-2xl font-black text-blue-800" id="repSumExits">0</div>
+                                    </div>
+                                    <div class="p-3.5 rounded-xl border border-slate-200 bg-slate-50">
+                                        <div class="text-[10px] font-bold text-slate-500 uppercase">Unique Vehicles</div>
+                                        <div class="text-2xl font-black text-purple-800" id="repSumUnique">0</div>
+                                    </div>
+                                    <div class="p-3.5 rounded-xl border border-slate-200 bg-slate-50">
+                                        <div class="text-[10px] font-bold text-slate-500 uppercase">Security Denials</div>
+                                        <div class="text-2xl font-black text-red-700" id="repSumFailed">0</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Detailed Logs Table (Masked RFID UIDs) -->
+                            <div class="mb-8">
+                                <h4 class="font-display font-bold text-sm uppercase tracking-wider text-slate-800 mb-3 flex items-center gap-2 border-b border-slate-200 pb-1">
+                                    <i data-lucide="list" class="w-4 h-4 text-slate-700"></i> Detailed Access Transactions Log
+                                </h4>
+                                <div class="overflow-x-auto">
+                                    <table class="w-full text-left border-collapse text-xs">
+                                        <thead>
+                                            <tr class="border-b-2 border-slate-300 bg-slate-100 text-slate-700 font-bold uppercase text-[10px]">
+                                                <th class="p-2.5">Date &amp; Time</th>
+                                                <th class="p-2.5 font-mono">RFID UID</th>
+                                                <th class="p-2.5">Vehicle Plate</th>
+                                                <th class="p-2.5">Owner / Driver</th>
+                                                <th class="p-2.5">Category</th>
+                                                <th class="p-2.5 text-center">Direction</th>
+                                                <th class="p-2.5 text-center">Gate</th>
+                                                <th class="p-2.5 text-right">Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="repDetailedLogsTable" class="divide-y divide-slate-100">
+                                            <!-- Logs rows injected here -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <!-- Official Sign-off Footer -->
+                            <div class="mt-12 pt-8 border-t border-slate-200 grid grid-cols-2 gap-8 text-xs">
+                                <div>
+                                    <p class="text-slate-400 font-bold uppercase text-[10px]">Prepared By:</p>
+                                    <div class="mt-8 pt-2 border-t border-slate-400 font-bold text-slate-800" id="repPreparedBy">
+                                        Obsidian Devs / Security Admin
+                                    </div>
+                                    <p class="text-slate-400 text-[10px]">CHARRMPASS System Administrator</p>
+                                </div>
+                                <div class="text-right">
+                                    <p class="text-slate-400 font-bold uppercase text-[10px]">Certified &amp; Approved By:</p>
+                                    <div class="mt-8 pt-2 border-t border-slate-400 font-bold text-slate-800">
+                                        Campus Security &amp; Safety Officer
+                                    </div>
+                                    <p class="text-slate-400 text-[10px]">Aklan State University – Ibajay Campus</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Report History / Audit Trail Table -->
+                    <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col">
+                        <div class="flex items-center justify-between mb-4">
+                            <div>
+                                <h3 class="font-display font-bold text-lg text-slate-800 flex items-center gap-2">
+                                    <i data-lucide="history" class="w-5 h-5 text-slate-600"></i> Report Generation Audit History
+                                </h3>
+                                <p class="text-xs text-slate-400">Audit trail of generated official compliance documents</p>
+                            </div>
+                            <button onclick="clearReportHistory()" class="text-xs font-bold text-slate-400 hover:text-red-500 transition-colors">Clear History</button>
+                        </div>
+                        <div class="overflow-auto rounded-xl border border-slate-100 bg-white/40">
+                            <table class="w-full text-left border-collapse text-xs">
+                                <thead class="bg-white/80 uppercase text-slate-500 font-bold tracking-wider">
+                                    <tr>
+                                        <th class="p-3">Report Name</th>
+                                        <th class="p-3">Date Range</th>
+                                        <th class="p-3">Generated By</th>
+                                        <th class="p-3">Generated Date</th>
+                                        <th class="p-3 text-center">Format</th>
+                                        <th class="p-3 text-right">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="reportAuditHistoryTable" class="text-sm">
+                                    <!-- Dynamic audit trail injected here -->
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
@@ -464,9 +1026,103 @@
                         <label class="form-label">Description / Note</label>
                         <input type="text" id="formTagDesc" placeholder="e.g. Visitor Tag 01" class="form-input">
                     </div>
-                    <div class="pt-4 flex justify-end gap-3">
-                        <button type="button" onclick="closeSpecialTagModal()" class="px-4 py-2 text-sm font-bold text-slate-500">Cancel</button>
-                        <button type="submit" class="px-6 py-2 bg-charm-dark text-white rounded-xl text-sm font-bold shadow-md hover:opacity-90">Save Tag</button>
+    <!-- Generate Report Modal -->
+    <div id="generateReportModal" class="hidden fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 opacity-0 transition-opacity">
+        <div class="bg-white rounded-3xl w-full max-w-xl shadow-2xl border border-slate-100 flex flex-col transform scale-95 transition-transform overflow-hidden" id="generateReportModalContent">
+            <div class="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/80">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-2xl bg-charm-dark text-white flex items-center justify-center shadow-md">
+                        <i data-lucide="file-plus" class="w-5 h-5 text-charm-yellow"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-display font-bold text-xl text-slate-800">Generate Official Report</h3>
+                        <p class="text-xs text-slate-500">Configure parameters for campus compliance and audit</p>
+                    </div>
+                </div>
+                <button onclick="closeReportModal()" class="text-slate-400 hover:text-red-500"><i data-lucide="x" class="w-6 h-6"></i></button>
+            </div>
+            <div class="p-6 overflow-y-auto custom-scrollbar">
+                <form id="reportConfigForm" class="space-y-4" onsubmit="handleCustomReportSubmit(event)">
+                    <!-- Report Type -->
+                    <div class="space-y-1">
+                        <label class="form-label font-bold text-xs">Report Type *</label>
+                        <select id="modalReportType" class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white font-semibold text-slate-700 text-sm focus:ring-2 focus:ring-charm-dark outline-none">
+                            <option value="ACTIVITY">Complete Vehicle Access &amp; Traffic Report</option>
+                            <option value="DAILY">Daily Campus Summary Report</option>
+                            <option value="RANGE">Custom Date Range Report</option>
+                            <option value="MONTHLY">Monthly Administrative Summary</option>
+                            <option value="SECURITY">Failed Access &amp; Security Audit Report</option>
+                            <option value="GUARD">Guard Operational Activity Report</option>
+                            <option value="REGISTRY">Registered Vehicle Masterlist</option>
+                        </select>
+                    </div>
+
+                    <!-- Date Range -->
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="space-y-1">
+                            <label class="form-label font-bold text-xs">From Date *</label>
+                            <input type="date" id="modalReportFrom" required class="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-sm font-semibold text-slate-700">
+                        </div>
+                        <div class="space-y-1">
+                            <label class="form-label font-bold text-xs">To Date *</label>
+                            <input type="date" id="modalReportTo" required class="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-sm font-semibold text-slate-700">
+                        </div>
+                    </div>
+
+                    <!-- Included Sections Checklist -->
+                    <div class="pt-2">
+                        <label class="form-label font-bold text-xs mb-2 block">Included Report Sections</label>
+                        <div class="grid grid-cols-2 gap-2 text-xs">
+                            <label class="flex items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 cursor-pointer hover:bg-slate-100">
+                                <input type="checkbox" id="incSummary" checked class="rounded text-emerald-700 focus:ring-emerald-600">
+                                <span class="font-semibold text-slate-700">Summary Statistics</span>
+                            </label>
+                            <label class="flex items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 cursor-pointer hover:bg-slate-100">
+                                <input type="checkbox" id="incCharts" checked class="rounded text-emerald-700 focus:ring-emerald-600">
+                                <span class="font-semibold text-slate-700">Traffic Trend Charts</span>
+                            </label>
+                            <label class="flex items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 cursor-pointer hover:bg-slate-100">
+                                <input type="checkbox" id="incDetailedLogs" checked class="rounded text-emerald-700 focus:ring-emerald-600">
+                                <span class="font-semibold text-slate-700">Detailed Tabular Logs</span>
+                            </label>
+                            <label class="flex items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 cursor-pointer hover:bg-slate-100">
+                                <input type="checkbox" id="incGuardOps" checked class="rounded text-emerald-700 focus:ring-emerald-600">
+                                <span class="font-semibold text-slate-700">Guard Operations</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Format & Orientation -->
+                    <div class="grid grid-cols-2 gap-4 pt-2">
+                        <div class="space-y-1">
+                            <label class="form-label font-bold text-xs">Format</label>
+                            <div class="flex gap-2">
+                                <label class="flex-1 flex items-center justify-center gap-1.5 p-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold cursor-pointer hover:bg-slate-100">
+                                    <input type="radio" name="repFormat" value="PDF" checked> PDF
+                                </label>
+                                <label class="flex-1 flex items-center justify-center gap-1.5 p-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold cursor-pointer hover:bg-slate-100">
+                                    <input type="radio" name="repFormat" value="CSV"> CSV
+                                </label>
+                            </div>
+                        </div>
+                        <div class="space-y-1">
+                            <label class="form-label font-bold text-xs">Page Orientation</label>
+                            <div class="flex gap-2">
+                                <label class="flex-1 flex items-center justify-center gap-1.5 p-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold cursor-pointer hover:bg-slate-100">
+                                    <input type="radio" name="repOrient" value="Landscape" checked> Landscape
+                                </label>
+                                <label class="flex-1 flex items-center justify-center gap-1.5 p-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold cursor-pointer hover:bg-slate-100">
+                                    <input type="radio" name="repOrient" value="Portrait"> Portrait
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="pt-4 flex justify-end gap-3 border-t border-slate-100 mt-4">
+                        <button type="button" onclick="closeReportModal()" class="px-4 py-2.5 text-xs font-bold text-slate-500 hover:text-slate-700">Cancel</button>
+                        <button type="submit" class="px-6 py-2.5 bg-charm-dark text-white rounded-xl text-xs font-bold shadow-lg hover:opacity-90 flex items-center gap-2">
+                            <i data-lucide="file-check" class="w-4 h-4 text-charm-yellow"></i> Generate &amp; Preview
+                        </button>
                     </div>
                 </form>
             </div>
