@@ -207,15 +207,15 @@ function renderAdmin() {
 
     // Accounts (Guard Management)
     if(el('accountsGrid')) {
-        const guardAccounts = adminState.accounts.filter(acc => acc.role === 'GUARD');
+        const guardAccounts = (adminState.accounts || []).filter(acc => acc.role === 'GUARD');
         if (guardAccounts.length > 0) {
             el('accountsGrid').innerHTML = guardAccounts.map(acc => `
                 <div class="glass-card p-6 rounded-3xl border border-white/60 shadow-glass flex flex-col items-center text-center animate-slide-up relative group">
                     <button onclick="deleteAccount('${acc.id}')" class="absolute top-4 right-4 p-2 rounded-xl text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors" title="Delete Guard Account">
-                        <i data-lucide="trash-2" class="w-4 h-4"></i>
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
                     </button>
                     <div class="w-16 h-16 rounded-2xl bg-charm-dark text-charm-yellow flex items-center justify-center mb-4 shadow-lg">
-                        <i data-lucide="shield-check" class="w-8 h-8"></i>
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8 text-charm-yellow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
                     </div>
                     <h3 class="font-display font-bold text-xl text-slate-800">${acc.username}</h3>
                     <span class="px-3 py-0.5 rounded-full text-[10px] font-extrabold bg-green-100 text-green-800 uppercase tracking-widest mt-1">SECURITY GUARD</span>
@@ -227,7 +227,8 @@ function renderAdmin() {
 
                     <div class="mt-5 flex gap-2 w-full">
                         <button onclick="openAccountModal('${acc.id}')" class="flex-1 px-4 py-2.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-bold hover:bg-charm-dark hover:text-white transition-all flex items-center justify-center gap-1.5 shadow-sm">
-                            <i data-lucide="key" class="w-3.5 h-3.5"></i> Change Password / Username
+                            <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>
+                            <span>Change Password / Username</span>
                         </button>
                     </div>
                 </div>
@@ -236,12 +237,13 @@ function renderAdmin() {
             el('accountsGrid').innerHTML = `
                 <div class="col-span-full py-16 flex flex-col items-center justify-center text-slate-400">
                     <div class="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mb-3">
-                        <i data-lucide="shield-off" class="w-8 h-8 text-slate-300"></i>
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8 text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.69 14a6.9 6.9 0 0 0 .31-2V5l-8-3-3.16 1.18"/><path d="M4.73 4.73 4 5v7c0 6 8 10 8 10a20.29 20.29 0 0 0 5.62-4.38"/><line x1="1" x2="23" y1="1" y2="23"/></svg>
                     </div>
                     <p class="font-bold text-slate-700 mb-1 text-base">No Guard Accounts Found</p>
                     <p class="text-xs text-slate-400 mb-5 max-w-sm text-center">Create security guard credentials to allow officers to log into the Guard Station dashboard.</p>
                     <button onclick="openAccountModal()" class="px-5 py-2.5 bg-charm-dark text-white rounded-xl text-xs font-bold shadow-md hover:opacity-90 flex items-center gap-1.5">
-                        <i data-lucide="plus" class="w-4 h-4"></i> Create Guard Account
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>
+                        <span>Create Guard Account</span>
                     </button>
                 </div>
             `;
@@ -360,8 +362,12 @@ function renderAdmin() {
                         <td class="p-4"><span class="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${typeClass}">${t.type}</span></td>
                         <td class="p-4 text-slate-500">${t.description || '--'}</td>
                         <td class="p-4 text-right whitespace-nowrap">
-                            <button onclick="editSpecialTag('${t.id}')" class="p-2 text-slate-400 hover:text-charm-dark transition-colors"><i data-lucide="edit" class="w-4 h-4"></i></button>
-                            <button onclick="deleteSpecialTag('${t.id}')" class="p-2 text-slate-400 hover:text-red-500 transition-colors"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                            <button onclick="editSpecialTag('${t.id}')" class="p-2 text-slate-400 hover:text-charm-dark transition-colors inline-block" title="Edit Tag">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                            </button>
+                            <button onclick="deleteSpecialTag('${t.id}')" class="p-2 text-slate-400 hover:text-red-500 transition-colors inline-block ml-1" title="Delete Tag">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                            </button>
                         </td>
                     </tr>
                 `;
