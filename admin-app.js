@@ -230,7 +230,11 @@ function renderAdmin() {
 
     // Logs
     if(el('adminLogsTable')) {
-        const recentLogs = adminState.logs.slice(0, 50);
+        let filteredLogs = getFilteredAdminLogs();
+        if (adminLogsDirection !== 'ALL') {
+            filteredLogs = filteredLogs.filter(l => l.direction === adminLogsDirection);
+        }
+        const recentLogs = filteredLogs.slice(0, 100);
         if (recentLogs.length) {
             el('adminLogsTable').innerHTML = recentLogs.map(l => {
                 const dateObj  = l.timestamp ? new Date(l.timestamp) : null;
@@ -609,6 +613,106 @@ window.deleteUser = async function(id) {
         await loadData();
     } catch (err) { showToast('Error: ' + err.message, 'error'); }
 };
+
+
+
+// ==============================================
+// 📋 ADMIN LOGS FILTERING MODULE
+// ==============================================
+let adminLogsPreset = 'today';
+let adminLogsCustomFrom = null;
+let adminLogsCustomTo = null;
+let adminLogsDirection = 'ALL';
+
+window.setAdminLogsPreset = function(preset) {
+    adminLogsPreset = preset;
+    document.querySelectorAll('.admin-log-tab').forEach(b => {
+        b.classList.remove('active-range');
+        b.classList.add('text-slate-600');
+    });
+    const btn = el(`logtab-${preset}`);
+    if (btn) {
+        btn.classList.add('active-range');
+        btn.classList.remove('text-slate-600');
+    }
+    const panel = el('adminLogsCustomPanel');
+    if (panel) panel.classList.add('hidden');
+
+    const label = el('adminLogsActiveRangeLabel');
+    if (label) {
+        const labels = {
+            today: 'Showing: Today',
+            yesterday: 'Showing: Yesterday',
+            '7days': 'Showing: Last 7 Days',
+            '30days': 'Showing: Last 30 Days',
+            thisMonth: 'Showing: This Month',
+            lastMonth: 'Showing: Last Month'
+        };
+        label.textContent = labels[preset] || 'Showing: Filtered Logs';
+    }
+    renderAdmin();
+};
+
+window.toggleAdminLogsCustomRange = function() {
+    const panel = el('adminLogsCustomPanel');
+    if (!panel) return;
+    const isHidden = panel.classList.contains('hidden');
+    if (isHidden) {
+        panel.classList.remove('hidden');
+        const now = new Date();
+        const past = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        if (el('adminLogsFromDate') && !el('adminLogsFromDate').value) {
+            el('adminLogsFromDate').value = past.toISOString().split('T')[0];
+        }
+        if (el('adminLogsToDate') && !el('adminLogsToDate').value) {
+            el('adminLogsToDate').value = now.toISOString().split('T')[0];
+        }
+    } else {
+        panel.classList.add('hidden');
+    }
+};
+
+window.applyAdminLogsCustomRange = function() {
+    const fromVal = el('adminLogsFromDate')?.value;
+    const toVal = el('adminLogsToDate')?.value;
+    if (!fromVal || !toVal) {
+        showToast('Please select both From and To dates', 'warning');
+        return;
+    }
+    adminLogsPreset = 'custom';
+    adminLogsCustomFrom = fromVal;
+    adminLogsCustomTo = toVal;
+    document.querySelectorAll('.admin-log-tab').forEach(b => {
+        b.classList.remove('active-range');
+        b.classList.add('text-slate-600');
+    });
+    el('logtab-custom')?.classList.add('active-range');
+    el('logtab-custom')?.classList.remove('text-slate-600');
+
+    if (el('adminLogsActiveRangeLabel')) {
+        el('adminLogsActiveRangeLabel').textContent = `Showing: ${fromVal} to ${toVal}`;
+    }
+    renderAdmin();
+};
+
+window.filterAdminLogs = function(dir) {
+    adminLogsDirection = dir;
+    ['All', 'Entry', 'Exit'].forEach(d => {
+        const btn = el(`adminLogDir${d}`);
+        if (btn) {
+            if (d.toUpperCase() === dir || (d === 'All' && dir === 'ALL')) {
+                btn.className = 'px-3 py-1.5 rounded-xl text-xs font-bold bg-charm-dark text-white shadow-sm';
+            } else {
+                btn.className = 'px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 hover:text-slate-900';
+            }
+        }
+    });
+    renderAdmin();
+};
+
+function getFilteredAdminLogs() {
+    return getFilteredAnalyticsLogs(adminLogsPreset, adminLogsCustomFrom, adminLogsCustomTo);
+}
 
 
 

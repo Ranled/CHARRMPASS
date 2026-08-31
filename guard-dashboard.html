@@ -405,16 +405,49 @@
 
                 <!-- VIEW 3: LOGS -->
                 <div id="view-logs" class="app-view hidden p-6 lg:p-8 flex flex-col gap-6 animate-slide-up">
-                    <div class="flex items-center justify-between">
+                    <div class="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-white/70 backdrop-blur-md p-6 rounded-3xl border border-white/60 shadow-glass">
                         <div>
-                            <h2 class="text-3xl font-display font-extrabold text-slate-800">Scan Logs &amp; History</h2>
-                            <p class="text-slate-500 font-medium mt-1">Complete campus entry and exit transactions &amp; live summary.</p>
+                            <h2 class="text-3xl font-display font-extrabold text-slate-800 tracking-tight">Scan Logs &amp; History</h2>
+                            <p class="text-slate-500 font-medium text-sm mt-1">Complete campus entry and exit transactions &amp; live audit trail.</p>
                         </div>
-                        <div class="flex gap-2">
-                            <button onclick="filterLogs('ALL')" id="btnLogAll" class="px-4 py-2 rounded-xl text-xs font-bold bg-charm-dark text-white shadow-sm">All</button>
-                            <button onclick="filterLogs('ENTRY')" id="btnLogEntry" class="px-4 py-2 rounded-xl text-xs font-bold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50">Entries</button>
-                            <button onclick="filterLogs('EXIT')" id="btnLogExit" class="px-4 py-2 rounded-xl text-xs font-bold bg-white text-slate-600 border border-slate-200 hover:bg-slate-50">Exits</button>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <!-- Date Range Presets Toolbar -->
+                            <div class="flex flex-wrap items-center gap-1 bg-slate-100/90 p-1.5 rounded-2xl border border-slate-200/80">
+                                <button onclick="setGuardLogsPreset('today')" class="guard-log-tab px-3 py-1.5 rounded-xl text-xs font-bold transition-all active-range" id="guardLogTab-today">Today</button>
+                                <button onclick="setGuardLogsPreset('yesterday')" class="guard-log-tab px-3 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="guardLogTab-yesterday">Yesterday</button>
+                                <button onclick="setGuardLogsPreset('7days')" class="guard-log-tab px-3 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="guardLogTab-7days">Last 7 Days</button>
+                                <button onclick="setGuardLogsPreset('30days')" class="guard-log-tab px-3 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="guardLogTab-30days">Last 30 Days</button>
+                                <button onclick="setGuardLogsPreset('thisMonth')" class="guard-log-tab px-3 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="guardLogTab-thisMonth">This Month</button>
+                                <button onclick="setGuardLogsPreset('lastMonth')" class="guard-log-tab px-3 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="guardLogTab-lastMonth">Last Month</button>
+                                <button onclick="toggleGuardLogsCustomRange()" class="guard-log-tab px-3 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900 flex items-center gap-1" id="guardLogTab-custom">
+                                    <span>Custom</span> <i data-lucide="calendar" class="w-3.5 h-3.5"></i>
+                                </button>
+                            </div>
+                            <!-- Direction Filters -->
+                            <div class="flex items-center gap-1 bg-slate-100/90 p-1.5 rounded-2xl border border-slate-200/80">
+                                <button onclick="filterLogs('ALL')" id="btnLogAll" class="px-3 py-1.5 rounded-xl text-xs font-bold bg-charm-dark text-white shadow-sm">All</button>
+                                <button onclick="filterLogs('ENTRY')" id="btnLogEntry" class="px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 hover:text-slate-900">Entries</button>
+                                <button onclick="filterLogs('EXIT')" id="btnLogExit" class="px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 hover:text-slate-900">Exits</button>
+                            </div>
                         </div>
+                    </div>
+
+                    <!-- Collapsible Custom Date Picker Panel for Guard Logs -->
+                    <div id="guardLogsCustomPanel" class="hidden bg-white/90 backdrop-blur-md p-5 rounded-2xl border border-emerald-200 shadow-lg flex flex-wrap items-center gap-4 animate-slide-up">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs font-bold text-slate-500 uppercase">From:</span>
+                            <input type="date" id="guardLogsFromDate" class="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-semibold text-slate-700 bg-white focus:ring-2 focus:ring-charm-dark outline-none">
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs font-bold text-slate-500 uppercase">To:</span>
+                            <input type="date" id="guardLogsToDate" class="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-semibold text-slate-700 bg-white focus:ring-2 focus:ring-charm-dark outline-none">
+                        </div>
+                        <button onclick="applyGuardLogsCustomRange()" class="px-4 py-1.5 bg-charm-dark text-white rounded-xl text-xs font-bold hover:bg-opacity-90 shadow-sm flex items-center gap-1.5">
+                            <i data-lucide="check" class="w-3.5 h-3.5"></i> Apply Range
+                        </button>
+                        <span id="guardLogsActiveRangeLabel" class="text-xs font-mono font-semibold text-emerald-800 bg-emerald-50 px-3 py-1 rounded-lg ml-auto border border-emerald-200">
+                            Showing: Today
+                        </span>
                     </div>
 
                     <!-- Summary Stats Grid -->

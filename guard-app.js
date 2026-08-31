@@ -125,7 +125,8 @@ async function initState() {
                         status: l.status === 'DENIED' ? 'DENIED' : 'AUTHORIZED',
                         event:  l.direction || 'ENTRY',
                         duration: '--',
-                        time:   new Date(l.timestamp).toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit'})
+                        time:   new Date(l.timestamp).toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit'}),
+                        rawTimestamp: l.timestamp
                     };
                 });
 
@@ -187,6 +188,122 @@ window.switchView = switchView;
 // LOGS FILTERING
 // =====================
 let currentLogFilter = 'ALL';
+let guardLogsPreset = 'today';
+let guardLogsCustomFrom = null;
+let guardLogsCustomTo = null;
+
+window.setGuardLogsPreset = function(preset) {
+    guardLogsPreset = preset;
+    document.querySelectorAll('.guard-log-tab').forEach(b => {
+        b.classList.remove('active-range');
+        b.classList.add('text-slate-600');
+    });
+    const btn = document.getElementById(`guardLogTab-${preset}`);
+    if (btn) {
+        btn.classList.add('active-range');
+        btn.classList.remove('text-slate-600');
+    }
+    const panel = document.getElementById('guardLogsCustomPanel');
+    if (panel) panel.classList.add('hidden');
+
+    const label = document.getElementById('guardLogsActiveRangeLabel');
+    if (label) {
+        const labels = {
+            today: 'Showing: Today',
+            yesterday: 'Showing: Yesterday',
+            '7days': 'Showing: Last 7 Days',
+            '30days': 'Showing: Last 30 Days',
+            thisMonth: 'Showing: This Month',
+            lastMonth: 'Showing: Last Month'
+        };
+        label.textContent = labels[preset] || 'Showing: Filtered Logs';
+    }
+    renderLogsTable();
+};
+
+window.toggleGuardLogsCustomRange = function() {
+    const panel = document.getElementById('guardLogsCustomPanel');
+    if (!panel) return;
+    const isHidden = panel.classList.contains('hidden');
+    if (isHidden) {
+        panel.classList.remove('hidden');
+        const now = new Date();
+        const past = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        if (document.getElementById('guardLogsFromDate') && !document.getElementById('guardLogsFromDate').value) {
+            document.getElementById('guardLogsFromDate').value = past.toISOString().split('T')[0];
+        }
+        if (document.getElementById('guardLogsToDate') && !document.getElementById('guardLogsToDate').value) {
+            document.getElementById('guardLogsToDate').value = now.toISOString().split('T')[0];
+        }
+    } else {
+        panel.classList.add('hidden');
+    }
+};
+
+window.applyGuardLogsCustomRange = function() {
+    const fromVal = document.getElementById('guardLogsFromDate')?.value;
+    const toVal = document.getElementById('guardLogsToDate')?.value;
+    if (!fromVal || !toVal) {
+        showToast('Please select both From and To dates', 'warning');
+        return;
+    }
+    guardLogsPreset = 'custom';
+    guardLogsCustomFrom = fromVal;
+    guardLogsCustomTo = toVal;
+    document.querySelectorAll('.guard-log-tab').forEach(b => {
+        b.classList.remove('active-range');
+        b.classList.add('text-slate-600');
+    });
+    document.getElementById('guardLogTab-custom')?.classList.add('active-range');
+    document.getElementById('guardLogTab-custom')?.classList.remove('text-slate-600');
+
+    if (document.getElementById('guardLogsActiveRangeLabel')) {
+        document.getElementById('guardLogsActiveRangeLabel').textContent = `Showing: ${fromVal} to ${toVal}`;
+    }
+    renderLogsTable();
+};
+
+function getFilteredGuardLogs() {
+    const scans = appState.recentScans || [];
+    const now = new Date();
+
+    if (guardLogsPreset === 'today') {
+        const todayStr = now.toISOString().split('T')[0];
+        return scans.filter(s => s.rawTimestamp && s.rawTimestamp.startsWith(todayStr));
+    }
+    if (guardLogsPreset === 'yesterday') {
+        const y = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        const yStr = y.toISOString().split('T')[0];
+        return scans.filter(s => s.rawTimestamp && s.rawTimestamp.startsWith(yStr));
+    }
+    if (guardLogsPreset === '7days') {
+        const past7 = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        return scans.filter(s => s.rawTimestamp && new Date(s.rawTimestamp) >= past7);
+    }
+    if (guardLogsPreset === '30days') {
+        const past30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        return scans.filter(s => s.rawTimestamp && new Date(s.rawTimestamp) >= past30);
+    }
+    if (guardLogsPreset === 'thisMonth') {
+        const prefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        return scans.filter(s => s.rawTimestamp && s.rawTimestamp.startsWith(prefix));
+    }
+    if (guardLogsPreset === 'lastMonth') {
+        const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const prefix = `${lastMonthDate.getFullYear()}-${String(lastMonthDate.getMonth() + 1).padStart(2, '0')}`;
+        return scans.filter(s => s.rawTimestamp && s.rawTimestamp.startsWith(prefix));
+    }
+    if (guardLogsPreset === 'custom' && guardLogsCustomFrom && guardLogsCustomTo) {
+        const fromDate = new Date(guardLogsCustomFrom + 'T00:00:00');
+        const toDate = new Date(guardLogsCustomTo + 'T23:59:59');
+        return scans.filter(s => {
+            if (!s.rawTimestamp) return false;
+            const t = new Date(s.rawTimestamp);
+            return t >= fromDate && t <= toDate;
+        });
+    }
+    return scans;
+}
 
 window.filterLogs = function(type) {
     currentLogFilter = type;
@@ -210,7 +327,7 @@ function renderLogsTable() {
     const table = document.getElementById('logsTable');
     if (!table) return;
 
-    let filtered = appState.recentScans || [];
+    let filtered = getFilteredGuardLogs();
     if (currentLogFilter === 'ENTRY') filtered = filtered.filter(s => s.event === 'ENTRY');
     if (currentLogFilter === 'EXIT') filtered = filtered.filter(s => s.event === 'EXIT');
 
