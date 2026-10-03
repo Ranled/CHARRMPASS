@@ -58,9 +58,9 @@
 
 // Hardware Pin Configuration — Boland UHF Reader (Wiegand)
 #define ENABLE_WIEGAND       true
-#define WIEGAND_D0_PIN       32   // Primary Data 0 (Purple wire with internal pull-up)
-#define WIEGAND_D0_PIN_ALT   35   // Secondary Data 0 (In case Purple wire is connected to GPIO 35)
-#define WIEGAND_D1_PIN       33   // Data 1 (White wire with internal pull-up)
+#define WIEGAND_D0_PIN       32   // GREEN wire: Wiegand Data 0 (D0) with internal pull-up
+#define WIEGAND_D0_PIN_ALT   35   // Secondary D0 (in case connected to GPIO 35)
+#define WIEGAND_D1_PIN       33   // WHITE wire: Wiegand Data 1 (D1) with internal pull-up
 
 // Interrupt-safe Wiegand pulse buffer with microsecond noise filtering
 volatile uint64_t wiegandRawBits = 0;
