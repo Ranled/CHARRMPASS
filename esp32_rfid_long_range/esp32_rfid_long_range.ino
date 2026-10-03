@@ -59,27 +59,30 @@
 // Hardware Pin Configuration — Boland UHF Reader (Wiegand)
 #define ENABLE_WIEGAND       true
 #define WIEGAND_D0_PIN       32   // GREEN wire: Wiegand Data 0 (D0) with internal pull-up
-#define WIEGAND_D0_PIN_ALT   35   // Secondary D0 (in case connected to GPIO 35)
 #define WIEGAND_D1_PIN       33   // WHITE wire: Wiegand Data 1 (D1) with internal pull-up
 
-// Interrupt-safe Wiegand pulse buffer with microsecond noise filtering
+// Interrupt-safe Wiegand pulse buffer with independent microsecond noise filtering
 volatile uint64_t wiegandRawBits = 0;
 volatile int wiegandBitCount = 0;
-volatile uint32_t wiegandLastPulseUs = 0;
+volatile uint32_t lastPulseD0Us = 0;
+volatile uint32_t lastPulseD1Us = 0;
+volatile uint32_t lastWiegandActivityUs = 0;
+volatile uint32_t countD0 = 0;
+volatile uint32_t countD1 = 0;
 volatile uint32_t wiegandTotalPulses = 0;
 
 void IRAM_ATTR isrWiegandD0() {
   uint32_t now = micros();
-  // Filter only ultra-high frequency spikes (< 20 microseconds).
-  // DO NOT use 250us because Boland UHF reader pulse interval is ~100us!
-  if (now - wiegandLastPulseUs < 20) return;
-  wiegandLastPulseUs = now;
+  // Filter electrical ringing under 30us
+  if (now - lastPulseD0Us < 30) return;
+  lastPulseD0Us = now;
+  lastWiegandActivityUs = now;
+  countD0++;
   wiegandTotalPulses++;
   if (wiegandBitCount < 64) {
     wiegandRawBits <<= 1;
     wiegandBitCount++;
   } else {
-    // Noise overflow: reset
     wiegandBitCount = 0;
     wiegandRawBits = 0;
   }
@@ -87,14 +90,16 @@ void IRAM_ATTR isrWiegandD0() {
 
 void IRAM_ATTR isrWiegandD1() {
   uint32_t now = micros();
-  if (now - wiegandLastPulseUs < 20) return;
-  wiegandLastPulseUs = now;
+  // Filter electrical ringing under 30us
+  if (now - lastPulseD1Us < 30) return;
+  lastPulseD1Us = now;
+  lastWiegandActivityUs = now;
+  countD1++;
   wiegandTotalPulses++;
   if (wiegandBitCount < 64) {
     wiegandRawBits = (wiegandRawBits << 1) | 1ULL;
     wiegandBitCount++;
   } else {
-    // Noise overflow: reset
     wiegandBitCount = 0;
     wiegandRawBits = 0;
   }
@@ -1155,14 +1160,18 @@ bool checkWiegandReader(String &outUid, String &outAltUid) {
   outAltUid = "";
   if (wiegandBitCount == 0) return false;
 
-  // Wait until pulse transmission has completed (idle for > 12ms = 12,000us)
-  if (micros() - wiegandLastPulseUs < 12000) return false;
+  // Wait until pulse transmission has completed (idle for > 15ms = 15,000us)
+  if (micros() - lastWiegandActivityUs < 15000) return false;
 
   noInterrupts();
   uint64_t raw = wiegandRawBits;
   int bits = wiegandBitCount;
+  uint32_t d0Pulses = countD0;
+  uint32_t d1Pulses = countD1;
   wiegandRawBits = 0;
   wiegandBitCount = 0;
+  countD0 = 0;
+  countD1 = 0;
   interrupts();
 
   if (bits < 4) {
@@ -1172,6 +1181,13 @@ bool checkWiegandReader(String &outUid, String &outAltUid) {
 
   Serial.println("\n========================================");
   Serial.printf("[WIEGAND PULSE DETECTED] Total bits: %d | Raw Hex: 0x%llX\n", bits, (unsigned long long)raw);
+  Serial.printf("  Pulse Breakdown: D0 (Green) = %u pulses | D1 (White) = %u pulses\n", d0Pulses, d1Pulses);
+
+  if (d1Pulses == 0 && d0Pulses > 0) {
+    Serial.println("  ⚠️ [LINE ALERT] ZERO pulses on D1! The White wire is either loose or not connected to GPIO 33!");
+  } else if (d0Pulses == 0 && d1Pulses > 0) {
+    Serial.println("  ⚠️ [LINE ALERT] ZERO pulses on D0! The Green wire is either loose or not connected to GPIO 32!");
+  }
 
   uint32_t cardNumber = 0;
   uint32_t facilityCode = 0;
@@ -1261,15 +1277,13 @@ void setup() {
   lcdMsg("CHARRMPASS v4.5", "BOOTING GATE...");
   delay(1000);
 
-  // Wiegand UHF Reader Interrupt Init on GPIO 32 (D0 primary), GPIO 35 (D0 alt), and GPIO 33 (D1)
+  // Wiegand UHF Reader Interrupt Init on GPIO 32 (GREEN = D0) and GPIO 33 (WHITE = D1)
   #if ENABLE_WIEGAND
     pinMode(WIEGAND_D0_PIN, INPUT_PULLUP);
-    pinMode(WIEGAND_D0_PIN_ALT, INPUT);
     pinMode(WIEGAND_D1_PIN, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(WIEGAND_D0_PIN), isrWiegandD0, FALLING);
-    attachInterrupt(digitalPinToInterrupt(WIEGAND_D0_PIN_ALT), isrWiegandD0, FALLING);
     attachInterrupt(digitalPinToInterrupt(WIEGAND_D1_PIN), isrWiegandD1, FALLING);
-    Serial.println("[WIEGAND] Boland UHF Reader initialized on GPIO 32/35 (D0) and GPIO 33 (D1).");
+    Serial.println("[WIEGAND] Boland UHF Reader initialized on GPIO 32 (GREEN=D0) and GPIO 33 (WHITE=D1) with pull-ups.");
   #endif
 
   // SPI Backup Reader Init
@@ -1457,11 +1471,9 @@ void loop() {
   if (millis() - lastWiegandDiag >= 6000) {
     lastWiegandDiag = millis();
     int d0_32 = digitalRead(WIEGAND_D0_PIN);
-    int d0_35 = digitalRead(WIEGAND_D0_PIN_ALT);
     int d1_33 = digitalRead(WIEGAND_D1_PIN);
-    Serial.printf("[WIEGAND HARDWARE MONITOR] Wire Levels: G32(D0)=%s | G35(D0_alt)=%s | G33(D1)=%s | Total Pulses Detected=%u\n",
+    Serial.printf("[WIEGAND HARDWARE MONITOR] Wire Levels: G32(Green D0)=%s | G33(White D1)=%s | Total Pulses Detected=%u\n",
                   d0_32 ? "HIGH" : "LOW (CHECK PULLUP)",
-                  d0_35 ? "HIGH" : "LOW (CHECK PULLUP)",
                   d1_33 ? "HIGH" : "LOW (CHECK PULLUP)",
                   wiegandTotalPulses);
   }
