@@ -204,7 +204,8 @@ typedef struct {
   String vehicleId;
   String userId;
   bool authorized;
-  String lastDirection; // Auto-toggles: ENTRY -> EXIT -> ENTRY
+  bool isInside;               // TRUE if vehicle is currently inside campus, FALSE if outside
+  unsigned long lastActionTime; // Millis timestamp of last ENTRY/EXIT to prevent repeat flip-flop
   String cpassId;
 } RamCard;
 
@@ -223,7 +224,7 @@ int findCardInRam(const String &uid) {
   return -1;
 }
 
-void addCardToRam(String uid, String name, String plate, String role, String userType, String vId, String uId, bool auth, String dir = "EXIT", String cpass = "") {
+void addCardToRam(String uid, String name, String plate, String role, String userType, String vId, String uId, bool auth, bool inside = false, String cpass = "") {
   int idx = findCardInRam(uid);
   if (idx != -1) {
     ramCards[idx].name = name;
@@ -233,7 +234,7 @@ void addCardToRam(String uid, String name, String plate, String role, String use
     ramCards[idx].vehicleId = vId;
     ramCards[idx].userId = uId;
     ramCards[idx].authorized = auth;
-    if (dir.length() > 0) ramCards[idx].lastDirection = dir;
+    ramCards[idx].isInside = inside;
     if (cpass.length() > 0) ramCards[idx].cpassId = cpass;
     return;
   }
@@ -246,7 +247,8 @@ void addCardToRam(String uid, String name, String plate, String role, String use
     ramCards[ramCardCount].vehicleId = vId;
     ramCards[ramCardCount].userId = uId;
     ramCards[ramCardCount].authorized = auth;
-    ramCards[ramCardCount].lastDirection = dir;
+    ramCards[ramCardCount].isInside = inside;
+    ramCards[ramCardCount].lastActionTime = 0;
     ramCards[ramCardCount].cpassId = cpass;
     ramCardCount++;
   }
@@ -306,6 +308,8 @@ unsigned long lastTagDisplayMillis = 0;
 void sendDeviceHeartbeat();
 void sendBleStatus(String status);
 void syncWhitelistToRam();
+void triggerBarrier();
+bool isTagCurrentlyInsideOnline(String uid);
 void insertTransactionOnline(String uid, String direction, String status, String remarks, String vId = "", String uId = "", String uType = "VEHICLE");
 
 // =====================================================
@@ -689,9 +693,9 @@ bool attemptWifiConnection(String testSsid, String testPass, int timeoutSeconds 
 }
 
 // =====================================================
-// 7. DYNAMIC AUTO ENTRY / EXIT STATE MACHINE
+// 7. REAL CAMPUS PRESENCE STATE MACHINE
 // =====================================================
-String determineNextDirectionOnline(String uid) {
+bool isTagCurrentlyInsideOnline(String uid) {
   String url = String(SUPABASE_URL) + "/rest/v1/transactions?rfid_uid=eq." +
                urlEncode(uid) +
                "&status=eq.AUTHORIZED&order=timestamp.desc&limit=1&select=direction";
@@ -712,12 +716,11 @@ String determineNextDirectionOnline(String uid) {
       JsonArray arr = doc.as<JsonArray>();
       if (arr.size() > 0) {
         String lastDir = String(arr[0]["direction"] | "EXIT");
-        if (lastDir == "ENTRY") return "EXIT";
-        else return "ENTRY";
+        return (lastDir == "ENTRY");
       }
     }
   }
-  return "ENTRY";
+  return false;
 }
 
 bool isTagCurrentlyInsideOffline(String uid) {
@@ -992,13 +995,43 @@ void syncWhitelistToRam() {
         }
 
         if (uid.length() > 0) {
-          addCardToRam(uid, name, plate, role, uType, vId, uId, auth, "EXIT", cpass);
+          addCardToRam(uid, name, plate, role, uType, vId, uId, auth, false, cpass);
         }
       }
-      Serial.printf("[RAM CACHE] Successfully loaded %d registered card(s) into high-speed memory!\n", ramCardCount);
     }
   }
   http.end();
+
+  // 3. Sync presence: query recent authorized transactions to know who is currently inside
+  String presUrl = String(SUPABASE_URL) + "/rest/v1/transactions?status=eq.AUTHORIZED&order=timestamp.desc&limit=100&select=rfid_uid,direction";
+  HTTPClient httpPres;
+  httpPres.begin(presUrl);
+  httpPres.addHeader("apikey", SUPABASE_ANON);
+  httpPres.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
+  int pCode = httpPres.GET();
+  if (pCode == 200) {
+    DynamicJsonDocument pDoc(4096);
+    if (deserializeJson(pDoc, httpPres.getString()) == DeserializationError::Ok) {
+      JsonArray pArr = pDoc.as<JsonArray>();
+      for (JsonObject pItem : pArr) {
+        String pUid = String(pItem["rfid_uid"] | "");
+        String pDir = String(pItem["direction"] | "EXIT");
+        int idx = findCardInRam(pUid);
+        if (idx != -1) {
+          if (ramCards[idx].lastActionTime == 0) {
+            ramCards[idx].isInside = (pDir == "ENTRY");
+            ramCards[idx].lastActionTime = 1; // Mark resolved
+          }
+        }
+      }
+      for (int i = 0; i < ramCardCount; i++) {
+        if (ramCards[i].lastActionTime == 1) ramCards[i].lastActionTime = 0;
+      }
+    }
+  }
+  httpPres.end();
+
+  Serial.printf("[RAM CACHE] Successfully loaded %d registered card(s) into high-speed memory!\n", ramCardCount);
 }
 
 void processCloudQueue() {
@@ -1056,16 +1089,17 @@ void handleScannedTag(String uid, String altUid = "") {
   altUid.trim();
   altUid.toUpperCase();
 
-  unsigned long scanStartUs = micros();
-
-  // Multi-Tag Anti-Spam Check: Ignore if this exact tag was scanned within TAG_COOLDOWN_MS
-  if (isTagInCooldown(uid) || (altUid.length() > 0 && isTagInCooldown(altUid))) {
-    return; // Silently skip duplicate pulses for this tag while it remains in the 6m zone
+  // Filter spurious zero IDs (e.g. noise pulse that produced all zeros)
+  if (uid == "0" || uid == "0000000000" || uid.length() == 0) {
+    return;
   }
 
-  // Mark this tag in the cooldown history table immediately
-  markTagInCooldown(uid);
-  if (altUid.length() > 0) markTagInCooldown(altUid);
+  unsigned long scanStartUs = micros();
+
+  // Multi-Tag Anti-Spam Check: Ignore duplicate pulses for this tag within 4s window
+  if (isTagInCooldown(uid) || (altUid.length() > 0 && isTagInCooldown(altUid))) {
+    return;
+  }
 
   // 1. FAST IN-MEMORY RAM LOOKUP (0.05 ms)
   int cardIdx = findCardInRam(uid);
@@ -1081,9 +1115,10 @@ void handleScannedTag(String uid, String altUid = "") {
   String vId = "";
   String uId = "";
   String direction = "ENTRY";
+  bool isInside = false;
 
   if (cardIdx != -1) {
-    // RAM CACHE HIT! Instant authorization
+    // RAM CACHE HIT!
     authorized = ramCards[cardIdx].authorized;
     finalUid = ramCards[cardIdx].uid;
     name = ramCards[cardIdx].name;
@@ -1093,10 +1128,31 @@ void handleScannedTag(String uid, String altUid = "") {
     uType = ramCards[cardIdx].userType;
     vId = ramCards[cardIdx].vehicleId;
     uId = ramCards[cardIdx].userId;
+    isInside = ramCards[cardIdx].isInside;
 
-    // Fast direction toggle: ENTRY -> EXIT -> ENTRY
-    direction = (ramCards[cardIdx].lastDirection == "ENTRY") ? "EXIT" : "ENTRY";
-    ramCards[cardIdx].lastDirection = direction;
+    if (authorized) {
+      // 15-second Transit Anti-Passback Debounce:
+      // While vehicle is passing through beam, ignore repeat pulses that would flip-flop direction
+      if (ramCards[cardIdx].lastActionTime > 0 && (millis() - ramCards[cardIdx].lastActionTime < 15000)) {
+        Serial.printf("  ⏳ [TRANSIT LOCKOUT] %s already granted %s %lu ms ago. Suppressing flip.\n",
+                      plate.c_str(), isInside ? "ENTRY" : "EXIT", millis() - ramCards[cardIdx].lastActionTime);
+        return;
+      }
+
+      // If currently INSIDE -> must EXIT
+      // If currently OUTSIDE -> must ENTRY
+      if (isInside) {
+        direction = "EXIT";
+        ramCards[cardIdx].isInside = false;
+      } else {
+        direction = "ENTRY";
+        ramCards[cardIdx].isInside = true;
+      }
+      ramCards[cardIdx].lastActionTime = millis();
+    } else {
+      // Unapproved / Denied tag -> ALWAYS ENTRY attempt, NEVER EXIT!
+      direction = "ENTRY";
+    }
 
   } else {
     // RAM CACHE MISS: Query Online (or Offline SD) and cache result
@@ -1106,15 +1162,39 @@ void handleScannedTag(String uid, String altUid = "") {
         authorized = checkAuthorizationOnline(altUid);
         if (authorized) finalUid = altUid;
       }
-      direction = determineNextDirectionOnline(finalUid);
+
+      if (authorized) {
+        isInside = isTagCurrentlyInsideOnline(finalUid);
+        if (isInside) {
+          direction = "EXIT";
+          isInside = false;
+        } else {
+          direction = "ENTRY";
+          isInside = true;
+        }
+      } else {
+        // Unapproved/unregistered tag: ALWAYS ENTRY attempt, NEVER EXIT!
+        direction = "ENTRY";
+      }
     } else {
       authorized = checkAuthorizationOffline(uid);
       if (!authorized && altUid.length() > 0) {
         authorized = checkAuthorizationOffline(altUid);
         if (authorized) finalUid = altUid;
       }
-      direction = isTagCurrentlyInsideOffline(finalUid) ? "EXIT" : "ENTRY";
-      if (!authorized) authorized = (uid.length() > 3);
+
+      if (authorized) {
+        isInside = isTagCurrentlyInsideOffline(finalUid);
+        if (isInside) {
+          direction = "EXIT";
+          isInside = false;
+        } else {
+          direction = "ENTRY";
+          isInside = true;
+        }
+      } else {
+        direction = "ENTRY";
+      }
     }
 
     name = card_name;
@@ -1125,13 +1205,21 @@ void handleScannedTag(String uid, String altUid = "") {
     vId = card_vehicleId;
     uId = card_userId;
 
-    // Cache in RAM for instantaneous subsequent reads
-    addCardToRam(finalUid, name, plate, role, uType, vId, uId, authorized, direction, cpass);
+    // Cache in RAM ONLY if authorized so unregistered tags never flip to EXIT
+    if (authorized) {
+      addCardToRam(finalUid, name, plate, role, uType, vId, uId, authorized, isInside, cpass);
+      int newIdx = findCardInRam(finalUid);
+      if (newIdx != -1) ramCards[newIdx].lastActionTime = millis();
+    }
   }
+
+  // Mark this tag in the cooldown history table
+  markTagInCooldown(uid);
+  if (altUid.length() > 0) markTagInCooldown(altUid);
 
   unsigned long processTimeUs = micros() - scanStartUs;
 
-  // 2. INSTANT LCD DISPLAY (1.2 ms, NO FLICKER)
+  // 2. INSTANT LCD DISPLAY
   if (authorized) {
     char l1[17], l2[17];
     snprintf(l1, sizeof(l1), "[%-5s] %-8s", direction.c_str(), plate.c_str());
@@ -1144,7 +1232,7 @@ void handleScannedTag(String uid, String altUid = "") {
     lcdShowFast(l1, l2);
   }
 
-  // 3. INSTANT SERIAL OUTPUT (< 1 ms)
+  // 3. INSTANT SERIAL OUTPUT
   Serial.println("\n⚡⚡⚡ [ULTRA-FAST MULTI-SCAN DETECTED] ⚡⚡⚡");
   Serial.printf("  Card ID (Dec): %s%s\n", uid.c_str(), altUid.length() > 0 ? (" | Hex: " + altUid).c_str() : "");
   if (authorized) {
@@ -1153,33 +1241,33 @@ void handleScannedTag(String uid, String altUid = "") {
       Serial.printf("  CPASS ID:      %s\n", cpass.c_str());
     }
     Serial.printf("  Vehicle:       %s [%s]\n", plate.c_str(), uType.c_str());
-    Serial.printf("  Action:        [%s] Recorded\n", direction.c_str());
+    Serial.printf("  Action:        [%s] Recorded (Now %s)\n", direction.c_str(), isInside ? "INSIDE CAMPUS" : "OUTSIDE CAMPUS");
     Serial.printf("  Status:        AUTHORIZED (Matched in %.2f ms)\n", processTimeUs / 1000.0);
   } else {
+    Serial.printf("  Action:        [ENTRY] ATTEMPT REJECTED (Unregistered)\n");
     Serial.printf("  Status:        UNREGISTERED / DENIED (Checked in %.2f ms)\n", processTimeUs / 1000.0);
   }
   Serial.println("────────────────────────────────────────────────");
 
-  // 4. NON-BLOCKING AUDIO/VISUAL CONFIRMATION
+  // 4. AUDIO/VISUAL CONFIRMATION & BARRIER TRIGGER
   if (authorized) {
-    digitalWrite(GREEN_LED, HIGH);
-    digitalWrite(RED_LED, LOW);
-    beep(40, 1); // Crisp, fast 40ms confirmation click
+    triggerBarrier();
+    beep(40, 1);
   } else {
     digitalWrite(RED_LED, HIGH);
     digitalWrite(GREEN_LED, LOW);
     beep(120, 1);
+    digitalWrite(RED_LED, LOW);
   }
 
   // 5. ENQUEUE FOR ASYNC CLOUD SYNC (< 1 us)
   if (wifiConnected) {
     String remarks = authorized ? ("UHF Drive-Through (" + uType + ")") : "Unregistered UHF Tag";
     enqueueTransaction(finalUid, direction, authorized ? "AUTHORIZED" : "DENIED", remarks, vId, uId, uType);
-  } else {
+  }
+  if (authorized) {
     updateOfflinePresence(finalUid, direction);
   }
-
-  digitalWrite(GREEN_LED, LOW);
 }
 
 // =====================================================
@@ -1204,8 +1292,8 @@ bool checkWiegandReader(String &outUid, String &outAltUid) {
   countD1 = 0;
   interrupts();
 
-  if (bits < 4) {
-    Serial.printf("[WIEGAND NOISE] Ignored %d spurious pulse(s)\n", bits);
+  if (bits < 4 || raw == 0) {
+    if (bits >= 4) Serial.printf("[WIEGAND NOISE] Ignored all-zero raw pulse (%d bits)\n", bits);
     return false;
   }
 
