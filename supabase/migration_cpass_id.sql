@@ -85,3 +85,23 @@ END $$;
 
 -- 8. rfid_cards.vehicle_id is already nullable:
 --    pedestrian card -> user_id only | vehicle sticker -> vehicle_id + user_id
+
+-- 9. ROLE "Others" (vendors, contractors, any other role) + free-text detail
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS role_detail TEXT;
+
+DO $$
+DECLARE c RECORD;
+BEGIN
+    -- Drop whichever CHECK constraint currently limits users.role, then recreate it with 'Others'
+    FOR c IN
+        SELECT conname FROM pg_constraint
+        WHERE conrelid = 'public.users'::regclass AND contype = 'c'
+          AND pg_get_constraintdef(oid) ILIKE '%role%' AND pg_get_constraintdef(oid) NOT ILIKE '%approval_status%'
+          AND pg_get_constraintdef(oid) NOT ILIKE '%transit%'
+    LOOP
+        EXECUTE format('ALTER TABLE public.users DROP CONSTRAINT %I', c.conname);
+    END LOOP;
+    ALTER TABLE public.users
+        ADD CONSTRAINT users_role_check
+        CHECK (role IN ('Student', 'Faculty', 'Staff', 'Visitor', 'Others'));
+END $$;

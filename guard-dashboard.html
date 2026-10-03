@@ -217,7 +217,11 @@
                                                         <span id="resRoleDualEntry" class="px-2 py-0.2 rounded text-[10px] font-extrabold bg-slate-100 text-slate-700 uppercase">--</span>
                                                         <span id="resProgramDualEntry" class="text-[11px] text-slate-500 truncate">--</span>
                                                     </div>
-                                                    <div class="text-[10px] font-mono text-slate-400 mt-0.5">UID: <span id="resUidDualEntry" class="font-bold text-slate-600">--</span></div>
+                                                    <div class="flex items-center gap-1.5 text-[10px] font-mono text-slate-400 mt-0.5">
+                                                        <span>UID: <span id="resUidDualEntry" class="font-bold text-slate-600">--</span></span>
+                                                        <span class="text-slate-300">|</span>
+                                                        <span>CPASS: <span id="resCpassIdDualEntry" class="font-bold text-emerald-800 bg-emerald-50 px-1 py-0.5 rounded border border-emerald-200">--</span></span>
+                                                    </div>
                                                 </div>
                                             </div>
                                             <div id="resStatusLabelDualEntry" class="shrink-0 px-2.5 py-1 rounded-xl font-bold text-xs shadow-sm border bg-emerald-50 border-emerald-200 text-emerald-700">
@@ -322,7 +326,11 @@
                                                         <span id="resRoleDualExit" class="px-2 py-0.2 rounded text-[10px] font-extrabold bg-slate-100 text-slate-700 uppercase">--</span>
                                                         <span id="resProgramDualExit" class="text-[11px] text-slate-500 truncate">--</span>
                                                     </div>
-                                                    <div class="text-[10px] font-mono text-slate-400 mt-0.5">UID: <span id="resUidDualExit" class="font-bold text-slate-600">--</span></div>
+                                                    <div class="flex items-center gap-1.5 text-[10px] font-mono text-slate-400 mt-0.5">
+                                                        <span>UID: <span id="resUidDualExit" class="font-bold text-slate-600">--</span></span>
+                                                        <span class="text-slate-300">|</span>
+                                                        <span>CPASS: <span id="resCpassIdDualExit" class="font-bold text-blue-800 bg-blue-50 px-1 py-0.5 rounded border border-blue-200">--</span></span>
+                                                    </div>
                                                 </div>
                                             </div>
                                             <div id="resStatusLabelDualExit" class="shrink-0 px-2.5 py-1 rounded-xl font-bold text-xs shadow-sm border bg-blue-50 border-blue-200 text-blue-700">
@@ -456,9 +464,14 @@
                                                 <div class="flex items-center gap-2 mt-1"><span id="resRoleEntry"
                                                         class="px-2.5 py-0.5 rounded text-xs font-bold bg-slate-200 text-slate-700 uppercase">--</span><span
                                                         id="resProgramEntry" class="text-sm text-slate-500">--</span></div>
-                                                <div
-                                                    class="mt-2 text-xs font-mono text-slate-400 font-semibold bg-slate-100 px-2 py-1 rounded inline-block">
-                                                    UID: <span id="resUidEntry">--</span></div>
+                                                <div class="mt-2 flex items-center gap-2">
+                                                    <div class="text-xs font-mono text-slate-500 font-semibold bg-slate-100 px-2.5 py-1 rounded inline-block">
+                                                        UID: <span id="resUidEntry" class="font-bold text-slate-700">--</span>
+                                                    </div>
+                                                    <div class="text-xs font-mono text-emerald-800 font-bold bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded inline-block">
+                                                        CPASS: <span id="resCpassIdEntry">--</span>
+                                                    </div>
+                                                </div>
                                             </div>
                                         </div>
                                         <div id="resStatusLabelEntry"
@@ -598,9 +611,14 @@
                                                 <div class="flex items-center gap-2 mt-1"><span id="resRoleExit"
                                                         class="px-2.5 py-0.5 rounded text-xs font-bold bg-slate-200 text-slate-700 uppercase">--</span><span
                                                         id="resProgramExit" class="text-sm text-slate-500">--</span></div>
-                                                <div
-                                                    class="mt-2 text-xs font-mono text-slate-400 font-semibold bg-slate-100 px-2 py-1 rounded inline-block">
-                                                    UID: <span id="resUidExit">--</span></div>
+                                                <div class="mt-2 flex items-center gap-2">
+                                                    <div class="text-xs font-mono text-slate-500 font-semibold bg-slate-100 px-2.5 py-1 rounded inline-block">
+                                                        UID: <span id="resUidExit" class="font-bold text-slate-700">--</span>
+                                                    </div>
+                                                    <div class="text-xs font-mono text-blue-800 font-bold bg-blue-50 border border-blue-200 px-2.5 py-1 rounded inline-block">
+                                                        CPASS: <span id="resCpassIdExit">--</span>
+                                                    </div>
+                                                </div>
                                             </div>
                                         </div>
                                         <div id="resStatusLabelExit"

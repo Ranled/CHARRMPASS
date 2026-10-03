@@ -230,6 +230,7 @@
                                     <option value="Faculty">Faculty</option>
                                     <option value="Staff">Staff</option>
                                     <option value="Visitor">Visitor</option>
+                                    <option value="Others">Others (Vendor/Staff)</option>
                                 </select>
                                 <select id="presenceFilter" class="px-4 py-2.5 rounded-xl border border-slate-200 bg-white/80 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-charm-dark/50 shadow-sm" onchange="filterUsers()">
                                     <option value="ALL">All Campus Presence</option>
@@ -1727,7 +1728,9 @@ void startBleServer() {
                     <div>
                         <div class="flex items-center gap-2 flex-wrap">
                             <h3 id="revHeaderName" class="font-display font-extrabold text-2xl text-slate-800">--</h3>
+                            <span id="revHeaderCpassId" class="px-2.5 py-0.5 rounded-full text-xs font-mono font-black bg-amber-100 text-amber-900 border border-amber-300">CPASS: --</span>
                             <span id="revHeaderRole" class="px-3 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-blue-100 text-blue-700">STUDENT</span>
+                            <span id="revHeaderPassType" class="px-2.5 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-slate-200 text-slate-700">PASS: --</span>
                             <span id="revHeaderStatus" class="px-3 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-yellow-100 text-yellow-700 flex items-center gap-1">
                                 <span class="w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse"></span> PENDING REVIEW
                             </span>
@@ -1780,6 +1783,10 @@ void startBleServer() {
                                     <div id="revName" class="text-sm font-bold text-slate-800">--</div>
                                 </div>
                                 <div>
+                                    <div class="text-[10px] font-bold text-slate-400 uppercase">CHARRMPASS (CPASS) ID</div>
+                                    <div id="revCpassId" class="text-sm font-mono font-black text-amber-900 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 inline-block">--</div>
+                                </div>
+                                <div>
                                     <div class="text-[10px] font-bold text-slate-400 uppercase">Role / Category</div>
                                     <div id="revRoleBadge" class="text-sm font-bold text-slate-800">--</div>
                                 </div>
@@ -1791,9 +1798,13 @@ void startBleServer() {
                                     <div class="text-[10px] font-bold text-slate-400 uppercase">Program / Course</div>
                                     <div id="revProgram" class="text-sm font-bold text-slate-800">--</div>
                                 </div>
-                                <div class="col-span-2">
+                                <div>
                                     <div class="text-[10px] font-bold text-slate-400 uppercase">Section</div>
                                     <div id="revSection" class="text-sm font-bold text-slate-800">--</div>
+                                </div>
+                                <div id="revRoleDetailBox" class="col-span-2 hidden">
+                                    <div class="text-[10px] font-bold text-amber-700 uppercase">Role Specification (Others)</div>
+                                    <div id="revRoleDetail" class="text-xs font-bold text-slate-800 bg-amber-50 p-2.5 rounded-xl border border-amber-200">--</div>
                                 </div>
                                 <div class="col-span-2">
                                     <div class="text-[10px] font-bold text-slate-400 uppercase">Complete Address</div>
@@ -1851,8 +1862,8 @@ void startBleServer() {
                                     <i data-lucide="nfc" class="w-5 h-5"></i>
                                 </div>
                                 <div>
-                                    <h5 class="text-sm font-display font-extrabold text-charm-dark uppercase tracking-wider">Physical RFID Card Assignment Station</h5>
-                                    <p class="text-xs text-slate-500">Assign a physical 13.56MHz RFID card UID to authorize gate boom barriers.</p>
+                                    <h5 id="revRfidStationTitle" class="text-sm font-display font-extrabold text-charm-dark uppercase tracking-wider">Physical RFID Card Assignment Station</h5>
+                                    <p id="revRfidStationSubtitle" class="text-xs text-slate-500">Assign a physical 13.56MHz RFID card UID or Long-Range UHF Sticker to authorize gate boom barriers.</p>
                                 </div>
                             </div>
                             <div class="flex items-center gap-2">
@@ -1895,14 +1906,14 @@ void startBleServer() {
                         </span>
                     </div>
 
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                         <!-- Profile Image -->
                         <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-2">
                             <div class="flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase">
                                 <span>Profile Photo</span>
                                 <i data-lucide="user" class="w-3.5 h-3.5 text-slate-400"></i>
                             </div>
-                            <div class="h-52 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden group relative cursor-zoom-in" onclick="zoomImage(this)">
+                            <div class="h-48 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden group relative cursor-zoom-in" onclick="zoomImage(this)">
                                 <img id="revProfileImage" class="w-full h-full object-cover transition-transform group-hover:scale-105">
                                 <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1">
                                     <i data-lucide="zoom-in" class="w-4 h-4"></i> ZOOM
@@ -1911,12 +1922,12 @@ void startBleServer() {
                         </div>
 
                         <!-- Vehicle Photo -->
-                        <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-2">
+                        <div id="revDocVehCard" class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-2">
                             <div class="flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase">
-                                <span>Vehicle / Motorcycle</span>
+                                <span>Vehicle / Moto</span>
                                 <i data-lucide="bike" class="w-3.5 h-3.5 text-slate-400"></i>
                             </div>
-                            <div class="h-52 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden group relative cursor-zoom-in" onclick="zoomImage(this)">
+                            <div class="h-48 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden group relative cursor-zoom-in" onclick="zoomImage(this)">
                                 <img id="revImgMotor" class="w-full h-full object-cover transition-transform group-hover:scale-105">
                                 <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1">
                                     <i data-lucide="zoom-in" class="w-4 h-4"></i> ZOOM
@@ -1927,10 +1938,10 @@ void startBleServer() {
                         <!-- School ID Front -->
                         <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-2">
                             <div class="flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase">
-                                <span>School ID (Front)</span>
+                                <span>ID Card (Front)</span>
                                 <i data-lucide="id-card" class="w-3.5 h-3.5 text-slate-400"></i>
                             </div>
-                            <div class="h-52 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden group relative cursor-zoom-in" onclick="zoomImage(this)">
+                            <div class="h-48 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden group relative cursor-zoom-in" onclick="zoomImage(this)">
                                 <img id="revImgIdFront" class="w-full h-full object-cover transition-transform group-hover:scale-105">
                                 <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1">
                                     <i data-lucide="zoom-in" class="w-4 h-4"></i> ZOOM
@@ -1941,11 +1952,25 @@ void startBleServer() {
                         <!-- School ID Back -->
                         <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-2">
                             <div class="flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase">
-                                <span>School ID (Back)</span>
+                                <span>ID Card (Back)</span>
                                 <i data-lucide="id-card" class="w-3.5 h-3.5 text-slate-400"></i>
                             </div>
-                            <div class="h-52 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden group relative cursor-zoom-in" onclick="zoomImage(this)">
+                            <div class="h-48 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden group relative cursor-zoom-in" onclick="zoomImage(this)">
                                 <img id="revImgIdBack" class="w-full h-full object-cover transition-transform group-hover:scale-105">
+                                <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1">
+                                    <i data-lucide="zoom-in" class="w-4 h-4"></i> ZOOM
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- LTO OR/CR Document -->
+                        <div id="revDocOrCrCard" class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-2">
+                            <div class="flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase">
+                                <span>LTO OR / CR</span>
+                                <i data-lucide="file-text" class="w-3.5 h-3.5 text-slate-400"></i>
+                            </div>
+                            <div class="h-48 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden group relative cursor-zoom-in" onclick="zoomImage(this)">
+                                <img id="revImgOrCr" class="w-full h-full object-cover transition-transform group-hover:scale-105" src="" alt="OR/CR Document">
                                 <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1">
                                     <i data-lucide="zoom-in" class="w-4 h-4"></i> ZOOM
                                 </div>

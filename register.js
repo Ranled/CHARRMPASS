@@ -104,6 +104,7 @@ function toggleStudentId() {
     const role = document.getElementById('regRole').value;
     const isStudent = role === 'Student';
     document.getElementById('fieldStudentId').classList.toggle('hidden', !isStudent);
+    document.getElementById('fieldRoleOther').classList.toggle('hidden', role !== 'Others');
     document.getElementById('fieldCpassNote').classList.toggle('hidden', isStudent || !role);
 }
 
@@ -191,6 +192,10 @@ function validateCurrentStep() {
             if (!document.getElementById(id).value.trim()) {
                 return flagField(id, 'Please fill in all required fields.');
             }
+        }
+        if (document.getElementById('regRole').value === 'Others' &&
+            !document.getElementById('regRoleOther').value.trim()) {
+            return flagField('regRoleOther', 'Please specify your role (e.g. Vendor).');
         }
         if (document.getElementById('regRole').value === 'Student') {
             const sid = normalizeCpass(document.getElementById('regStudentId').value);
@@ -523,7 +528,7 @@ function buildReview() {
                 <div>
                     <div class="text-xl font-display font-bold text-slate-800">${escapeHtml(name)}</div>
                     <div class="flex items-center gap-2 mt-1">
-                        <span class="px-2.5 py-0.5 rounded text-xs font-bold bg-charm-dark text-white uppercase">${escapeHtml(role)}</span>
+                        <span class="px-2.5 py-0.5 rounded text-xs font-bold bg-charm-dark text-white uppercase">${escapeHtml(role === 'Others' ? 'Others: ' + document.getElementById('regRoleOther').value.trim() : role)}</span>
                         <span class="text-sm text-slate-500">${escapeHtml(document.getElementById('regProgram').value || '--')} &bull; ${escapeHtml(document.getElementById('regSection').value || '--')}</span>
                     </div>
                     <div class="text-xs text-slate-400 mt-1">${escapeHtml(document.getElementById('regAge').value)} years old &bull; ${escapeHtml(document.getElementById('regSex').value)}</div>
@@ -577,6 +582,7 @@ async function submitPedestrian() {
         sex:                   document.getElementById('regSex').value,
         address:               document.getElementById('regAddress').value.trim(),
         role:                  role,
+        role_detail:           role === 'Others' ? document.getElementById('regRoleOther').value.trim() : null,
         program:               document.getElementById('regProgram').value.trim() || null,
         section:               document.getElementById('regSection').value.trim() || null,
         default_transit_mode:  'PEDESTRIAN',

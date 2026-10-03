@@ -15,9 +15,9 @@ let appState = {
 
 // Demo users (fallback when Supabase is offline)
 const mockUsers = {
-    'B7 78 96 31': { uid:'B7 78 96 31', name:'Juan Dela Cruz', role:'Student', program:'BSIT', section:'3A', type:'Car', model:'Honda Civic', plate:'XYZ-123', color:'Black', status:'AUTHORIZED' },
-    'UID67890': { uid:'UID67890', name:'Maria Santos', role:'Faculty', program:'Engineering', section:'--', type:'SUV', model:'Toyota Fortuner', plate:'ABC-789', color:'White', status:'AUTHORIZED' },
-    'UID55555': { uid:'UID55555', name:'Carlos Reyes', role:'Staff', program:'Admin', section:'--', type:'Motorcycle', model:'Yamaha NMAX', plate:'DEF-456', color:'Silver', status:'AUTHORIZED' },
+    'B7 78 96 31': { uid:'B7 78 96 31', cpass_id:'2022-00123', name:'Juan Dela Cruz', role:'Student', program:'BSIT', section:'3A', type:'Car', model:'Honda Civic', plate:'XYZ-123', color:'Black', status:'AUTHORIZED' },
+    'UID67890': { uid:'UID67890', cpass_id:'CP00', name:'Maria Santos', role:'Faculty', program:'Engineering', section:'--', type:'SUV', model:'Toyota Fortuner', plate:'ABC-789', color:'White', status:'AUTHORIZED' },
+    'UID55555': { uid:'UID55555', cpass_id:'CP01', name:'Carlos Reyes', role:'Staff', program:'Admin', section:'--', type:'Motorcycle', model:'Yamaha NMAX', plate:'DEF-456', color:'Silver', status:'AUTHORIZED' },
 };
 
 
@@ -63,7 +63,7 @@ async function initState() {
                 .from('transactions')
                 .select(`
                     *,
-                    users ( full_name, role, program, section, profile_image ),
+                    users ( full_name, role, role_detail, program, section, profile_image, cpass_id, student_id ),
                     vehicles ( plate_number, vehicle_type, vehicle_model, vehicle_color )
                 `)
                 .order('timestamp', { ascending: false })
@@ -79,7 +79,8 @@ async function initState() {
 
                     let name = l.users?.full_name;
                     let plate = l.vehicles?.plate_number;
-                    let role = l.users?.role;
+                    let role = l.users?.role === 'OTHERS' && l.users?.role_detail ? l.users.role_detail : l.users?.role;
+                    let cpass_id = l.users?.cpass_id || l.users?.student_id || null;
 
                     // 1. Check remarks for Visitor or Emergency details
                     if (l.remarks) {
@@ -92,11 +93,13 @@ async function initState() {
                                 name = 'Visitor';
                             }
                             role = 'VISITOR';
+                            cpass_id = 'VISITOR';
                         } else if (l.remarks.includes('Emergency') || l.remarks.includes('EMERGENCY')) {
                             const match = l.remarks.match(/Emergency (?:tag|Response):\s*(.+)/i);
                             name = match ? match[1].trim() : 'Emergency Response';
                             plate = 'EMERGENCY';
                             role = 'EMERGENCY';
+                            cpass_id = 'EMERGENCY';
                         }
                     }
 
@@ -106,10 +109,12 @@ async function initState() {
                             name = special.label || 'Emergency Response';
                             plate = 'EMERGENCY';
                             role = 'EMERGENCY';
+                            cpass_id = 'EMERGENCY';
                         } else if (special.type === 'VISITOR') {
                             name = (special.label && special.label !== 'Reusable Visitor Tag') ? special.label : 'Visitor';
                             plate = special.description?.match(/Plate:\s*([^|]+)/)?.[1]?.trim() || 'VISITOR PASS';
                             role = 'VISITOR';
+                            cpass_id = 'VISITOR';
                         }
                     }
 
@@ -118,14 +123,15 @@ async function initState() {
                     if (!role) role = '--';
 
                     return {
-                        uid:    l.rfid_uid,
-                        name:   name,
-                        role:   role,
-                        plate:  plate,
-                        status: l.status === 'DENIED' ? 'DENIED' : 'AUTHORIZED',
-                        event:  l.direction || 'ENTRY',
+                        uid:      l.rfid_uid,
+                        cpass_id: cpass_id,
+                        name:     name,
+                        role:     role,
+                        plate:    plate,
+                        status:   l.status === 'DENIED' ? 'DENIED' : 'AUTHORIZED',
+                        event:    l.direction || 'ENTRY',
                         duration: '--',
-                        time:   new Date(l.timestamp).toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit'}),
+                        time:     new Date(l.timestamp).toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit'}),
                         rawTimestamp: l.timestamp
                     };
                 });
@@ -148,7 +154,7 @@ async function initState() {
         const mockArr = Object.values(mockUsers);
         for (let i = 0; i < 6; i++) {
             const u = mockArr[i % 3];
-            appState.recentScans.push({ uid: u.uid, name: u.name, role: u.role, plate: u.plate, status: u.status, event: i%2===0?'ENTRY':'EXIT', duration: i%2===0?'INSIDE':'15m', time: new Date(Date.now()-i*900000).toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit'}) });
+            appState.recentScans.push({ uid: u.uid, cpass_id: u.cpass_id, name: u.name, role: u.role, plate: u.plate, status: u.status, event: i%2===0?'ENTRY':'EXIT', duration: i%2===0?'INSIDE':'15m', time: new Date(Date.now()-i*900000).toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit'}) });
         }
     }
     renderAll();
@@ -348,7 +354,12 @@ function renderLogsTable() {
             <tr class="hover:bg-white/60 border-b border-slate-100/50 transition-colors">
                 <td class="p-4 text-slate-500 font-medium">${s.time}</td>
                 <td class="p-4 text-xs font-mono font-bold text-slate-600">${s.uid || '--'}</td>
-                <td class="p-4 font-bold text-slate-800">${s.name || '--'}</td>
+                <td class="p-4 font-bold text-slate-800">
+                    <div class="flex items-center gap-1.5 flex-wrap">
+                        <span>${s.name || '--'}</span>
+                        ${s.cpass_id ? `<span class="px-1.5 py-0.5 text-[10px] font-mono font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 rounded">CPASS: ${s.cpass_id}</span>` : ''}
+                    </div>
+                </td>
                 <td class="p-4 text-xs font-mono font-bold text-slate-700">${s.plate || '--'}</td>
                 <td class="p-4 text-center">
                     <span class="px-2.5 py-1 rounded-full text-[10px] font-bold ${s.event === 'ENTRY' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}">${s.event || '--'}</span>
@@ -421,6 +432,7 @@ function renderRecentScanCard(s, type) {
                 </div>
                 <div class="flex items-center gap-1.5 sm:gap-2">
                     <span class="text-[10px] sm:text-xs font-mono font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded">${s.plate || s.uid?.substring(0, 8) || '--'}</span>
+                    ${s.cpass_id ? `<span class="text-[9px] sm:text-[10px] font-mono font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">CPASS: ${s.cpass_id}</span>` : ''}
                     <span class="text-[9px] sm:text-[10px] font-bold uppercase ${isAuth ? (isEntry ? 'text-green-600' : 'text-blue-600') : 'text-red-600'}">${s.status || '--'}</span>
                 </div>
             </div>
@@ -516,6 +528,7 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
 
         const el = (id) => document.getElementById(id);
         if(el(`resUid${prefix}${gateKey}`)) el(`resUid${prefix}${gateKey}`).textContent = uid;
+        if(el(`resCpassId${prefix}${gateKey}`)) el(`resCpassId${prefix}${gateKey}`).textContent = '...';
         if(el(`resName${prefix}${gateKey}`)) el(`resName${prefix}${gateKey}`).textContent = 'Verifying credentials...';
         if(el(`resRole${prefix}${gateKey}`)) el(`resRole${prefix}${gateKey}`).textContent = 'READING...';
         if(el(`resProgram${prefix}${gateKey}`)) el(`resProgram${prefix}${gateKey}`).textContent = 'Fetching vehicle and driver record...';
@@ -541,7 +554,7 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                 .select(`
                     id, rfid_uid, authorization_status,
                     vehicles ( id, vehicle_type, vehicle_model, plate_number, vehicle_color ),
-                    users ( id, full_name, role, program, section, profile_image )
+                    users ( id, full_name, role, role_detail, program, section, profile_image, cpass_id, student_id )
                 `)
                 .eq('rfid_uid', uid)
                 .maybeSingle();
@@ -550,8 +563,9 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                 userId = card.users?.id;
                 result = {
                     uid:          uid,
+                    cpass_id:     card.users?.cpass_id || card.users?.student_id || '--',
                     name:         card.users?.full_name || 'Registered Driver',
-                    role:         card.users?.role || '--',
+                    role:         card.users?.role === 'OTHERS' && card.users?.role_detail ? card.users.role_detail : (card.users?.role || '--'),
                     program:      card.users?.program || '--',
                     section:      card.users?.section || '--',
                     type:         card.vehicles?.vehicle_type || '--',
@@ -956,6 +970,7 @@ function populateScanResultCard(result, gateKey) {
         if(el(`resRole${prefix}${gateKey}`))     el(`resRole${prefix}${gateKey}`).textContent = result.role;
         if(el(`resProgram${prefix}${gateKey}`))  el(`resProgram${prefix}${gateKey}`).textContent = `${result.program || '--'} • ${result.section || '--'}`;
         if(el(`resUid${prefix}${gateKey}`))      el(`resUid${prefix}${gateKey}`).textContent = result.uid;
+        if(el(`resCpassId${prefix}${gateKey}`))  el(`resCpassId${prefix}${gateKey}`).textContent = result.cpass_id || '--';
         if(el(`resVehType${prefix}${gateKey}`))  el(`resVehType${prefix}${gateKey}`).textContent = result.type;
         if(el(`resPlate${prefix}${gateKey}`))    el(`resPlate${prefix}${gateKey}`).textContent = result.plate;
         if(el(`resVehModel${prefix}${gateKey}`)) el(`resVehModel${prefix}${gateKey}`).textContent = result.model;

@@ -205,6 +205,7 @@ typedef struct {
   String userId;
   bool authorized;
   String lastDirection; // Auto-toggles: ENTRY -> EXIT -> ENTRY
+  String cpassId;
 } RamCard;
 
 #define MAX_RAM_CARDS 128
@@ -222,7 +223,7 @@ int findCardInRam(const String &uid) {
   return -1;
 }
 
-void addCardToRam(String uid, String name, String plate, String role, String userType, String vId, String uId, bool auth, String dir = "EXIT") {
+void addCardToRam(String uid, String name, String plate, String role, String userType, String vId, String uId, bool auth, String dir = "EXIT", String cpass = "") {
   int idx = findCardInRam(uid);
   if (idx != -1) {
     ramCards[idx].name = name;
@@ -233,6 +234,7 @@ void addCardToRam(String uid, String name, String plate, String role, String use
     ramCards[idx].userId = uId;
     ramCards[idx].authorized = auth;
     if (dir.length() > 0) ramCards[idx].lastDirection = dir;
+    if (cpass.length() > 0) ramCards[idx].cpassId = cpass;
     return;
   }
   if (ramCardCount < MAX_RAM_CARDS) {
@@ -245,6 +247,7 @@ void addCardToRam(String uid, String name, String plate, String role, String use
     ramCards[ramCardCount].userId = uId;
     ramCards[ramCardCount].authorized = auth;
     ramCards[ramCardCount].lastDirection = dir;
+    ramCards[ramCardCount].cpassId = cpass;
     ramCardCount++;
   }
 }
@@ -291,6 +294,7 @@ bool card_authorized   = false;
 String card_name       = "";
 String card_plate      = "";
 String card_role       = "";
+String card_cpassId    = "";
 String card_userType   = "VEHICLE";
 String card_rfidType   = "LONG_RANGE";
 String card_vehicleId  = "";
@@ -816,6 +820,7 @@ bool checkAuthorizationOnline(String uid) {
   card_name = "";
   card_plate = "";
   card_role = "";
+  card_cpassId = "";
   card_userType = "VEHICLE";
   card_rfidType = "LONG_RANGE";
   card_vehicleId = "";
@@ -861,7 +866,7 @@ bool checkAuthorizationOnline(String uid) {
                urlEncode(uid) +
                "&select=authorization_status,vehicle_id,user_id,rfid_type,user_type,"
                "vehicles(plate_number,vehicle_type,vehicle_model),"
-               "users(full_name,role,default_transit_mode)";
+               "users(full_name,role,role_detail,default_transit_mode,cpass_id,student_id)";
 
   HTTPClient http;
   http.begin(url);
@@ -899,6 +904,15 @@ bool checkAuthorizationOnline(String uid) {
   if (!card["users"].isNull()) {
     card_name = String(card["users"]["full_name"] | "");
     card_role = String(card["users"]["role"] | "");
+    String roleDetail = String(card["users"]["role_detail"] | "");
+    if (card_role == "OTHERS" && roleDetail.length() > 0) {
+      card_role = roleDetail;
+    }
+    card_cpassId = String(card["users"]["cpass_id"] | "");
+    if (card_cpassId.length() == 0 || card_cpassId == "null") {
+      card_cpassId = String(card["users"]["student_id"] | "");
+    }
+    if (card_cpassId == "null") card_cpassId = "";
     String defMode = String(card["users"]["default_transit_mode"] | "");
     if (defMode == "PEDESTRIAN") {
       card_userType = "PEDESTRIAN";
@@ -938,7 +952,7 @@ void syncWhitelistToRam() {
   httpSpec.end();
 
   // 2. Fetch registered vehicle and user cards
-  String url = String(SUPABASE_URL) + "/rest/v1/rfid_cards?select=rfid_uid,authorization_status,vehicle_id,user_id,rfid_type,user_type,vehicles(plate_number,vehicle_type,vehicle_model),users(full_name,role)&limit=100";
+  String url = String(SUPABASE_URL) + "/rest/v1/rfid_cards?select=rfid_uid,authorization_status,vehicle_id,user_id,rfid_type,user_type,vehicles(plate_number,vehicle_type,vehicle_model),users(full_name,role,role_detail,cpass_id,student_id)&limit=100";
   HTTPClient http;
   http.begin(url);
   http.addHeader("apikey", SUPABASE_ANON);
@@ -958,6 +972,7 @@ void syncWhitelistToRam() {
         String plate = "NO-PLATE";
         String name = "Cardholder";
         String role = "User";
+        String cpass = "";
 
         if (!item["vehicles"].isNull()) {
           plate = String(item["vehicles"]["plate_number"] | "NO-PLATE");
@@ -965,10 +980,19 @@ void syncWhitelistToRam() {
         if (!item["users"].isNull()) {
           name = String(item["users"]["full_name"] | "Registered User");
           role = String(item["users"]["role"] | "Student");
+          String roleDetail = String(item["users"]["role_detail"] | "");
+          if (role == "OTHERS" && roleDetail.length() > 0) {
+            role = roleDetail;
+          }
+          cpass = String(item["users"]["cpass_id"] | "");
+          if (cpass.length() == 0 || cpass == "null") {
+            cpass = String(item["users"]["student_id"] | "");
+          }
+          if (cpass == "null") cpass = "";
         }
 
         if (uid.length() > 0) {
-          addCardToRam(uid, name, plate, role, uType, vId, uId, auth);
+          addCardToRam(uid, name, plate, role, uType, vId, uId, auth, "EXIT", cpass);
         }
       }
       Serial.printf("[RAM CACHE] Successfully loaded %d registered card(s) into high-speed memory!\n", ramCardCount);
@@ -1052,6 +1076,7 @@ void handleScannedTag(String uid, String altUid = "") {
   String name = "";
   String plate = "";
   String role = "";
+  String cpass = "";
   String uType = "VEHICLE";
   String vId = "";
   String uId = "";
@@ -1064,6 +1089,7 @@ void handleScannedTag(String uid, String altUid = "") {
     name = ramCards[cardIdx].name;
     plate = ramCards[cardIdx].plate;
     role = ramCards[cardIdx].role;
+    cpass = ramCards[cardIdx].cpassId;
     uType = ramCards[cardIdx].userType;
     vId = ramCards[cardIdx].vehicleId;
     uId = ramCards[cardIdx].userId;
@@ -1094,12 +1120,13 @@ void handleScannedTag(String uid, String altUid = "") {
     name = card_name;
     plate = card_plate;
     role = card_role;
+    cpass = card_cpassId;
     uType = card_userType;
     vId = card_vehicleId;
     uId = card_userId;
 
     // Cache in RAM for instantaneous subsequent reads
-    addCardToRam(finalUid, name, plate, role, uType, vId, uId, authorized, direction);
+    addCardToRam(finalUid, name, plate, role, uType, vId, uId, authorized, direction, cpass);
   }
 
   unsigned long processTimeUs = micros() - scanStartUs;
@@ -1122,6 +1149,9 @@ void handleScannedTag(String uid, String altUid = "") {
   Serial.printf("  Card ID (Dec): %s%s\n", uid.c_str(), altUid.length() > 0 ? (" | Hex: " + altUid).c_str() : "");
   if (authorized) {
     Serial.printf("  Stakeholder:   %s (%s)\n", name.c_str(), role.c_str());
+    if (cpass.length() > 0) {
+      Serial.printf("  CPASS ID:      %s\n", cpass.c_str());
+    }
     Serial.printf("  Vehicle:       %s [%s]\n", plate.c_str(), uType.c_str());
     Serial.printf("  Action:        [%s] Recorded\n", direction.c_str());
     Serial.printf("  Status:        AUTHORIZED (Matched in %.2f ms)\n", processTimeUs / 1000.0);
