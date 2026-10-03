@@ -46,14 +46,26 @@
 #include <SPI.h>
 #include <WiFi.h>
 #include <Wire.h>
+#include <Preferences.h>
 #include <hd44780.h>
 #include <hd44780ioClass/hd44780_I2Cexp.h>
 
+// BLE Libraries
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+
 // =======================
-// WIFI SETTINGS
+// BLE PROVISIONING SETTINGS (Standard 128-bit custom UUIDs — never blocked by Web Bluetooth)
 // =======================
-const char *ssid = "FTTx-4a6210";  // <-- replace with your WiFi name
-const char *password = "10008636"; // <-- replace with your WiFi password
+#define BLE_DEVICE_NAME "CHARRMPASS_EXIT_BLE"
+#define BLE_SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define BLE_CHAR_UUID    "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+
+// Wi-Fi credentials loaded dynamically from NVS Flash or SD card backup — NO hardcoding
+String currentSsid = "";
+String currentPass = "";
 
 // =======================
 // SUPABASE SETTINGS
@@ -88,6 +100,14 @@ const char *SUPABASE_ANON =
 MFRC522 rfid(RFID_SS_PIN, RFID_RST_PIN);
 SPIClass spiSD(HSPI); // Independent HSPI Controller for SD
 hd44780_I2Cexp lcd;
+Preferences preferences;
+
+// BLE Server handles
+BLEServer* pBleServer = NULL;
+BLECharacteristic* pBleCharacteristic = NULL;
+bool bleClientConnected = false;
+bool bleServerRunning = false;
+bool newWifiCredentialsReceived = false;
 
 // =======================
 // SD CARD & SCAN STATE
@@ -95,12 +115,15 @@ hd44780_I2Cexp lcd;
 bool sdCardReady = false;
 const char *WHITELIST_FILE = "/authorized_cards.csv";
 const char *OFFLINE_TXNS_FILE = "/offline_txns.csv";
+const char *WIFI_CONFIG_FILE  = "/config/wifi.cfg";  // SD Wi-Fi backup
 
 bool card_found = false;
 bool card_authorized = false;
 String card_name = "";
 String card_plate = "";
 String card_role = "";
+String card_userType = "VEHICLE";
+String card_rfidType = "LONG_RANGE";
 String card_vehicleId = "";
 String card_userId = "";
 
@@ -124,6 +147,8 @@ void lcdMsg(String line1, String line2) {
 void showReady() {
   if (wifiConnected) {
     lcdMsg("  SCAN CARD   ", "EXIT READY...");
+  } else if (bleServerRunning) {
+    lcdMsg("[BLE SETUP MODE]", "PAIR PHONE/APP");
   } else {
     lcdMsg("  SCAN CARD   ", "[OFFLINE] READY");
   }
@@ -417,9 +442,9 @@ bool checkAuthorizationOnline(String uid) {
   // Check registered users
   String url = String(SUPABASE_URL) + "/rest/v1/rfid_cards?rfid_uid=eq." +
                urlEncode(uid) +
-               "&select=authorization_status,vehicle_id,user_id,"
-               "vehicles(plate_number),"
-               "users(full_name,role)";
+               "&select=authorization_status,vehicle_id,user_id,rfid_type,user_type,"
+               "vehicles(plate_number,vehicle_type),"
+               "users(full_name,role,default_transit_mode)";
 
   HTTPClient http;
   http.begin(url);
@@ -442,13 +467,25 @@ bool checkAuthorizationOnline(String uid) {
   card_authorized = (String(card["authorization_status"].as<const char *>()) == "AUTHORIZED");
   card_vehicleId = String(card["vehicle_id"] | "");
   card_userId = String(card["user_id"] | "");
+  card_userType = String(card["user_type"] | "VEHICLE");
+  card_rfidType = String(card["rfid_type"] | "LONG_RANGE");
 
   if (!card["vehicles"].isNull()) {
     card_plate = String(card["vehicles"]["plate_number"] | "");
+    String vType = String(card["vehicles"]["vehicle_type"] | "");
+    if (vType == "None" || card_plate == "PEDESTRIAN") {
+      card_userType = "PEDESTRIAN";
+      card_rfidType = "CLOSE_RANGE";
+    }
   }
   if (!card["users"].isNull()) {
     card_name = String(card["users"]["full_name"] | "");
     card_role = String(card["users"]["role"] | "");
+    String defMode = String(card["users"]["default_transit_mode"] | "");
+    if (defMode == "PEDESTRIAN") {
+      card_userType = "PEDESTRIAN";
+      card_rfidType = "CLOSE_RANGE";
+    }
   }
 
   return card_authorized;
@@ -473,6 +510,9 @@ void insertTransactionOnline(String uid, String status, String remarks) {
   doc["gate"] = GATE_ID;
   doc["status"] = status;
   doc["remarks"] = remarks;
+  doc["user_type"] = card_userType;
+  doc["rfid_type"] = card_rfidType;
+
   if (card_vehicleId.length() > 0 && card_vehicleId != "null")
     doc["vehicle_id"] = card_vehicleId;
   if (card_userId.length() > 0 && card_userId != "null")
@@ -669,30 +709,349 @@ void processScan(String uid) {
 }
 
 // =======================
+// BLE PROVISIONING CALLBACKS
+// =======================
+class BleServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer) {
+    bleClientConnected = true;
+    Serial.println("\n[BLE] Admin/Phone Connected via Bluetooth!");
+    lcdMsg("BLUETOOTH PAIRED", "RECEIVING WIFI...");
+    tone(BUZZER_PIN, 2000, 100);
+  }
+
+  void onDisconnect(BLEServer* pServer) {
+    bleClientConnected = false;
+    Serial.println("[BLE] Bluetooth Client Disconnected.");
+    if (bleServerRunning) {
+      BLEDevice::startAdvertising();
+      showReady();
+    }
+  }
+};
+
+class BleCharCallbacks : public BLECharacteristicCallbacks {
+  void handlePayload(String rxValue) {
+    rxValue.trim();
+    if (rxValue.length() == 0) return;
+
+    Serial.println("\n[BLE] Received payload (" + String(rxValue.length()) + " bytes)...");
+    String newSsid = "";
+    String newPass = "";
+
+    // 1. Parse JSON first
+    DynamicJsonDocument doc(512);
+    DeserializationError err = deserializeJson(doc, rxValue);
+    if (!err) {
+      if (doc.containsKey("ssid")) newSsid = doc["ssid"].as<String>();
+      if (doc.containsKey("pass")) newPass = doc["pass"].as<String>();
+    }
+
+    // 2. Fallback to delimited: "SSID:PASS" or "SSID,PASS" or "WIFI:SSID,PASS"
+    if (newSsid.length() == 0) {
+      String clean = rxValue;
+      if (clean.startsWith("WIFI:") || clean.startsWith("wifi:")) {
+        clean = clean.substring(5);
+      }
+      int sep = clean.indexOf(':');
+      if (sep == -1) sep = clean.indexOf(',');
+      if (sep == -1) sep = clean.indexOf('\t');
+      if (sep > 0) {
+        newSsid = clean.substring(0, sep);
+        newPass = clean.substring(sep + 1);
+      } else {
+        newSsid = clean;
+      }
+    }
+
+    newSsid.trim();
+    newPass.trim();
+
+    if (newSsid.length() > 0) {
+      currentSsid = newSsid;
+      currentPass = newPass;
+
+      Serial.println("[BLE] Parsed SSID: '" + currentSsid + "'");
+      Serial.println("[BLE] Parsed Pass: [" + String(currentPass.length()) + " characters]");
+      lcdMsg("SAVING WIFI...", currentSsid.substring(0, 16));
+      tone(BUZZER_PIN, 2200, 200);
+
+      // Save IMMEDIATELY to NVS Flash and SD Card so credentials are never lost
+      saveWifiToNVS(currentSsid, currentPass);
+      saveWifiToSD(currentSsid, currentPass);
+
+      if (pBleCharacteristic && bleClientConnected) {
+        String resp = "{\"event\":\"SAVED\",\"ssid\":\"" + currentSsid + "\"}";
+        pBleCharacteristic->setValue(resp.c_str());
+        pBleCharacteristic->notify();
+      }
+
+      newWifiCredentialsReceived = true;
+    } else {
+      Serial.println("[BLE ERROR] Could not extract SSID from payload: " + rxValue);
+    }
+  }
+
+  void onWrite(BLECharacteristic* pCharacteristic) override {
+    String val = pCharacteristic->getValue().c_str();
+    if (val.length() == 0) {
+      uint8_t* data = pCharacteristic->getData();
+      size_t len = pCharacteristic->getLength();
+      if (data && len > 0) {
+        for (size_t i = 0; i < len; i++) val += (char)data[i];
+      }
+    }
+    handlePayload(val);
+  }
+};
+
+void sendDeviceHeartbeat() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  HTTPClient http;
+  String url = String(SUPABASE_URL) + "/rest/v1/devices?esp32_identifier=eq." + String(GATE_ID);
+  http.begin(url);
+  http.addHeader("apikey", SUPABASE_ANON);
+  http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
+  http.addHeader("Content-Type", "application/json");
+
+  String payload = "{\"status\":\"ONLINE\",\"last_online\":\"now()\"}";
+  int code = http.PATCH(payload);
+  if (code < 200 || code >= 300) {
+    http.end();
+    String upsertUrl = String(SUPABASE_URL) + "/rest/v1/devices";
+    http.begin(upsertUrl);
+    http.addHeader("apikey", SUPABASE_ANON);
+    http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("Prefer", "resolution=merge-duplicates");
+    String fullPayload = "{\"esp32_identifier\":\"" + String(GATE_ID) + 
+                         "\",\"device_name\":\"CHARRMPASS " + String(GATE_TYPE) + " Unit" + 
+                         "\",\"gate_type\":\"" + String(GATE_TYPE) + 
+                         "\",\"device_category\":\"VEHICLE_BARRIER\"" + 
+                         ",\"device_location\":\"" + String(GATE_TYPE) + " Gate\"" + 
+                         ",\"status\":\"ONLINE\",\"last_online\":\"now()\"}";
+    http.POST(fullPayload);
+  }
+  http.end();
+}
+
+void startBleServer() {
+  if (bleServerRunning) return;
+
+  Serial.println("[BLE] Initializing Bluetooth Provisioning Server...");
+
+  BLEDevice::init(BLE_DEVICE_NAME);
+  BLEDevice::setMTU(517); // Support large MTU transfers from Web Bluetooth
+  pBleServer = BLEDevice::createServer();
+  pBleServer->setCallbacks(new BleServerCallbacks());
+
+  BLEService* pService = pBleServer->createService(BLE_SERVICE_UUID);
+  pBleCharacteristic = pService->createCharacteristic(
+      BLE_CHAR_UUID,
+      BLECharacteristic::PROPERTY_READ |
+      BLECharacteristic::PROPERTY_WRITE |
+      BLECharacteristic::PROPERTY_WRITE_NR |
+      BLECharacteristic::PROPERTY_NOTIFY
+  );
+
+  pBleCharacteristic->setCallbacks(new BleCharCallbacks());
+  pBleCharacteristic->addDescriptor(new BLE2902());
+  pService->start();
+
+  BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(BLE_SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  pAdvertising->setMinPreferred(0x06);
+  pAdvertising->setMinPreferred(0x12);
+
+  BLEAdvertisementData oAdvertisementData = BLEAdvertisementData();
+  oAdvertisementData.setFlags(0x04);
+  oAdvertisementData.setCompleteServices(BLEUUID(BLE_SERVICE_UUID));
+  oAdvertisementData.setName(BLE_DEVICE_NAME);
+  pAdvertising->setAdvertisementData(oAdvertisementData);
+
+  BLEAdvertisementData oScanResponseData = BLEAdvertisementData();
+  oScanResponseData.setName(BLE_DEVICE_NAME);
+  pAdvertising->setScanResponseData(oScanResponseData);
+
+  BLEDevice::startAdvertising();
+  bleServerRunning = true;
+  Serial.println("[BLE] >>> BROADCASTING AS '" + String(BLE_DEVICE_NAME) + "' (Ready for Pairing) <<<");
+}
+
+// =======================
+// SD CARD: SAVE Wi-Fi BACKUP
+// =======================
+void saveWifiToSD(String ssid, String pass) {
+  if (!sdCardReady) return;
+  if (!SD.exists("/config")) SD.mkdir("/config");
+  File f = SD.open(WIFI_CONFIG_FILE, FILE_WRITE);
+  if (f) {
+    f.println("SSID=" + ssid);
+    f.println("PASSWORD=" + pass);
+    f.close();
+    Serial.println("[SD] Wi-Fi backup saved to " + String(WIFI_CONFIG_FILE));
+  } else {
+    Serial.println("[SD] Could not write Wi-Fi backup to SD");
+  }
+}
+
+// =======================
+// SD CARD: LOAD Wi-Fi BACKUP
+// =======================
+bool loadWifiFromSD(String &outSsid, String &outPass) {
+  if (!sdCardReady || !SD.exists(WIFI_CONFIG_FILE)) return false;
+  File f = SD.open(WIFI_CONFIG_FILE, FILE_READ);
+  if (!f) return false;
+  outSsid = ""; outPass = "";
+  while (f.available()) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if (line.startsWith("SSID=")) {
+      outSsid = line.substring(5);
+    } else if (line.startsWith("PASSWORD=")) {
+      outPass = line.substring(9);
+    }
+  }
+  f.close();
+  if (outSsid.length() > 0) {
+    Serial.println("[SD] Wi-Fi backup found. SSID: '" + outSsid + "'");
+    return true;
+  }
+  return false;
+}
+
+// =======================
+// NVS: SAVE Wi-Fi CREDENTIALS
+// =======================
+void saveWifiToNVS(String ssid, String pass) {
+  preferences.begin("charrm_wifi", false);
+  preferences.putString("ssid", ssid);
+  preferences.putString("pass", pass);
+  preferences.end();
+  Serial.println("[NVS] Wi-Fi credentials saved. SSID: '" + ssid + "'");
+}
+
+// =======================
+// DIAGNOSTIC 2.4GHz WI-FI SCANNER
+// =======================
+void scanAndPrintNetworks() {
+  Serial.println("\n[WIFI SCAN] Scanning for nearby 2.4GHz Wi-Fi networks...");
+  int n = WiFi.scanNetworks(false, true);
+  if (n <= 0) {
+    Serial.println("[WIFI SCAN] No networks found. (Make sure router is broadcasting on 2.4GHz)");
+  } else {
+    Serial.println("[WIFI SCAN] Discovered " + String(n) + " network(s):");
+    for (int i = 0; i < n; ++i) {
+      String sec = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "OPEN" : "SECURED";
+      Serial.println("   [" + String(i + 1) + "] \"" + WiFi.SSID(i) + "\" | RSSI: " + String(WiFi.RSSI(i)) + " dBm | " + sec);
+    }
+  }
+  Serial.println();
+}
+
+// =======================
 // WIFI CONNECTION & AUTO RECONNECT
 // =======================
-void connectWiFi() {
-  lcdMsg("CONNECTING WiFi", "Please wait...");
-  WiFi.begin(ssid, password);
-  int tries = 0;
-  while (WiFi.status() != WL_CONNECTED && tries < 20) {
+bool attemptWifiConnection(String testSsid, String testPass, int timeoutSeconds = 20) {
+  if (testSsid.length() == 0) return false;
+
+  Serial.println("\n===========================================");
+  Serial.println("[WIFI] Target SSID: '" + testSsid + "'");
+  if (testPass.length() > 0) {
+    Serial.println("[WIFI] Password:    [" + String(testPass.length()) + " characters]");
+  } else {
+    Serial.println("[WIFI] Password:    (NONE / OPEN NETWORK)");
+  }
+  Serial.println("===========================================");
+  lcdMsg("CONNECTING WiFi", testSsid.substring(0, 16));
+
+  // Pause BLE advertising while connecting to prevent 2.4GHz radio collisions
+  if (bleServerRunning && BLEDevice::getAdvertising()) {
+    BLEDevice::stopAdvertising();
+    delay(100);
+  }
+
+  // Proper WiFi initialization — DO NOT use WiFi.disconnect(true) which powers off radio!
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(150);
+
+  WiFi.setAutoReconnect(true);
+
+  if (testPass.length() > 0) {
+    WiFi.begin(testSsid.c_str(), testPass.c_str());
+  } else {
+    WiFi.begin(testSsid.c_str(), NULL);
+  }
+
+  Serial.print("[WIFI] Connecting to '" + testSsid + "'");
+  int elapsed = 0;
+  while (WiFi.status() != WL_CONNECTED && elapsed < timeoutSeconds * 2) {
     delay(500);
     Serial.print(".");
-    tries++;
+    elapsed++;
+
+    if (WiFi.status() == WL_CONNECT_FAILED) {
+      Serial.println("\n[WIFI ERROR] WL_CONNECT_FAILED (Code 4): Password was rejected by the router!");
+      break;
+    }
   }
+
   if (WiFi.status() == WL_CONNECTED) {
     wifiConnected = true;
-    Serial.println("\n[OK] WiFi: " + WiFi.localIP().toString());
+    WiFi.setSleep(false); // Disable WiFi modem sleep only AFTER successful connection
+    Serial.println("\n[OK] WiFi Connected! IP: " + WiFi.localIP().toString() + " | RSSI: " + String(WiFi.RSSI()) + " dBm");
     lcdMsg("WiFi CONNECTED", WiFi.localIP().toString());
-    delay(1500);
+    delay(1000);
+
+    saveWifiToNVS(testSsid, testPass);
+    saveWifiToSD(testSsid, testPass);
+    currentSsid = testSsid;
+    currentPass = testPass;
+
+    if (pBleCharacteristic && bleClientConnected) {
+      String notifyMsg = "{\"event\":\"CONNECTED\",\"ssid\":\"" + testSsid + "\",\"ip\":\"" + WiFi.localIP().toString() + "\",\"rssi\":" + String(WiFi.RSSI()) + "}";
+      pBleCharacteristic->setValue(notifyMsg.c_str());
+      pBleCharacteristic->notify();
+    }
+
     syncWhitelistToSD();
     syncOfflineTransactionsToCloud();
+    sendDeviceHeartbeat();
+    Serial.println("[WIFI] Stable connection established.");
   } else {
     wifiConnected = false;
-    Serial.println("\n[WARN] WiFi FAILED — Operating in SD Card Offline Mode");
-    lcdMsg("OFFLINE MODE", "SD Fallback Ready");
-    delay(2000);
+    int st = WiFi.status();
+    Serial.println("\n[WARN] WiFi connection failed (Status: " + String(st) + ")");
+    if (st == WL_NO_SSID_AVAIL) {
+      Serial.println("       Reason: WL_NO_SSID_AVAIL (1) — SSID '" + testSsid + "' not found! Check spelling and ensure 2.4GHz is enabled.");
+    } else if (st == WL_CONNECT_FAILED) {
+      Serial.println("       Reason: WL_CONNECT_FAILED (4) — Incorrect password.");
+    } else if (st == WL_DISCONNECTED) {
+      Serial.println("       Reason: WL_DISCONNECTED (6) — Handshake timeout or radio contention.");
+    }
+    Serial.println("[WARN] WiFi not connected. Bluetooth provisioning remains active.");
+    lcdMsg("WIFI FAILED", "Check SSID/Pass");
+
+    // Scan and list nearby 2.4GHz networks for diagnostics
+    scanAndPrintNetworks();
+
+    if (pBleCharacteristic && bleClientConnected) {
+      String errMsg = (st == WL_NO_SSID_AVAIL) ? "SSID not found on 2.4GHz" : ((st == WL_CONNECT_FAILED) ? "Incorrect password" : "Connection failed");
+      String notifyMsg = "{\"event\":\"FAILED\",\"error\":\"" + errMsg + "\",\"code\":" + String(st) + "}";
+      pBleCharacteristic->setValue(notifyMsg.c_str());
+      pBleCharacteristic->notify();
+    }
+
+    if (bleServerRunning && BLEDevice::getAdvertising()) {
+      BLEDevice::startAdvertising();
+      Serial.println("[BLE] Advertising resumed for re-provisioning.");
+    }
+
+    delay(1000);
   }
+
+  return wifiConnected;
 }
 
 // =======================
@@ -700,19 +1059,22 @@ void connectWiFi() {
 // =======================
 void setup() {
   Serial.begin(115200);
+  delay(500); // Allow UART, USB-to-Serial bridge, and power rail to stabilize
   Serial.println("\n==========================================");
   Serial.println("  CHARRMPASS — EXIT GATE (DUAL SPI BUS)");
   Serial.println("==========================================\n");
+  Serial.flush();
 
+  Serial.println("[BOOT] Initializing I2C bus and LCD...");
   Wire.begin(21, 22);
   lcd.begin(16, 2);
   lcdMsg("  CHARRMPASS  ", "EXIT GATE");
-  delay(1500);
+  delay(1000);
 
   // 1. Initialize RFID on VSPI (Default SPI: SCK 18, MISO 19, MOSI 23, SS 5)
   SPI.begin();
   rfid.PCD_Init();
-  rfid.PCD_SetAntennaGain(MFRC522::RxGain_max); // Maximize scan range
+  rfid.PCD_SetAntennaGain(MFRC522::RxGain_max);
   Serial.println("[RFID] Initialized on VSPI (SS 5, SCK 18, MISO 19, MOSI 23)");
 
   // 2. Initialize SD Card on dedicated HSPI Bus (SCK 26, MISO 14, MOSI 12, CS 13)
@@ -724,7 +1086,35 @@ void setup() {
   digitalWrite(RED_LED, HIGH);
   digitalWrite(GREEN_LED, LOW);
 
-  connectWiFi();
+  // 3. Load Saved Wi-Fi Credentials
+  // Priority 1: NVS Flash
+  preferences.begin("charrm_wifi", true);
+  currentSsid = preferences.getString("ssid", "");
+  currentPass = preferences.getString("pass", "");
+  preferences.end();
+
+  // Priority 2: SD Card Backup (/config/wifi.cfg) if NVS is empty
+  if (currentSsid.length() == 0) {
+    if (loadWifiFromSD(currentSsid, currentPass)) {
+      Serial.println("[BOOT] Loaded Wi-Fi credentials from SD backup: '" + currentSsid + "'");
+    }
+  }
+
+  if (currentSsid.length() > 0) {
+    // 4a. Credentials found (NVS or SD) — attempt WiFi FIRST (BLE paused to avoid radio contention)
+    Serial.println("[BOOT] Wi-Fi credentials found: '" + currentSsid + "'. Attempting connection...");
+    bool wifiOk = attemptWifiConnection(currentSsid, currentPass, 15);
+    if (!wifiOk) {
+      Serial.println("[BOOT] Wi-Fi connection failed. Starting BLE for re-provisioning.");
+      startBleServer();
+    }
+  } else {
+    // 4b. No credentials found anywhere — open BLE for initial provisioning
+    Serial.println("[BOOT] No saved Wi-Fi credentials found in NVS or SD. Starting BLE setup mode.");
+    lcdMsg("[NO WIFI SAVED]", "BLE SETUP MODE");
+    startBleServer();
+  }
+
   showReady();
 }
 
@@ -732,11 +1122,24 @@ void setup() {
 // MAIN LOOP
 // =======================
 void loop() {
+  // If new Wi-Fi credentials were sent from Web Bluetooth, connect now!
+  if (newWifiCredentialsReceived) {
+    newWifiCredentialsReceived = false;
+    Serial.println("\n[PROVISION] Credentials saved to NVS Flash and SD Card!");
+    Serial.println("[PROVISION] Restarting ESP32 to connect cleanly with dedicated radio & RAM...");
+    lcdMsg("WIFI SAVED!", "RESTARTING...");
+    tone(BUZZER_PIN, 2000, 100);
+    delay(100);
+    tone(BUZZER_PIN, 2500, 150);
+    delay(800); // Allow BLE notification to finish sending to browser
+    ESP.restart();
+  }
+
   // WiFi Watchdog & Reconnection Handling
   if (WiFi.status() != WL_CONNECTED) {
     if (wifiConnected) {
       wifiConnected = false;
-      Serial.println("[WARN] WiFi lost — Switched to SD Card Offline Mode");
+      Serial.println("[WARN] WiFi lost — SD Fallback Mode Active");
       showReady();
     }
   } else {
@@ -745,8 +1148,16 @@ void loop() {
       Serial.println("[OK] WiFi Reconnected! Syncing offline data...");
       syncOfflineTransactionsToCloud();
       syncWhitelistToSD();
+      sendDeviceHeartbeat();
       showReady();
     }
+  }
+
+  // Periodic Heartbeat to Supabase (Every 60 seconds)
+  static unsigned long lastHeartbeat = 0;
+  if (wifiConnected && (millis() - lastHeartbeat > 60000)) {
+    lastHeartbeat = millis();
+    sendDeviceHeartbeat();
   }
 
   // Periodic Whitelist Sync when Online
@@ -754,12 +1165,61 @@ void loop() {
     syncWhitelistToSD();
   }
 
-  // 1. Guard Manual Serial Input
+  // 1. Guard Manual Serial Input & Configuration
   if (Serial.available() > 0) {
-    String manualUid = Serial.readStringUntil('\n');
-    manualUid.trim();
-    manualUid.toUpperCase();
-    if (manualUid.length() > 0) {
+    String inputStr = Serial.readStringUntil('\n');
+    inputStr.trim();
+    if (inputStr.length() > 0) {
+      // ── WIFI:<SSID>,<PASS>  → Save credentials and restart ──
+      if (inputStr.startsWith("WIFI:") || inputStr.startsWith("wifi:")) {
+        String payload = inputStr.substring(5);
+        int comma = payload.indexOf(',');
+        if (comma != -1) {
+          currentSsid = payload.substring(0, comma);
+          currentPass = payload.substring(comma + 1);
+        } else {
+          currentSsid = payload;
+          currentPass = "";
+        }
+        currentSsid.trim();
+        currentPass.trim();
+
+        Serial.println("\n[SERIAL PROVISION] Saving credentials for SSID: '" + currentSsid + "'...");
+        saveWifiToNVS(currentSsid, currentPass);
+        saveWifiToSD(currentSsid, currentPass);
+        lcdMsg("SAVED! RESTART", currentSsid.substring(0, 16));
+        tone(BUZZER_PIN, 2200, 300);
+        delay(600);
+        ESP.restart();
+        return;
+      }
+
+      // ── RESET: → Wipe NVS credentials and SD backup, then re-enter provisioning mode ──
+      if (inputStr.equalsIgnoreCase("RESET:") || inputStr.equalsIgnoreCase("RESET")) {
+        preferences.begin("charrm_wifi", false);
+        preferences.remove("ssid");
+        preferences.remove("pass");
+        preferences.end();
+        if (sdCardReady && SD.exists(WIFI_CONFIG_FILE)) {
+          SD.remove(WIFI_CONFIG_FILE);
+          Serial.println("[RESET] SD Wi-Fi backup removed.");
+        }
+        currentSsid = "";
+        currentPass = "";
+        Serial.println("[RESET] Wi-Fi credentials cleared from NVS & SD. Restarting BLE provisioning...");
+        lcdMsg("WIFI RESET", "BLE SETUP MODE");
+        tone(BUZZER_PIN, 500, 400);
+        delay(500);
+        WiFi.disconnect(true);
+        wifiConnected = false;
+        startBleServer();
+        showReady();
+        return;
+      }
+
+      // Guard RFID UID manual input
+      String manualUid = inputStr;
+      manualUid.toUpperCase();
       Serial.println("\n[MANUAL ENCODE] Guard entered UID: " + manualUid);
       tone(BUZZER_PIN, 1800, 100);
       processScan(manualUid);

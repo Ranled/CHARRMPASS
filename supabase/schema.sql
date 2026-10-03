@@ -1,6 +1,8 @@
 -- ============================================================
--- CHARRMPASS — RELATIONAL DATABASE SCHEMA v3.0
--- Dual-Gate Architecture: ENTRY / EXIT as independent events
+-- CHARRMPASS — RELATIONAL DATABASE SCHEMA v4.0 (DUAL-MODE RFID)
+-- Dual-Range Architecture:
+--   1. PEDESTRIANS (Walking users) -> CLOSE-RANGE RFID (Turnstiles / Tap readers)
+--   2. VEHICLES (Driving users)    -> LONG-RANGE RFID (Windshield UHF / Boom barriers)
 -- Tables: users, vehicles, rfid_cards, transactions,
 --         special_tags, system_accounts, devices
 -- ============================================================
@@ -9,6 +11,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ============================================================
 -- 1. USERS TABLE
+--    Supports both Pedestrians (walkers) and Vehicle drivers
 -- ============================================================
 CREATE TABLE IF NOT EXISTS public.users (
     id                    UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
@@ -19,6 +22,7 @@ CREATE TABLE IF NOT EXISTS public.users (
     program               TEXT,
     section               TEXT,
     role                  TEXT CHECK (role IN ('Student', 'Faculty', 'Staff', 'Visitor')),
+    default_transit_mode  TEXT DEFAULT 'VEHICLE' CHECK (default_transit_mode IN ('PEDESTRIAN', 'VEHICLE', 'BOTH')),
     profile_image         TEXT,
     id_front_image        TEXT,
     id_back_image         TEXT,
@@ -28,12 +32,12 @@ CREATE TABLE IF NOT EXISTS public.users (
 );
 
 -- ============================================================
--- 2. VEHICLES TABLE
+-- 2. VEHICLES TABLE (Optional for Pedestrians)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS public.vehicles (
     id               UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     user_id          UUID REFERENCES public.users(id) ON DELETE CASCADE,
-    vehicle_type     TEXT CHECK (vehicle_type IN ('Motorcycle', 'Car', 'Truck', 'Van', 'SUV', 'Other')),
+    vehicle_type     TEXT CHECK (vehicle_type IN ('Motorcycle', 'Car', 'Truck', 'Van', 'SUV', 'None', 'Other')),
     vehicle_model    TEXT,
     plate_number     TEXT UNIQUE NOT NULL,
     vehicle_color    TEXT,
@@ -43,11 +47,14 @@ CREATE TABLE IF NOT EXISTS public.vehicles (
 
 -- ============================================================
 -- 3. RFID CARDS TABLE
---    authorization_status controls whether gate opens.
+--    rfid_type: 'CLOSE_RANGE' (13.56MHz/125kHz Pedestrian Cards)
+--               'LONG_RANGE'  (900MHz UHF / Windshield Vehicle Tags)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS public.rfid_cards (
     id                   UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     rfid_uid             TEXT UNIQUE NOT NULL,
+    rfid_type            TEXT DEFAULT 'LONG_RANGE' CHECK (rfid_type IN ('CLOSE_RANGE', 'LONG_RANGE')),
+    user_type            TEXT DEFAULT 'VEHICLE' CHECK (user_type IN ('PEDESTRIAN', 'VEHICLE')),
     vehicle_id           UUID REFERENCES public.vehicles(id) ON DELETE CASCADE,
     user_id              UUID REFERENCES public.users(id) ON DELETE CASCADE,
     authorization_status TEXT DEFAULT 'PENDING' CHECK (authorization_status IN ('PENDING', 'AUTHORIZED', 'DENIED')),
@@ -56,31 +63,35 @@ CREATE TABLE IF NOT EXISTS public.rfid_cards (
 );
 
 -- ============================================================
--- 4. TRANSACTIONS TABLE  (replaces parking_logs)
---    Every RFID tap = ONE row. direction tells you ENTRY or EXIT.
---    Entry and Exit gates write completely independently.
---
---    "Currently Inside" = COUNT(ENTRY) - COUNT(EXIT) per rfid_uid
+-- 4. TRANSACTIONS TABLE (Access Logs)
+--    Records every Pedestrian Tap and Long-Range Vehicle Pass
+--    user_type:  PEDESTRIAN | VEHICLE
+--    rfid_type:  CLOSE_RANGE | LONG_RANGE
+--    direction:  ENTRY | EXIT
 -- ============================================================
 CREATE TABLE IF NOT EXISTS public.transactions (
     id          UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     rfid_uid    TEXT NOT NULL,
+    user_type   TEXT DEFAULT 'VEHICLE' CHECK (user_type IN ('PEDESTRIAN', 'VEHICLE')),
+    rfid_type   TEXT DEFAULT 'LONG_RANGE' CHECK (rfid_type IN ('CLOSE_RANGE', 'LONG_RANGE')),
     vehicle_id  UUID REFERENCES public.vehicles(id) ON DELETE SET NULL,
     user_id     UUID REFERENCES public.users(id)    ON DELETE SET NULL,
     direction   TEXT NOT NULL CHECK (direction IN ('ENTRY', 'EXIT')),
-    gate        TEXT,                        -- device identifier of the gate that generated this
+    gate        TEXT,                        -- e.g., 'Turnstile-01 (Pedestrian)', 'Gate-01 (Vehicle Barrier)'
     timestamp   TIMESTAMPTZ DEFAULT NOW(),
     status      TEXT DEFAULT 'AUTHORIZED' CHECK (status IN ('AUTHORIZED', 'DENIED', 'PENDING')),
     remarks     TEXT
 );
 
 -- ============================================================
--- 5. SPECIAL TAGS TABLE (Visitor & Emergency cards)
+-- 5. SPECIAL TAGS TABLE (Visitor & Emergency passes)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS public.special_tags (
     id          UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     rfid_uid    TEXT UNIQUE NOT NULL,
     type        TEXT NOT NULL CHECK (type IN ('VISITOR', 'EMERGENCY')),
+    rfid_type   TEXT DEFAULT 'CLOSE_RANGE' CHECK (rfid_type IN ('CLOSE_RANGE', 'LONG_RANGE')),
+    user_type   TEXT DEFAULT 'PEDESTRIAN' CHECK (user_type IN ('PEDESTRIAN', 'VEHICLE')),
     label       TEXT,
     description TEXT,
     created_at  TIMESTAMPTZ DEFAULT NOW()
@@ -98,8 +109,9 @@ CREATE TABLE IF NOT EXISTS public.system_accounts (
 );
 
 -- ============================================================
--- 7. DEVICES TABLE (ESP32 registry)
---    gate_type: ENTRY = Entry gate unit, EXIT = Exit gate unit
+-- 7. DEVICES TABLE (ESP32 Gateway registry)
+--    device_category: VEHICLE_BARRIER (Long-Range UHF)
+--                     PEDESTRIAN_TURNSTILE (Close-Range NFC/RFID)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS public.devices (
     id               UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
@@ -107,6 +119,8 @@ CREATE TABLE IF NOT EXISTS public.devices (
     device_location  TEXT NOT NULL,
     esp32_identifier TEXT UNIQUE NOT NULL,
     gate_type        TEXT DEFAULT 'ENTRY' CHECK (gate_type IN ('ENTRY', 'EXIT', 'ADMIN')),
+    device_category  TEXT DEFAULT 'VEHICLE_BARRIER' CHECK (device_category IN ('VEHICLE_BARRIER', 'PEDESTRIAN_TURNSTILE', 'PORTABLE_SCANNER', 'ADMIN_STATION')),
+    rfid_range       TEXT DEFAULT 'LONG_RANGE' CHECK (rfid_range IN ('CLOSE_RANGE', 'LONG_RANGE', 'HYBRID')),
     status           TEXT DEFAULT 'ONLINE' CHECK (status IN ('ONLINE', 'OFFLINE')),
     last_online      TIMESTAMPTZ DEFAULT NOW()
 );
@@ -174,15 +188,81 @@ END $$;
 -- ============================================================
 DO $$
 BEGIN
+    -- 1. devices.gate_type
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name   = 'devices'
-          AND column_name  = 'gate_type'
+        WHERE table_schema = 'public' AND table_name = 'devices' AND column_name = 'gate_type'
     ) THEN
         ALTER TABLE public.devices
             ADD COLUMN gate_type TEXT DEFAULT 'ENTRY'
             CHECK (gate_type IN ('ENTRY', 'EXIT', 'ADMIN'));
+    END IF;
+
+    -- 2. rfid_cards.rfid_type & user_type
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'rfid_cards' AND column_name = 'rfid_type'
+    ) THEN
+        ALTER TABLE public.rfid_cards
+            ADD COLUMN rfid_type TEXT DEFAULT 'LONG_RANGE'
+            CHECK (rfid_type IN ('CLOSE_RANGE', 'LONG_RANGE'));
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'rfid_cards' AND column_name = 'user_type'
+    ) THEN
+        ALTER TABLE public.rfid_cards
+            ADD COLUMN user_type TEXT DEFAULT 'VEHICLE'
+            CHECK (user_type IN ('PEDESTRIAN', 'VEHICLE'));
+    END IF;
+
+    -- 3. transactions.rfid_type & user_type
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'transactions' AND column_name = 'rfid_type'
+    ) THEN
+        ALTER TABLE public.transactions
+            ADD COLUMN rfid_type TEXT DEFAULT 'LONG_RANGE'
+            CHECK (rfid_type IN ('CLOSE_RANGE', 'LONG_RANGE'));
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'transactions' AND column_name = 'user_type'
+    ) THEN
+        ALTER TABLE public.transactions
+            ADD COLUMN user_type TEXT DEFAULT 'VEHICLE'
+            CHECK (user_type IN ('PEDESTRIAN', 'VEHICLE'));
+    END IF;
+
+    -- 4. special_tags.rfid_type & user_type
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'special_tags' AND column_name = 'rfid_type'
+    ) THEN
+        ALTER TABLE public.special_tags
+            ADD COLUMN rfid_type TEXT DEFAULT 'CLOSE_RANGE'
+            CHECK (rfid_type IN ('CLOSE_RANGE', 'LONG_RANGE'));
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'special_tags' AND column_name = 'user_type'
+    ) THEN
+        ALTER TABLE public.special_tags
+            ADD COLUMN user_type TEXT DEFAULT 'PEDESTRIAN'
+            CHECK (user_type IN ('PEDESTRIAN', 'VEHICLE'));
+    END IF;
+
+    -- 5. users.default_transit_mode
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'default_transit_mode'
+    ) THEN
+        ALTER TABLE public.users
+            ADD COLUMN default_transit_mode TEXT DEFAULT 'VEHICLE'
+            CHECK (default_transit_mode IN ('PEDESTRIAN', 'VEHICLE', 'BOTH'));
     END IF;
 END $$;
 

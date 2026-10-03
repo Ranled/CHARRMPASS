@@ -56,10 +56,10 @@
 #include <hd44780ioClass/hd44780_I2Cexp.h>
 
 // =======================
-// WIFI SETTINGS
+// WIFI SETTINGS (Configure via NVS or Wi-Fi Provisioning)
 // =======================
-const char *ssid = "FTTx-4a6210";  // <-- replace with your WiFi name
-const char *password = "10008636"; // <-- replace with your WiFi password
+const char *ssid = "";
+const char *password = "";
 
 // =======================
 // SUPABASE SETTINGS
@@ -107,6 +107,8 @@ bool card_authorized = false;
 String card_name = "";
 String card_plate = "";
 String card_role = "";
+String card_userType = "VEHICLE";
+String card_rfidType = "LONG_RANGE";
 String card_vehicleId = "";
 String card_userId = "";
 
@@ -422,9 +424,9 @@ bool checkAuthorizationOnline(String uid) {
 
   String url = String(SUPABASE_URL) + "/rest/v1/rfid_cards?rfid_uid=eq." +
                urlEncode(uid) +
-               "&select=authorization_status,vehicle_id,user_id,"
-               "vehicles(plate_number),"
-               "users(full_name,role)";
+               "&select=authorization_status,vehicle_id,user_id,rfid_type,user_type,"
+               "vehicles(plate_number,vehicle_type),"
+               "users(full_name,role,default_transit_mode)";
 
   HTTPClient http;
   http.begin(url);
@@ -447,13 +449,25 @@ bool checkAuthorizationOnline(String uid) {
   card_authorized = (String(card["authorization_status"].as<const char *>()) == "AUTHORIZED");
   card_vehicleId = String(card["vehicle_id"] | "");
   card_userId = String(card["user_id"] | "");
+  card_userType = String(card["user_type"] | "VEHICLE");
+  card_rfidType = String(card["rfid_type"] | "LONG_RANGE");
 
   if (!card["vehicles"].isNull()) {
     card_plate = String(card["vehicles"]["plate_number"] | "");
+    String vType = String(card["vehicles"]["vehicle_type"] | "");
+    if (vType == "None" || card_plate == "PEDESTRIAN") {
+      card_userType = "PEDESTRIAN";
+      card_rfidType = "CLOSE_RANGE";
+    }
   }
   if (!card["users"].isNull()) {
     card_name = String(card["users"]["full_name"] | "");
     card_role = String(card["users"]["role"] | "");
+    String defMode = String(card["users"]["default_transit_mode"] | "");
+    if (defMode == "PEDESTRIAN") {
+      card_userType = "PEDESTRIAN";
+      card_rfidType = "CLOSE_RANGE";
+    }
   }
 
   return card_authorized;
@@ -478,6 +492,9 @@ void insertTransactionOnline(String uid, String status, String remarks) {
   doc["gate"] = GATE_ID;
   doc["status"] = status;
   doc["remarks"] = remarks;
+  doc["user_type"] = card_userType;
+  doc["rfid_type"] = card_rfidType;
+
   if (card_vehicleId.length() > 0 && card_vehicleId != "null")
     doc["vehicle_id"] = card_vehicleId;
   if (card_userId.length() > 0 && card_userId != "null")

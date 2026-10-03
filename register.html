@@ -189,35 +189,36 @@
                         </div>
                     </div>
 
-                    <!-- STEP 3: Vehicle Details -->
+                    <!-- STEP 3: Transit & Vehicle Details -->
                     <div class="form-step hidden" data-step="3">
                         <div class="form-section shadow-glass">
                             <h3 class="font-display font-bold text-xl text-slate-800 mb-6 flex items-center gap-2">
-                                <i data-lucide="car" class="w-5 h-5 text-charm-dark"></i> Vehicle Information
+                                <i data-lucide="car" class="w-5 h-5 text-charm-dark"></i> Transit &amp; Vehicle Information
                             </h3>
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
                                 <div>
-                                    <label class="form-label">Vehicle Type *</label>
+                                    <label class="form-label">Transit / Vehicle Mode *</label>
                                     <select id="regVehType" class="form-input" required onchange="toggleMotorcyclePhoto()">
-                                        <option value="">Select...</option>
-                                        <option value="Car">Car</option>
-                                        <option value="SUV">SUV</option>
-                                        <option value="Motorcycle">Motorcycle</option>
-                                        <option value="Van">Van</option>
-                                        <option value="Truck">Truck</option>
+                                        <option value="">Select Transit Mode...</option>
+                                        <option value="None">🚶 None (Walking Pedestrian - Close-Range RFID)</option>
+                                        <option value="Car">🚗 Car (Long-Range UHF Tag)</option>
+                                        <option value="SUV">🚙 SUV (Long-Range UHF Tag)</option>
+                                        <option value="Motorcycle">🏍️ Motorcycle (Long-Range UHF Tag)</option>
+                                        <option value="Van">🚐 Van (Long-Range UHF Tag)</option>
+                                        <option value="Truck">🚚 Truck (Long-Range UHF Tag)</option>
                                     </select>
                                 </div>
-                                <div>
+                                <div id="fieldVehModel">
                                     <label class="form-label">Vehicle Model *</label>
-                                    <input type="text" id="regVehModel" class="form-input" required placeholder="e.g. Honda Civic">
+                                    <input type="text" id="regVehModel" class="form-input" required placeholder="e.g. Honda Civic (or Walking)">
                                 </div>
-                                <div>
-                                    <label class="form-label">Plate Number *</label>
-                                    <input type="text" id="regPlate" class="form-input uppercase" required placeholder="ABC-1234">
+                                <div id="fieldPlate">
+                                    <label class="form-label">Plate / Identifier *</label>
+                                    <input type="text" id="regPlate" class="form-input uppercase" required placeholder="ABC-1234 (or PEDESTRIAN)">
                                 </div>
-                                <div>
+                                <div id="fieldVehColor">
                                     <label class="form-label">Vehicle Color *</label>
-                                    <input type="text" id="regVehColor" class="form-input" required placeholder="e.g. Black, White">
+                                    <input type="text" id="regVehColor" class="form-input" required placeholder="e.g. Black, White (or N/A)">
                                 </div>
                             </div>
 

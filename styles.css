@@ -586,3 +586,32 @@ body {
     width: 100%;
     height: 100%;
 }
+
+/* ===================== */
+/* Print Styles          */
+/* ===================== */
+@media print {
+    aside, header, nav, .sidebar-item, button:not(.printable-btn) {
+        display: none !important;
+    }
+    body {
+        background: #fff !important;
+        color: #000 !important;
+    }
+    .campus-bg {
+        background: none !important;
+    }
+    #reviewModal, #userHistoryModal {
+        position: static !important;
+        inset: auto !important;
+        display: block !important;
+        background: transparent !important;
+        padding: 0 !important;
+    }
+    #reviewModalContent, #userHistoryModalContent {
+        box-shadow: none !important;
+        border: 1px solid #ccc !important;
+        max-width: 100% !important;
+        max-height: none !important;
+    }
+}

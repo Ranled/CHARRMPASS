@@ -60,7 +60,9 @@
                 <div class="lg:hidden font-display font-bold text-xl text-charm-yellow">CP</div>
             </div>
             <nav class="flex-1 py-6 flex flex-col gap-2 px-3 overflow-y-auto custom-scrollbar">
-                <a onclick="switchView('entry')" class="sidebar-item active cursor-pointer" id="nav-entry"><i
+                <a onclick="switchView('dual')" class="sidebar-item active cursor-pointer" id="nav-dual"><i
+                        data-lucide="columns" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Dual Gate View</span></a>
+                <a onclick="switchView('entry')" class="sidebar-item cursor-pointer" id="nav-entry"><i
                         data-lucide="log-in" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Entry
                         Gate</span></a>
                 <a onclick="switchView('exit')" class="sidebar-item cursor-pointer" id="nav-exit"><i
@@ -83,27 +85,41 @@
         <main class="flex-1 flex flex-col h-screen overflow-hidden">
             <!-- HEADER -->
             <header
-                class="h-20 glass-header border-b border-white/40 flex items-center justify-between px-8 z-10 shrink-0 shadow-sm">
-                <div class="flex items-center gap-4">
+                class="h-20 glass-header border-b border-white/40 flex items-center justify-between px-4 sm:px-8 z-10 shrink-0 shadow-sm gap-2">
+                <div class="flex items-center gap-3 sm:gap-6">
                     <div class="flex flex-col">
-                        <span class="text-sm font-semibold text-slate-500 uppercase tracking-wider"
+                        <span class="text-[11px] sm:text-xs font-semibold text-slate-500 uppercase tracking-wider"
                             id="currentDate">...</span>
-                        <span class="text-2xl font-display font-bold text-charm-dark tracking-tight"
+                        <span class="text-xl sm:text-2xl font-display font-bold text-charm-dark tracking-tight"
                             id="realTimeClock">--:--:--</span>
                     </div>
+
+                    <!-- Quick View Switcher Tabs (Tablet & Desktop Optimized) -->
+                    <div class="hidden sm:flex items-center bg-slate-100/90 p-1 rounded-2xl border border-slate-200 shadow-inner">
+                        <button onclick="switchView('dual')" id="tabBtn-dual" class="guard-view-tab px-3 py-1.5 rounded-xl text-xs font-bold transition-all bg-charm-dark text-white shadow-sm flex items-center gap-1.5">
+                            <i data-lucide="columns" class="w-3.5 h-3.5"></i> Dual Gate (1-Screen)
+                        </button>
+                        <button onclick="switchView('entry')" id="tabBtn-entry" class="guard-view-tab px-3 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900 flex items-center gap-1.5">
+                            <i data-lucide="log-in" class="w-3.5 h-3.5 text-green-600"></i> Entry Only
+                        </button>
+                        <button onclick="switchView('exit')" id="tabBtn-exit" class="guard-view-tab px-3 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900 flex items-center gap-1.5">
+                            <i data-lucide="log-out" class="w-3.5 h-3.5 text-blue-600"></i> Exit Only
+                        </button>
+                    </div>
                 </div>
-                <div class="flex items-center gap-6">
+
+                <div class="flex items-center gap-3 sm:gap-6">
                     <div id="dbStatusBadge"
-                        class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-yellow-100 text-yellow-700 text-xs font-bold uppercase tracking-wide border border-yellow-200 shadow-sm">
+                        class="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-yellow-100 text-yellow-700 text-[10px] sm:text-xs font-bold uppercase tracking-wide border border-yellow-200 shadow-sm">
                         <span class="relative flex h-2 w-2"><span
                                 class="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-75"></span><span
                                 class="relative inline-flex rounded-full h-2 w-2 bg-yellow-500"></span></span>Connecting...
                     </div>
-                    <button class="relative p-2 rounded-full hover:bg-white/50 transition-colors text-slate-600"><i
+                    <button onclick="openGuardSettingsModal()" class="relative p-2 rounded-full hover:bg-white/50 transition-colors text-slate-600"><i
                             data-lucide="bell" class="w-5 h-5"></i><span
                             class="absolute top-1.5 right-1.5 w-2 h-2 bg-charm-yellow rounded-full border border-white"></span></button>
                     <div class="h-8 w-px bg-slate-300"></div>
-                    <div class="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity relative"
+                    <div class="flex items-center gap-2 sm:gap-3 cursor-pointer hover:opacity-80 transition-opacity relative"
                         id="profileTrigger">
                         <div class="text-right hidden sm:block">
                             <div class="text-sm font-bold text-slate-800" id="guardName">Guard User</div>
@@ -111,7 +127,7 @@
                                 id="guardRole">On Duty</div>
                         </div>
                         <img src="https://ui-avatars.com/api/?name=Guard+User&background=0E4B3A&color=fff" alt="Guard"
-                            class="w-10 h-10 rounded-full border-2 border-white shadow-md" id="guardAvatar">
+                            class="w-9 h-9 sm:w-10 sm:h-10 rounded-full border-2 border-white shadow-md" id="guardAvatar">
                     </div>
                 </div>
             </header>
@@ -119,8 +135,248 @@
             <!-- CONTENT -->
             <div class="flex-1 overflow-y-auto custom-scrollbar relative">
 
+                <!-- VIEW 0: DUAL GATE SPLIT MONITOR (HALF ENTRY, HALF EXIT - 1 SCREEN TABLET FIT) -->
+                <div id="view-dual" class="app-view p-3 sm:p-5 flex flex-col h-full gap-3 overflow-hidden animate-slide-up">
+                    <!-- Top Status Bar in Dual View -->
+                    <div class="flex flex-wrap items-center justify-between gap-2 px-1 shrink-0">
+                        <div class="flex items-center gap-2.5">
+                            <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                            <h2 class="text-lg sm:text-xl font-display font-extrabold text-slate-800 tracking-tight">Dual Gate Live Hub</h2>
+                            <span class="hidden md:inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-200/80 text-slate-700 uppercase">Simultaneous Split Monitor</span>
+                        </div>
+                        <div class="flex items-center gap-2 sm:gap-3 text-xs font-bold">
+                            <div class="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-sm">
+                                <i data-lucide="log-in" class="w-3.5 h-3.5 text-emerald-600"></i>
+                                <span>Entries: <strong id="statDualEntries" class="font-mono font-black text-emerald-900">0</strong></span>
+                            </div>
+                            <div class="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-blue-50 text-blue-800 border border-blue-200 shadow-sm">
+                                <i data-lucide="log-out" class="w-3.5 h-3.5 text-blue-600"></i>
+                                <span>Exits: <strong id="statDualExits" class="font-mono font-black text-blue-900">0</strong></span>
+                            </div>
+                            <div class="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-yellow-50 text-amber-900 border border-yellow-200 shadow-sm">
+                                <i data-lucide="car" class="w-3.5 h-3.5 text-amber-600"></i>
+                                <span>Inside: <strong id="statDualInside" class="font-mono font-black text-amber-900">0</strong></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 50/50 Dual Split Monitor Grid -->
+                    <div class="flex-1 grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4 min-h-0 overflow-hidden">
+
+                        <!-- ══ LEFT HALF: ENTRY GATE ══ -->
+                        <div class="glass-card rounded-2xl sm:rounded-3xl p-3.5 sm:p-4 flex flex-col h-full min-h-0 shadow-glass border-2 border-emerald-500/20 bg-white/70 backdrop-blur-md overflow-hidden">
+                            <!-- Gate Header -->
+                            <div class="flex items-center justify-between pb-2.5 border-b border-emerald-100 shrink-0">
+                                <div class="flex items-center gap-2">
+                                    <div class="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold">
+                                        <i data-lucide="log-in" class="w-4 h-4 text-emerald-600"></i>
+                                    </div>
+                                    <div>
+                                        <h3 class="font-display font-extrabold text-sm sm:text-base text-slate-800 leading-tight">ENTRY GATE</h3>
+                                        <p class="text-[10px] text-slate-500 font-medium">Inbound Access Control</p>
+                                    </div>
+                                </div>
+                                <span class="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> LIVE
+                                </span>
+                            </div>
+
+                            <!-- Gate Content Area -->
+                            <div class="flex-1 flex flex-col gap-2.5 pt-2.5 min-h-0 overflow-hidden">
+                                <!-- Scanner & Live Result Display Card -->
+                                <div class="relative flex-1 min-h-[160px] max-h-[220px] rounded-2xl border border-emerald-100 bg-white/80 p-3 flex flex-col justify-center overflow-hidden shadow-sm">
+                                    <!-- Empty / Waiting State -->
+                                    <div id="scanResultEmptyDualEntry" class="flex flex-col items-center justify-center text-center">
+                                        <div id="radarContainerDualEntry" class="relative w-20 h-20 mb-2 flex items-center justify-center">
+                                            <div class="absolute inset-0 rounded-full border-2 border-emerald-200 wave-1"></div>
+                                            <div class="absolute inset-2 rounded-full border-2 border-emerald-100 wave-2"></div>
+                                            <div id="radarCenterDualEntry" class="relative w-12 h-12 bg-emerald-50 rounded-full flex items-center justify-center shadow-sm border border-emerald-200">
+                                                <i data-lucide="nfc" id="radarIconDualEntry" class="w-6 h-6 text-emerald-600"></i>
+                                            </div>
+                                        </div>
+                                        <div id="scanStatusTextDualEntry" class="text-sm sm:text-base font-bold font-display text-emerald-800">ENTRY READY</div>
+                                        <div id="scanSubtextDualEntry" class="text-[11px] font-medium text-slate-400">Waiting for card or UHF scan...</div>
+                                    </div>
+
+                                    <!-- Scanned Data State -->
+                                    <div id="scanResultDataDualEntry" class="hidden flex-1 flex flex-col justify-between animate-fade-in">
+                                        <div class="flex items-start justify-between gap-3">
+                                            <div class="flex items-center gap-3">
+                                                <div class="relative shrink-0">
+                                                    <div id="resIconContainerDualEntry" class="hidden w-12 h-12 sm:w-14 sm:h-14 rounded-xl flex items-center justify-center shadow-sm border border-emerald-200 bg-emerald-50 text-emerald-700">
+                                                        <i data-lucide="user" class="w-7 h-7"></i>
+                                                    </div>
+                                                    <img id="resProfileImageDualEntry" src="" alt="Profile" class="w-12 h-12 sm:w-14 sm:h-14 rounded-xl object-cover shadow-sm border border-emerald-200">
+                                                    <div id="resBadgeDualEntry" class="absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-white shadow-sm bg-emerald-600 text-[10px]">
+                                                        <i data-lucide="check" class="w-3 h-3"></i>
+                                                    </div>
+                                                </div>
+                                                <div class="overflow-hidden">
+                                                    <h4 id="resNameDualEntry" class="font-display font-bold text-sm sm:text-base text-slate-800 truncate">--</h4>
+                                                    <div class="flex items-center gap-1.5 mt-0.5">
+                                                        <span id="resRoleDualEntry" class="px-2 py-0.2 rounded text-[10px] font-extrabold bg-slate-100 text-slate-700 uppercase">--</span>
+                                                        <span id="resProgramDualEntry" class="text-[11px] text-slate-500 truncate">--</span>
+                                                    </div>
+                                                    <div class="text-[10px] font-mono text-slate-400 mt-0.5">UID: <span id="resUidDualEntry" class="font-bold text-slate-600">--</span></div>
+                                                </div>
+                                            </div>
+                                            <div id="resStatusLabelDualEntry" class="shrink-0 px-2.5 py-1 rounded-xl font-bold text-xs shadow-sm border bg-emerald-50 border-emerald-200 text-emerald-700">
+                                                ✓ AUTHORIZED
+                                            </div>
+                                        </div>
+
+                                        <!-- Vehicle Info Strip -->
+                                        <div class="grid grid-cols-4 gap-1.5 p-2 rounded-xl bg-slate-50 border border-slate-100 text-center text-[10px] mt-2">
+                                            <div>
+                                                <span class="text-slate-400 block font-semibold">Plate</span>
+                                                <span id="resPlateDualEntry" class="font-mono font-bold text-slate-800 bg-charm-yellow/20 px-1 rounded block truncate">--</span>
+                                            </div>
+                                            <div>
+                                                <span class="text-slate-400 block font-semibold">Type</span>
+                                                <span id="resVehTypeDualEntry" class="font-bold text-slate-700 block truncate">--</span>
+                                            </div>
+                                            <div>
+                                                <span class="text-slate-400 block font-semibold">Model</span>
+                                                <span id="resVehModelDualEntry" class="font-bold text-slate-700 block truncate">--</span>
+                                            </div>
+                                            <div>
+                                                <span class="text-slate-400 block font-semibold">Color</span>
+                                                <span id="resColorDualEntry" class="font-bold text-slate-700 block truncate">--</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Manual Entry Quick Input -->
+                                <div class="flex gap-1.5 shrink-0">
+                                    <input type="text" id="demoUidInputDualEntry" placeholder="Manual Entry UID..." class="flex-1 text-xs px-3 py-2 rounded-xl border border-slate-200 bg-white uppercase font-mono font-bold focus:ring-2 focus:ring-charm-dark outline-none">
+                                    <button onclick="processManualGateScan('ENTRY')" class="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold shadow-sm transition-all flex items-center gap-1">
+                                        <i data-lucide="scan" class="w-3.5 h-3.5"></i> Scan
+                                    </button>
+                                </div>
+
+                                <!-- Recent Entries Mini Ticker -->
+                                <div class="flex-1 flex flex-col min-h-0 overflow-hidden border-t border-slate-100 pt-2">
+                                    <div class="flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1 px-1">
+                                        <span>Recent Entry Activity</span>
+                                        <span class="text-emerald-700">Live Feed</span>
+                                    </div>
+                                    <div id="recentScansContainerDualEntry" class="flex-1 overflow-y-auto custom-scrollbar space-y-1.5 pr-0.5">
+                                        <div class="text-center text-slate-400 text-xs py-4">No recent entries</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- ══ RIGHT HALF: EXIT GATE ══ -->
+                        <div class="glass-card rounded-2xl sm:rounded-3xl p-3.5 sm:p-4 flex flex-col h-full min-h-0 shadow-glass border-2 border-blue-500/20 bg-white/70 backdrop-blur-md overflow-hidden">
+                            <!-- Gate Header -->
+                            <div class="flex items-center justify-between pb-2.5 border-b border-blue-100 shrink-0">
+                                <div class="flex items-center gap-2">
+                                    <div class="w-7 h-7 rounded-lg bg-blue-100 text-blue-800 flex items-center justify-center font-bold">
+                                        <i data-lucide="log-out" class="w-4 h-4 text-blue-600"></i>
+                                    </div>
+                                    <div>
+                                        <h3 class="font-display font-extrabold text-sm sm:text-base text-slate-800 leading-tight">EXIT GATE</h3>
+                                        <p class="text-[10px] text-slate-500 font-medium">Outbound Departure &amp; Logout</p>
+                                    </div>
+                                </div>
+                                <span class="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-blue-100 text-blue-800 border border-blue-300 flex items-center gap-1">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span> LIVE
+                                </span>
+                            </div>
+
+                            <!-- Gate Content Area -->
+                            <div class="flex-1 flex flex-col gap-2.5 pt-2.5 min-h-0 overflow-hidden">
+                                <!-- Scanner & Live Result Display Card -->
+                                <div class="relative flex-1 min-h-[160px] max-h-[220px] rounded-2xl border border-blue-100 bg-white/80 p-3 flex flex-col justify-center overflow-hidden shadow-sm">
+                                    <!-- Empty / Waiting State -->
+                                    <div id="scanResultEmptyDualExit" class="flex flex-col items-center justify-center text-center">
+                                        <div id="radarContainerDualExit" class="relative w-20 h-20 mb-2 flex items-center justify-center">
+                                            <div class="absolute inset-0 rounded-full border-2 border-blue-200 wave-1"></div>
+                                            <div class="absolute inset-2 rounded-full border-2 border-blue-100 wave-2"></div>
+                                            <div id="radarCenterDualExit" class="relative w-12 h-12 bg-blue-50 rounded-full flex items-center justify-center shadow-sm border border-blue-200">
+                                                <i data-lucide="nfc" id="radarIconDualExit" class="w-6 h-6 text-blue-600"></i>
+                                            </div>
+                                        </div>
+                                        <div id="scanStatusTextDualExit" class="text-sm sm:text-base font-bold font-display text-blue-800">EXIT READY</div>
+                                        <div id="scanSubtextDualExit" class="text-[11px] font-medium text-slate-400">Waiting for card or UHF scan...</div>
+                                    </div>
+
+                                    <!-- Scanned Data State -->
+                                    <div id="scanResultDataDualExit" class="hidden flex-1 flex flex-col justify-between animate-fade-in">
+                                        <div class="flex items-start justify-between gap-3">
+                                            <div class="flex items-center gap-3">
+                                                <div class="relative shrink-0">
+                                                    <div id="resIconContainerDualExit" class="hidden w-12 h-12 sm:w-14 sm:h-14 rounded-xl flex items-center justify-center shadow-sm border border-blue-200 bg-blue-50 text-blue-700">
+                                                        <i data-lucide="user" class="w-7 h-7"></i>
+                                                    </div>
+                                                    <img id="resProfileImageDualExit" src="" alt="Profile" class="w-12 h-12 sm:w-14 sm:h-14 rounded-xl object-cover shadow-sm border border-blue-200">
+                                                    <div id="resBadgeDualExit" class="absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-white shadow-sm bg-blue-600 text-[10px]">
+                                                        <i data-lucide="check" class="w-3 h-3"></i>
+                                                    </div>
+                                                </div>
+                                                <div class="overflow-hidden">
+                                                    <h4 id="resNameDualExit" class="font-display font-bold text-sm sm:text-base text-slate-800 truncate">--</h4>
+                                                    <div class="flex items-center gap-1.5 mt-0.5">
+                                                        <span id="resRoleDualExit" class="px-2 py-0.2 rounded text-[10px] font-extrabold bg-slate-100 text-slate-700 uppercase">--</span>
+                                                        <span id="resProgramDualExit" class="text-[11px] text-slate-500 truncate">--</span>
+                                                    </div>
+                                                    <div class="text-[10px] font-mono text-slate-400 mt-0.5">UID: <span id="resUidDualExit" class="font-bold text-slate-600">--</span></div>
+                                                </div>
+                                            </div>
+                                            <div id="resStatusLabelDualExit" class="shrink-0 px-2.5 py-1 rounded-xl font-bold text-xs shadow-sm border bg-blue-50 border-blue-200 text-blue-700">
+                                                ✓ AUTHORIZED
+                                            </div>
+                                        </div>
+
+                                        <!-- Vehicle Info Strip -->
+                                        <div class="grid grid-cols-4 gap-1.5 p-2 rounded-xl bg-slate-50 border border-slate-100 text-center text-[10px] mt-2">
+                                            <div>
+                                                <span class="text-slate-400 block font-semibold">Plate</span>
+                                                <span id="resPlateDualExit" class="font-mono font-bold text-slate-800 bg-charm-yellow/20 px-1 rounded block truncate">--</span>
+                                            </div>
+                                            <div>
+                                                <span class="text-slate-400 block font-semibold">Type</span>
+                                                <span id="resVehTypeDualExit" class="font-bold text-slate-700 block truncate">--</span>
+                                            </div>
+                                            <div>
+                                                <span class="text-slate-400 block font-semibold">Model</span>
+                                                <span id="resVehModelDualExit" class="font-bold text-slate-700 block truncate">--</span>
+                                            </div>
+                                            <div>
+                                                <span class="text-slate-400 block font-semibold">Color</span>
+                                                <span id="resColorDualExit" class="font-bold text-slate-700 block truncate">--</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Manual Exit Quick Input -->
+                                <div class="flex gap-1.5 shrink-0">
+                                    <input type="text" id="demoUidInputDualExit" placeholder="Manual Exit UID..." class="flex-1 text-xs px-3 py-2 rounded-xl border border-slate-200 bg-white uppercase font-mono font-bold focus:ring-2 focus:ring-charm-dark outline-none">
+                                    <button onclick="processManualGateScan('EXIT')" class="px-3.5 py-2 bg-blue-700 hover:bg-blue-800 text-white rounded-xl text-xs font-bold shadow-sm transition-all flex items-center gap-1">
+                                        <i data-lucide="scan" class="w-3.5 h-3.5"></i> Scan
+                                    </button>
+                                </div>
+
+                                <!-- Recent Exits Mini Ticker -->
+                                <div class="flex-1 flex flex-col min-h-0 overflow-hidden border-t border-slate-100 pt-2">
+                                    <div class="flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1 px-1">
+                                        <span>Recent Exit Activity</span>
+                                        <span class="text-blue-700">Live Feed</span>
+                                    </div>
+                                    <div id="recentScansContainerDualExit" class="flex-1 overflow-y-auto custom-scrollbar space-y-1.5 pr-0.5">
+                                        <div class="text-center text-slate-400 text-xs py-4">No recent exits</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- VIEW 1: ENTRY GATE MONITOR -->
-                <div id="view-entry" class="app-view p-6 lg:p-8 flex flex-col gap-6 animate-slide-up">
+                <div id="view-entry" class="app-view hidden p-6 lg:p-8 flex flex-col gap-6 animate-slide-up">
                     <div class="flex items-center justify-between">
                         <div>
                             <div class="flex items-center gap-3">

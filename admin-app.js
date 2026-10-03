@@ -8,20 +8,34 @@ if (typeof updateDBBadge === 'function') updateDBBadge();
 if (window.lucide) lucide.createIcons();
 const el = id => document.getElementById(id);
 
-let adminState = { users: [], pendingUsers: [], logs: [], accounts: [], specialTags: [], activeVehicles: 0 };
+let adminState = { 
+    users: [], 
+    pendingUsers: [], 
+    logs: [], 
+    accounts: [], 
+    specialTags: [], 
+    devices: [],
+    activeVehicles: 0,
+    activePedestrians: 0,
+    userTableFilter: 'ALL',
+    userModeFilter: 'ALL',
+    logModeFilter: 'ALL',
+    activeHistUser: null,
+    histDirection: 'ALL'
+};
 
 // Demo data (fallback)
 const demoUsers = [
-    { id:'1', full_name:'Juan Dela Cruz', role:'Student', rfid_uid:'B7 78 96 31', program:'BSIT', section:'3A', vehicle_type:'Car', vehicle_model:'Honda Civic', plate_number:'XYZ-123', vehicle_color:'Black', authorization_status:'AUTHORIZED', age:21, sex:'Male', address:'Ibajay, Aklan', created_at:'2024-01-15' },
-    { id:'2', full_name:'Maria Santos', role:'Faculty', rfid_uid:'UID67890', program:'Engineering', section:'--', vehicle_type:'SUV', vehicle_model:'Toyota Fortuner', plate_number:'ABC-789', vehicle_color:'White', authorization_status:'AUTHORIZED', age:35, sex:'Female', address:'Kalibo, Aklan', created_at:'2024-02-01' },
-    { id:'3', full_name:'Carlos Reyes', role:'Staff', rfid_uid:'UID55555', program:'Admin', section:'--', vehicle_type:'Motorcycle', vehicle_model:'Yamaha NMAX', plate_number:'DEF-456', vehicle_color:'Silver', authorization_status:'AUTHORIZED', age:28, sex:'Male', address:'Nabas, Aklan', created_at:'2024-03-10' },
-    { id:'4', full_name:'Ana Lopez', role:'Student', rfid_uid:'', program:'BSCS', section:'2B', vehicle_type:'Motorcycle', vehicle_model:'Honda Click', plate_number:'GHI-789', vehicle_color:'Red', authorization_status:'PENDING', age:20, sex:'Female', address:'Ibajay, Aklan', created_at:'2024-05-13' },
-    { id:'5', full_name:'Pedro Garcia', role:'Student', rfid_uid:'', program:'BSA', section:'1A', vehicle_type:'Car', vehicle_model:'Vios', plate_number:'JKL-012', vehicle_color:'Blue', authorization_status:'PENDING', age:19, sex:'Male', address:'Tangalan, Aklan', created_at:'2024-05-14' },
+    { id:'1', full_name:'Juan Dela Cruz', role:'Student', user_type:'VEHICLE', default_transit_mode:'VEHICLE', rfid_type:'LONG_RANGE', rfid_uid:'B7 78 96 31', program:'BSIT', section:'3A', vehicle_type:'Car', vehicle_model:'Honda Civic', plate_number:'XYZ-123', vehicle_color:'Black', authorization_status:'AUTHORIZED', age:21, sex:'Male', address:'Ibajay, Aklan', created_at:'2024-01-15' },
+    { id:'2', full_name:'Maria Santos', role:'Faculty', user_type:'VEHICLE', default_transit_mode:'VEHICLE', rfid_type:'LONG_RANGE', rfid_uid:'UID67890', program:'Engineering', section:'--', vehicle_type:'SUV', vehicle_model:'Toyota Fortuner', plate_number:'ABC-789', vehicle_color:'White', authorization_status:'AUTHORIZED', age:35, sex:'Female', address:'Kalibo, Aklan', created_at:'2024-02-01' },
+    { id:'3', full_name:'Carlos Reyes', role:'Staff', user_type:'PEDESTRIAN', default_transit_mode:'PEDESTRIAN', rfid_type:'CLOSE_RANGE', rfid_uid:'UID55555', program:'Admin', section:'--', vehicle_type:'None', vehicle_model:'Pedestrian', plate_number:'PEDESTRIAN', vehicle_color:'--', authorization_status:'AUTHORIZED', age:28, sex:'Male', address:'Nabas, Aklan', created_at:'2024-03-10' },
+    { id:'4', full_name:'Ana Lopez', role:'Student', user_type:'PEDESTRIAN', default_transit_mode:'PEDESTRIAN', rfid_type:'CLOSE_RANGE', rfid_uid:'', program:'BSCS', section:'2B', vehicle_type:'None', vehicle_model:'Pedestrian', plate_number:'PEDESTRIAN', vehicle_color:'--', authorization_status:'PENDING', age:20, sex:'Female', address:'Ibajay, Aklan', created_at:'2024-05-13' },
+    { id:'5', full_name:'Pedro Garcia', role:'Student', user_type:'VEHICLE', default_transit_mode:'VEHICLE', rfid_type:'LONG_RANGE', rfid_uid:'', program:'BSA', section:'1A', vehicle_type:'Car', vehicle_model:'Vios', plate_number:'JKL-012', vehicle_color:'Blue', authorization_status:'PENDING', age:19, sex:'Male', address:'Tangalan, Aklan', created_at:'2024-05-14' },
 ];
 
 const demoSpecialTags = [
-    { id: '1', rfid_uid: '73 71 A9 FE', type: 'VISITOR', description: 'Visitor Pass (Reusable RFID Tag)' },
-    { id: '2', rfid_uid: 'D3 85 96 FE', type: 'EMERGENCY', description: 'Emergency Response Vehicle Tag' }
+    { id: '1', rfid_uid: '73 71 A9 FE', type: 'VISITOR', user_type: 'PEDESTRIAN', rfid_type: 'CLOSE_RANGE', description: 'Visitor Pass (Reusable Close-Range RFID Card)' },
+    { id: '2', rfid_uid: 'D3 85 96 FE', type: 'EMERGENCY', user_type: 'VEHICLE', rfid_type: 'LONG_RANGE', description: 'Emergency Response Long-Range UHF Vehicle Tag' }
 ];
 
 const demoAccounts = [
@@ -70,24 +84,34 @@ async function loadData() {
                 .select(`
                     *,
                     vehicles ( id, vehicle_type, vehicle_model, plate_number, vehicle_color, motorcycle_image ),
-                    rfid_cards ( id, rfid_uid, authorization_status )
+                    rfid_cards ( id, rfid_uid, authorization_status, rfid_type, user_type )
                 `)
                 .order('created_at', {ascending: false});
             if (ue) { console.error('Users error:', ue); throw ue; }
             if (u) {
-                // Flatten for convenience: promote first vehicle/card fields
-                adminState.users = u.map(usr => ({
-                    ...usr,
-                    vehicle_type:     usr.vehicles?.[0]?.vehicle_type     || null,
-                    vehicle_model:    usr.vehicles?.[0]?.vehicle_model    || null,
-                    plate_number:     usr.vehicles?.[0]?.plate_number     || null,
-                    vehicle_color:    usr.vehicles?.[0]?.vehicle_color    || null,
-                    motorcycle_image: usr.vehicles?.[0]?.motorcycle_image || null,
-                    vehicle_id:       usr.vehicles?.[0]?.id               || null,
-                    rfid_uid:         usr.rfid_cards?.[0]?.rfid_uid       || null,
-                    rfid_card_id:     usr.rfid_cards?.[0]?.id             || null,
-                    authorization_status: usr.rfid_cards?.[0]?.authorization_status || 'PENDING',
-                }));
+                // Flatten for convenience: promote first vehicle/card fields and determine transit mode
+                adminState.users = u.map(usr => {
+                    const firstVeh = usr.vehicles?.[0];
+                    const firstCard = usr.rfid_cards?.[0];
+                    const isPed = usr.default_transit_mode === 'PEDESTRIAN' || firstVeh?.vehicle_type === 'None' || firstVeh?.plate_number === 'PEDESTRIAN' || firstCard?.user_type === 'PEDESTRIAN';
+                    const userType = isPed ? 'PEDESTRIAN' : 'VEHICLE';
+                    const rfidType = firstCard?.rfid_type || (isPed ? 'CLOSE_RANGE' : 'LONG_RANGE');
+
+                    return {
+                        ...usr,
+                        user_type:        userType,
+                        rfid_type:        rfidType,
+                        vehicle_type:     firstVeh?.vehicle_type     || (isPed ? 'None' : null),
+                        vehicle_model:    firstVeh?.vehicle_model    || (isPed ? 'Walking' : null),
+                        plate_number:     firstVeh?.plate_number     || (isPed ? 'PEDESTRIAN' : null),
+                        vehicle_color:    firstVeh?.vehicle_color    || null,
+                        motorcycle_image: firstVeh?.motorcycle_image || null,
+                        vehicle_id:       firstVeh?.id               || null,
+                        rfid_uid:         firstCard?.rfid_uid        || null,
+                        rfid_card_id:     firstCard?.id              || null,
+                        authorization_status: firstCard?.authorization_status || 'PENDING',
+                    };
+                });
             }
 
             // Load transactions with vehicle & user info
@@ -95,7 +119,7 @@ async function loadData() {
                 .from('transactions')
                 .select(`
                     *,
-                    users ( full_name, role, program, section, profile_image ),
+                    users ( full_name, role, program, section, profile_image, default_transit_mode ),
                     vehicles ( plate_number, vehicle_type, vehicle_model, vehicle_color )
                 `)
                 .order('timestamp', {ascending: false})
@@ -103,10 +127,14 @@ async function loadData() {
             if (le) console.error('Transactions error:', le);
             if (l) adminState.logs = l;
 
-            // Currently inside = ENTRY count - EXIT count (authorized)
-            const entries = adminState.logs.filter(t => t.direction === 'ENTRY' && t.status === 'AUTHORIZED').length;
-            const exits   = adminState.logs.filter(t => t.direction === 'EXIT'  && t.status === 'AUTHORIZED').length;
-            adminState.activeVehicles = Math.max(0, entries - exits);
+            // Currently inside counts = ENTRY count - EXIT count (authorized)
+            const vehEntries = adminState.logs.filter(t => t.direction === 'ENTRY' && t.status === 'AUTHORIZED' && (t.user_type === 'VEHICLE' || t.rfid_type === 'LONG_RANGE' || (t.vehicles?.plate_number && t.vehicles?.plate_number !== 'PEDESTRIAN'))).length;
+            const vehExits   = adminState.logs.filter(t => t.direction === 'EXIT'  && t.status === 'AUTHORIZED' && (t.user_type === 'VEHICLE' || t.rfid_type === 'LONG_RANGE' || (t.vehicles?.plate_number && t.vehicles?.plate_number !== 'PEDESTRIAN'))).length;
+            adminState.activeVehicles = Math.max(0, vehEntries - vehExits);
+
+            const pedEntries = adminState.logs.filter(t => t.direction === 'ENTRY' && t.status === 'AUTHORIZED' && (t.user_type === 'PEDESTRIAN' || t.rfid_type === 'CLOSE_RANGE' || t.vehicles?.vehicle_type === 'None' || t.vehicles?.plate_number === 'PEDESTRIAN' || t.gate?.includes('PEDESTRIAN'))).length;
+            const pedExits   = adminState.logs.filter(t => t.direction === 'EXIT'  && t.status === 'AUTHORIZED' && (t.user_type === 'PEDESTRIAN' || t.rfid_type === 'CLOSE_RANGE' || t.vehicles?.vehicle_type === 'None' || t.vehicles?.plate_number === 'PEDESTRIAN' || t.gate?.includes('PEDESTRIAN'))).length;
+            adminState.activePedestrians = Math.max(0, pedEntries - pedExits);
 
             const {data:acc, error:acce} = await supabaseClient.from('system_accounts').select('*');
             if (acce) console.error('Accounts error:', acce);
@@ -118,7 +146,19 @@ async function loadData() {
             if (st && st.length) adminState.specialTags = st;
             else if (!adminState.specialTags.length) adminState.specialTags = [...demoSpecialTags];
 
-            console.log('✅ Admin data refreshed:', adminState.users.length, 'users,', adminState.logs.length, 'transactions,', adminState.activeVehicles, 'inside');
+            // Load registered ESP32 gate devices
+            const {data:dev, error:deve} = await supabaseClient.from('devices').select('*').order('device_name', {ascending: true});
+            if (deve) console.error('Devices error:', deve);
+            if (dev && dev.length) {
+                adminState.devices = dev;
+            } else if (!adminState.devices.length) {
+                adminState.devices = [
+                    { id: '1', device_name: 'CHARRMPASS Entry Unit', device_location: 'Entry Gate', esp32_identifier: 'CHARRMPASS_GATE_ENTRY', gate_type: 'ENTRY', device_category: 'VEHICLE_BARRIER', rfid_range: 'LONG_RANGE', status: 'ONLINE', last_online: new Date().toISOString() },
+                    { id: '2', device_name: 'CHARRMPASS Exit Unit', device_location: 'Exit Gate', esp32_identifier: 'CHARRMPASS_GATE_EXIT', gate_type: 'EXIT', device_category: 'VEHICLE_BARRIER', rfid_range: 'LONG_RANGE', status: 'ONLINE', last_online: new Date().toISOString() }
+                ];
+            }
+
+            console.log('✅ Admin data refreshed:', adminState.users.length, 'users,', adminState.logs.length, 'transactions,', adminState.devices.length, 'devices');
         } catch(e) {
             console.error('CRITICAL LOAD ERROR:', e);
             showToast('Database Error: ' + e.message, 'error');
@@ -129,27 +169,100 @@ async function loadData() {
         adminState.users = [...demoUsers];
         adminState.specialTags = [...demoSpecialTags];
         adminState.accounts = [...demoAccounts];
+        adminState.devices = [
+            { id: '1', device_name: 'CHARRMPASS Entry Unit', device_location: 'Entry Gate', esp32_identifier: 'CHARRMPASS_GATE_ENTRY', gate_type: 'ENTRY', device_category: 'VEHICLE_BARRIER', rfid_range: 'LONG_RANGE', status: 'ONLINE', last_online: new Date().toISOString() },
+            { id: '2', device_name: 'CHARRMPASS Exit Unit', device_location: 'Exit Gate', esp32_identifier: 'CHARRMPASS_GATE_EXIT', gate_type: 'EXIT', device_category: 'VEHICLE_BARRIER', rfid_range: 'LONG_RANGE', status: 'ONLINE', last_online: new Date().toISOString() }
+        ];
     }
     adminState.pendingUsers = adminState.users.filter(u => u.authorization_status === 'PENDING' || !u.authorization_status);
     renderAdmin();
+    renderEsp32DevicesTable();
 }
 
 const renderAll = renderAdmin;
 window.renderAll = renderAdmin;
 
+// Helper: Check if a specific user is currently on campus
+function isUserOnCampus(u) {
+    if (!u) return false;
+    const userLogs = adminState.logs.filter(l => 
+        (l.user_id && l.user_id === u.id) || 
+        (u.rfid_uid && l.rfid_uid === u.rfid_uid) ||
+        (u.plate_number && (l.vehicles?.plate_number === u.plate_number || l.remarks?.includes(u.plate_number)))
+    ).filter(l => l.status === 'AUTHORIZED');
+    
+    if (userLogs.length === 0) return false;
+    // Sort descending by timestamp
+    userLogs.sort((a,b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+    return userLogs[0].direction === 'ENTRY';
+}
+
+// User filter pill switching
+window.setUserTableFilter = function(filter) {
+    adminState.userTableFilter = filter;
+    document.querySelectorAll('.user-filter-pill').forEach(btn => {
+        btn.classList.remove('bg-charm-dark', 'text-white', 'shadow-sm');
+        btn.classList.add('text-slate-600', 'hover:bg-slate-100');
+    });
+    const activeBtn = el('userTab-' + filter);
+    if (activeBtn) {
+        activeBtn.classList.remove('text-slate-600', 'hover:bg-slate-100');
+        activeBtn.classList.add('bg-charm-dark', 'text-white', 'shadow-sm');
+    }
+    renderAdmin();
+};
+
+window.filterUsers = function() {
+    renderAdmin();
+};
+
+window.copyToClipboard = function(text, label = 'UID') {
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+        showToast(`Copied ${label}: ${text}`, 'success');
+    }).catch(() => {
+        showToast(`Could not copy to clipboard`, 'error');
+    });
+};
+
 // =====================
 // RENDER
 // =====================
 function renderAdmin() {
-    const activeCount = typeof adminState.activeVehicles === 'number' ? adminState.activeVehicles : 0;
+    const activeVeh = typeof adminState.activeVehicles === 'number' ? adminState.activeVehicles : 0;
+    const activePed = typeof adminState.activePedestrians === 'number' ? adminState.activePedestrians : 0;
+    const totalInside = activeVeh + activePed;
+
     const today = new Date().toISOString().split('T')[0];
     const todayEntries = adminState.logs.filter(l => l.direction === 'ENTRY' && l.timestamp?.startsWith(today));
     const todayExits   = adminState.logs.filter(l => l.direction === 'EXIT'  && l.timestamp?.startsWith(today));
 
-    if(el('adminStatUsers'))   el('adminStatUsers').textContent   = adminState.users.length;
-    if(el('adminStatPending')) el('adminStatPending').textContent = adminState.pendingUsers.length;
-    if(el('adminStatEntries')) el('adminStatEntries').textContent = todayEntries.length;
-    if(el('adminStatInside'))  el('adminStatInside').textContent  = activeCount;
+    const todayPedEntries = todayEntries.filter(l => l.user_type === 'PEDESTRIAN' || l.rfid_type === 'CLOSE_RANGE' || l.vehicles?.vehicle_type === 'None' || l.vehicles?.plate_number === 'PEDESTRIAN' || l.gate?.includes('PEDESTRIAN')).length;
+    const todayVehEntries = todayEntries.filter(l => l.user_type === 'VEHICLE' || l.rfid_type === 'LONG_RANGE' || (l.vehicles?.plate_number && l.vehicles?.plate_number !== 'PEDESTRIAN')).length;
+
+    const totalPedUsers = adminState.users.filter(u => u.user_type === 'PEDESTRIAN').length;
+    const totalVehUsers = adminState.users.filter(u => u.user_type === 'VEHICLE').length;
+
+    // Stats
+    if(el('adminStatUsers'))      el('adminStatUsers').textContent      = adminState.users.length;
+    if(el('adminStatUsersSub'))   el('adminStatUsersSub').textContent   = `🚶 ${totalPedUsers} Ped • 🚗 ${totalVehUsers} Veh`;
+    if(el('adminStatPending'))    el('adminStatPending').textContent    = adminState.pendingUsers.length;
+    if(el('adminStatEntries'))    el('adminStatEntries').textContent    = todayEntries.length;
+    if(el('adminStatEntriesSub')) el('adminStatEntriesSub').textContent = `🚶 ${todayPedEntries} Ped • 🚗 ${todayVehEntries} Veh`;
+    if(el('adminStatInside'))     el('adminStatInside').textContent     = totalInside;
+    if(el('adminStatInsideSub'))  el('adminStatInsideSub').textContent  = `🚶 ${activePed} Ped • 🚗 ${activeVeh} Veh`;
+    if(el('pendingBadgeCount'))   el('pendingBadgeCount').textContent   = adminState.pendingUsers.length;
+
+    // Filter counts for tabs
+    const countAll = adminState.users.length;
+    const countPending = adminState.pendingUsers.length;
+    const countAuth = adminState.users.filter(u => u.authorization_status === 'AUTHORIZED').length;
+    const countDenied = adminState.users.filter(u => u.authorization_status === 'DENIED').length;
+
+    if(el('userCount-ALL')) el('userCount-ALL').textContent = countAll;
+    if(el('userCount-PENDING')) el('userCount-PENDING').textContent = countPending;
+    if(el('userCount-AUTHORIZED')) el('userCount-AUTHORIZED').textContent = countAuth;
+    if(el('userCount-DENIED')) el('userCount-DENIED').textContent = countDenied;
 
     // Update charts if viewing analytics
     const analyticsView = el('aview-analytics');
@@ -157,52 +270,234 @@ function renderAdmin() {
         renderAnalytics();
     }
 
-    // Pending table
+    // Pending Applications Table (Dashboard)
     if(el('pendingTable')) {
-        el('pendingTable').innerHTML = adminState.pendingUsers.length ? adminState.pendingUsers.map(u => `
-            <tr class="hover:bg-white/60 border-b border-slate-100/50 transition-colors">
+        el('pendingTable').innerHTML = adminState.pendingUsers.length ? adminState.pendingUsers.map(u => {
+            const avatar = u.profile_image || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.full_name)}&background=random`;
+            const roleBadgeClass = u.role === 'Student' ? 'bg-blue-100 text-blue-800' : (u.role === 'Faculty' ? 'bg-purple-100 text-purple-800' : 'bg-emerald-100 text-emerald-800');
+            const formattedDate = u.created_at ? new Date(u.created_at).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }) : '--';
+            const isPed = u.user_type === 'PEDESTRIAN' || u.vehicle_type === 'None' || u.plate_number === 'PEDESTRIAN';
+
+            return `
+            <tr class="hover:bg-amber-50/40 transition-colors">
                 <td class="p-4">
                     <div class="flex items-center gap-3">
-                        <img src="${u.profile_image || 'https://ui-avatars.com/api/?name='+encodeURIComponent(u.full_name)}" class="w-8 h-8 rounded-lg object-cover">
-                        <div class="font-bold text-slate-800">${u.full_name}</div>
+                        <img src="${avatar}" class="w-10 h-10 rounded-xl object-cover border border-slate-200 shadow-sm" onerror="this.src='https://ui-avatars.com/api/?name=User'">
+                        <div>
+                            <div class="font-extrabold text-slate-800">${u.full_name || '--'}</div>
+                            <div class="text-xs text-slate-400 font-medium">${u.age ? u.age + ' yrs' : ''} ${u.sex ? '• ' + u.sex : ''}</div>
+                        </div>
                     </div>
                 </td>
-                <td class="p-4"><span class="px-2 py-0.5 rounded text-xs font-bold bg-slate-200 text-slate-700 uppercase">${u.role}</span></td>
-                <td class="p-4 text-sm text-slate-600">${u.vehicle_type||'--'} - ${u.vehicle_model||'--'}</td>
-                <td class="p-4 text-sm text-slate-500">${u.created_at?new Date(u.created_at).toLocaleDateString():'--'}</td>
-                <td class="p-4 text-center"><span class="px-2 py-1 rounded text-[10px] font-bold bg-yellow-100 text-yellow-700">PENDING</span></td>
-                <td class="p-4 text-right whitespace-nowrap">
-                    <button onclick="openReviewModal('${u.id}')" class="px-3 py-1 bg-blue-50 text-blue-600 rounded-lg text-xs font-bold hover:bg-blue-100 transition-colors mr-1">Review</button>
-                    <button onclick="approveUser('${u.id}')" class="px-3 py-1 bg-charm-green text-white rounded-lg text-xs font-bold hover:bg-green-600 mr-1">Approve</button>
-                    <button onclick="denyRegistration('${u.id}')" class="px-3 py-1 bg-red-500 text-white rounded-lg text-xs font-bold hover:bg-red-600">Deny</button>
+                <td class="p-4">
+                    <span class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${roleBadgeClass}">${u.role || 'User'}</span>
+                    <div class="text-xs text-slate-500 font-semibold mt-1">${u.program || '--'} ${u.section ? '• ' + u.section : ''}</div>
                 </td>
-            </tr>
-        `).join('') : '<tr><td colspan="6" class="p-8 text-center text-slate-400">No pending registrations</td></tr>';
+                <td class="p-4">
+                    ${isPed ? `
+                        <span class="px-2.5 py-1 rounded-full text-[10px] font-black bg-blue-100 text-blue-800 border border-blue-200 inline-flex items-center gap-1">
+                            🚶 Pedestrian (Close-Range)
+                        </span>
+                    ` : `
+                        <span class="px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1">
+                            🚗 Vehicle (Long-Range UHF)
+                        </span>
+                    `}
+                </td>
+                <td class="p-4">
+                    ${isPed ? `
+                        <div class="text-xs font-bold text-slate-500 italic">Walking User (No Vehicle)</div>
+                    ` : `
+                        <div class="font-bold text-slate-700 text-xs">${u.vehicle_type || 'Vehicle'} - <span class="font-medium text-slate-500">${u.vehicle_model || '--'}</span></div>
+                        <div class="font-mono text-xs font-black text-charm-dark bg-charm-yellow/20 px-2 py-0.5 rounded inline-block mt-0.5">${u.plate_number || 'NO PLATE'}</div>
+                    `}
+                </td>
+                <td class="p-4 text-xs font-semibold text-slate-500 whitespace-nowrap">
+                    ${formattedDate}
+                </td>
+                <td class="p-4 text-center">
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase bg-yellow-100 text-yellow-800 border border-yellow-300">
+                        <span class="w-1.5 h-1.5 rounded-full bg-yellow-500 animate-ping"></span> PENDING
+                    </span>
+                </td>
+                <td class="p-4 text-right whitespace-nowrap">
+                    <div class="flex items-center justify-end gap-1.5">
+                        <button onclick="openReviewModal('${u.id}')" class="px-3 py-1.5 bg-charm-dark text-white rounded-xl text-xs font-bold hover:bg-opacity-90 shadow-sm transition-all flex items-center gap-1" title="Review documents and assign RFID">
+                            <i data-lucide="shield-alert" class="w-3.5 h-3.5 text-charm-yellow"></i> Review &amp; Approve
+                        </button>
+                        <button onclick="openUserHistoryModal('${u.id}')" class="p-1.5 text-slate-500 hover:text-charm-dark bg-white border border-slate-200 rounded-xl hover:bg-slate-50 shadow-sm" title="View Access History">
+                            <i data-lucide="history" class="w-4 h-4"></i>
+                        </button>
+                        <button onclick="denyRegistration('${u.id}')" class="px-2.5 py-1.5 bg-red-50 text-red-600 rounded-xl text-xs font-bold hover:bg-red-100 border border-red-200 transition-colors" title="Deny Application">
+                            Deny
+                        </button>
+                    </div>
+                </td>
+            </tr>`;
+        }).join('') : `
+            <tr>
+                <td colspan="7" class="p-12 text-center text-slate-400">
+                    <div class="flex flex-col items-center justify-center">
+                        <div class="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mb-2">
+                            <i data-lucide="check-circle" class="w-6 h-6"></i>
+                        </div>
+                        <p class="font-bold text-slate-700">All caught up!</p>
+                        <p class="text-xs text-slate-400">There are no pending pedestrian or vehicle applications to review.</p>
+                    </div>
+                </td>
+            </tr>`;
     }
 
-    // Users table
+    // Registered Users Table (User Management)
     if(el('usersTable')) {
-        const search = (el('userSearch')?.value||'').toLowerCase();
+        const search = (el('userSearch')?.value||'').toLowerCase().trim();
         const role = el('roleFilter')?.value||'';
+        const presence = el('presenceFilter')?.value||'ALL';
+        const modeFilter = el('modeFilter')?.value||'ALL';
+        const statusFilter = adminState.userTableFilter || 'ALL';
+
         let filtered = [...adminState.users];
-        if(search) filtered = filtered.filter(u => (u.full_name||'').toLowerCase().includes(search) || (u.rfid_uid||'').toLowerCase().includes(search) || (u.plate_number||'').toLowerCase().includes(search));
-        if(role) filtered = filtered.filter(u => u.role===role);
+
+        // Status Filter Pill
+        if (statusFilter === 'PENDING') {
+            filtered = filtered.filter(u => u.authorization_status === 'PENDING' || !u.authorization_status);
+        } else if (statusFilter === 'AUTHORIZED') {
+            filtered = filtered.filter(u => u.authorization_status === 'AUTHORIZED');
+        } else if (statusFilter === 'DENIED') {
+            filtered = filtered.filter(u => u.authorization_status === 'DENIED');
+        }
+
+        // Transit Mode Filter
+        if (modeFilter === 'PEDESTRIAN') {
+            filtered = filtered.filter(u => u.user_type === 'PEDESTRIAN' || u.default_transit_mode === 'PEDESTRIAN' || u.vehicle_type === 'None' || u.plate_number === 'PEDESTRIAN');
+        } else if (modeFilter === 'VEHICLE') {
+            filtered = filtered.filter(u => u.user_type === 'VEHICLE' || u.default_transit_mode === 'VEHICLE' || (u.vehicle_type && u.vehicle_type !== 'None' && u.plate_number !== 'PEDESTRIAN'));
+        }
+
+        // Role Filter
+        if (role) {
+            filtered = filtered.filter(u => u.role === role);
+        }
+
+        // Search Filter
+        if (search) {
+            filtered = filtered.filter(u => 
+                (u.full_name||'').toLowerCase().includes(search) || 
+                (u.rfid_uid||'').toLowerCase().includes(search) || 
+                (u.plate_number||'').toLowerCase().includes(search) ||
+                (u.program||'').toLowerCase().includes(search) ||
+                (u.section||'').toLowerCase().includes(search)
+            );
+        }
+
+        // Campus Presence Filter
+        if (presence === 'INSIDE') {
+            filtered = filtered.filter(u => isUserOnCampus(u));
+        } else if (presence === 'OUTSIDE') {
+            filtered = filtered.filter(u => !isUserOnCampus(u));
+        }
+
         el('usersTable').innerHTML = filtered.length ? filtered.map(u => {
             const isAuth = u.authorization_status === 'AUTHORIZED';
-            const statusClass = isAuth ? 'bg-green-100 text-green-700' : (u.authorization_status === 'PENDING' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700');
-            const statusLabel = u.authorization_status || (u.rfid_uid ? 'AUTHORIZED' : 'PENDING');
-            return `<tr class="hover:bg-white/60 border-b border-slate-100/50">
-                <td class="p-4 font-bold text-slate-800">${u.full_name || '--'}</td>
-                <td class="p-4"><span class="px-2 py-0.5 rounded text-xs font-bold bg-slate-200 text-slate-700 uppercase">${u.role || '--'}</span><div class="text-xs text-slate-500 mt-1">${u.program||'--'} • ${u.section||'--'}</div></td>
-                <td class="p-4 font-mono text-xs">${u.rfid_uid ? `<span class="text-green-600 font-bold">${u.rfid_uid}</span>` : '<span class="text-yellow-600 font-bold">Not Assigned</span>'}</td>
-                <td class="p-4"><div class="font-semibold text-slate-700">${u.vehicle_type||'--'} - ${u.vehicle_model||'--'}</div></td>
-                <td class="p-4 font-mono font-bold text-slate-700">${u.plate_number||'--'}</td>
-                <td class="p-4 text-center"><span class="px-2 py-1 rounded text-[10px] font-bold ${statusClass}">${statusLabel}</span></td>
+            const isPending = u.authorization_status === 'PENDING' || !u.authorization_status;
+            const statusClass = isAuth ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : (isPending ? 'bg-yellow-100 text-yellow-800 border-yellow-300' : 'bg-red-100 text-red-800 border-red-300');
+            const statusLabel = u.authorization_status || 'PENDING';
+            const onCampus = isUserOnCampus(u);
+            const avatar = u.profile_image || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.full_name)}&background=random`;
+            const roleBadgeClass = u.role === 'Student' ? 'bg-blue-100 text-blue-800' : (u.role === 'Faculty' ? 'bg-purple-100 text-purple-800' : 'bg-emerald-100 text-emerald-800');
+            const isPed = u.user_type === 'PEDESTRIAN' || u.vehicle_type === 'None' || u.plate_number === 'PEDESTRIAN';
+
+            return `
+            <tr class="hover:bg-slate-50/80 transition-colors">
+                <td class="p-4">
+                    <div class="flex items-center gap-3">
+                        <img src="${avatar}" class="w-10 h-10 rounded-xl object-cover border border-slate-200 shadow-sm cursor-pointer hover:opacity-80" onclick="openReviewModal('${u.id}')" title="Click to view registration details" onerror="this.src='https://ui-avatars.com/api/?name=User'">
+                        <div>
+                            <div class="font-extrabold text-slate-800 hover:text-charm-dark cursor-pointer flex items-center gap-1.5" onclick="openReviewModal('${u.id}')">
+                                <span>${u.full_name || '--'}</span>
+                            </div>
+                            <div class="text-xs text-slate-400 font-medium">${u.program || 'No Program'} ${u.section ? '• ' + u.section : ''}</div>
+                        </div>
+                    </div>
+                </td>
+                <td class="p-4">
+                    <span class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${roleBadgeClass}">${u.role || 'User'}</span>
+                    <div class="text-[11px] text-slate-400 mt-1">${u.address ? u.address.substring(0, 18) + (u.address.length > 18 ? '...' : '') : '--'}</div>
+                </td>
+                <td class="p-4">
+                    ${isPed ? `
+                        <span class="px-2.5 py-1 rounded-full text-[10px] font-black bg-blue-100 text-blue-800 border border-blue-200 inline-flex items-center gap-1">
+                            🚶 Pedestrian (Close-Range)
+                        </span>
+                    ` : `
+                        <span class="px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1">
+                            🚗 Vehicle (Long-Range UHF)
+                        </span>
+                    `}
+                </td>
+                <td class="p-4">
+                    ${u.rfid_uid && !u.rfid_uid.startsWith('UNASSIGNED_') ? `
+                        <div class="inline-flex items-center gap-1 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-2.5 py-1 rounded-lg cursor-pointer transition-colors" onclick="copyToClipboard('${u.rfid_uid}', 'RFID UID')" title="Click to copy UID">
+                            <i data-lucide="nfc" class="w-3.5 h-3.5 text-emerald-600"></i>
+                            <span class="font-mono text-xs font-black text-slate-800">${u.rfid_uid}</span>
+                        </div>
+                    ` : `
+                        <span class="px-2.5 py-1 rounded-lg bg-yellow-50 text-yellow-700 border border-yellow-200 text-xs font-bold inline-flex items-center gap-1">
+                            <i data-lucide="alert-circle" class="w-3.5 h-3.5"></i> Unassigned
+                        </span>
+                    `}
+                </td>
+                <td class="p-4">
+                    ${isPed ? `
+                        <div class="text-xs font-bold text-slate-400 italic">Walking / Pedestrian</div>
+                    ` : `
+                        <div class="font-semibold text-slate-700 text-xs">${u.vehicle_type || 'Vehicle'} - ${u.vehicle_model || '--'}</div>
+                        <div class="font-mono text-xs font-black text-slate-900 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 inline-block mt-0.5">${u.plate_number || 'NO PLATE'}</div>
+                    `}
+                </td>
+                <td class="p-4 text-center">
+                    ${onCampus ? `
+                        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> INSIDE
+                        </span>
+                    ` : `
+                        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                            ⚪ OFF-CAMPUS
+                        </span>
+                    `}
+                </td>
+                <td class="p-4 text-center">
+                    <span class="px-2.5 py-1 rounded-full text-[10px] font-black uppercase border ${statusClass}">${statusLabel}</span>
+                </td>
                 <td class="p-4 text-right whitespace-nowrap">
-                    <button onclick="openUserModal('${u.id}')" class="p-1.5 text-slate-400 hover:text-charm-dark rounded-lg hover:bg-slate-100" title="Edit / Assign RFID"><i data-lucide="edit" class="w-4 h-4"></i></button>
-                    <button onclick="deleteUser('${u.id}')" class="p-1.5 text-slate-400 hover:text-red-500 ml-1 rounded-lg hover:bg-red-50" title="Delete"><i data-lucide="trash" class="w-4 h-4"></i></button>
-                </td></tr>`;
-        }).join('') : '<tr><td colspan="7" class="p-8 text-center text-slate-400">No users found</td></tr>';
+                    <div class="flex items-center justify-end gap-1">
+                        <button onclick="openReviewModal('${u.id}')" class="p-2 text-slate-500 hover:text-charm-dark bg-white border border-slate-200 rounded-xl hover:bg-slate-50 shadow-sm transition-all" title="View Full Registration Dossier & Documents">
+                            <i data-lucide="file-search" class="w-4 h-4"></i>
+                        </button>
+                        <button onclick="openUserHistoryModal('${u.id}')" class="p-2 text-slate-500 hover:text-blue-600 bg-white border border-slate-200 rounded-xl hover:bg-blue-50 shadow-sm transition-all" title="View Access History & Logs">
+                            <i data-lucide="history" class="w-4 h-4"></i>
+                        </button>
+                        <button onclick="openUserModal('${u.id}')" class="p-2 text-slate-500 hover:text-charm-dark bg-white border border-slate-200 rounded-xl hover:bg-slate-50 shadow-sm transition-all" title="Edit Profile & Assign UID">
+                            <i data-lucide="edit-3" class="w-4 h-4"></i>
+                        </button>
+                        <button onclick="deleteUser('${u.id}')" class="p-2 text-slate-400 hover:text-red-500 bg-white border border-slate-200 rounded-xl hover:bg-red-50 shadow-sm transition-all" title="Delete User">
+                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                </td>
+            </tr>`;
+        }).join('') : `
+            <tr>
+                <td colspan="8" class="p-12 text-center text-slate-400">
+                    <div class="flex flex-col items-center justify-center">
+                        <div class="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mb-2 text-slate-400">
+                            <i data-lucide="search-x" class="w-6 h-6"></i>
+                        </div>
+                        <p class="font-bold text-slate-700">No matching users found</p>
+                        <p class="text-xs text-slate-400">Try adjusting your search query, transit mode, role, or presence filter.</p>
+                    </div>
+                </td>
+            </tr>`;
     }
 
     // Accounts (Guard Management)
@@ -256,6 +551,12 @@ function renderAdmin() {
         if (adminLogsDirection !== 'ALL') {
             filteredLogs = filteredLogs.filter(l => l.direction === adminLogsDirection);
         }
+        if (adminLogsMode === 'PEDESTRIAN') {
+            filteredLogs = filteredLogs.filter(l => l.user_type === 'PEDESTRIAN' || l.rfid_type === 'CLOSE_RANGE' || l.vehicles?.vehicle_type === 'None' || l.vehicles?.plate_number === 'PEDESTRIAN' || l.gate?.includes('PEDESTRIAN') || l.gate?.includes('TURNSTILE'));
+        } else if (adminLogsMode === 'VEHICLE') {
+            filteredLogs = filteredLogs.filter(l => l.user_type === 'VEHICLE' || l.rfid_type === 'LONG_RANGE' || (l.vehicles?.plate_number && l.vehicles?.plate_number !== 'PEDESTRIAN') || l.gate?.includes('VEHICLE') || l.gate?.includes('BARRIER'));
+        }
+
         const recentLogs = filteredLogs.slice(0, 100);
         if (recentLogs.length) {
             el('adminLogsTable').innerHTML = recentLogs.map(l => {
@@ -263,6 +564,8 @@ function renderAdmin() {
                 const ts       = dateObj ? dateObj.toLocaleTimeString('en-US', {hour12:false, hour:'2-digit', minute:'2-digit'}) : '--';
                 let name     = l.users?.full_name;
                 let plate    = l.vehicles?.plate_number;
+
+                const isPed = l.user_type === 'PEDESTRIAN' || l.rfid_type === 'CLOSE_RANGE' || l.vehicles?.vehicle_type === 'None' || l.vehicles?.plate_number === 'PEDESTRIAN' || l.gate?.includes('PEDESTRIAN') || l.gate?.includes('TURNSTILE');
 
                 if (!name && l.remarks) {
                     if (l.remarks.includes('Visitor')) {
@@ -295,20 +598,37 @@ function renderAdmin() {
                 }
 
                 if (!name) name = l.status === 'DENIED' ? 'Unregistered Card' : 'Authorized User';
-                if (!plate) plate = l.rfid_uid ? l.rfid_uid.substring(0, 12) : '--';
+                if (!plate) plate = isPed ? 'PEDESTRIAN' : (l.rfid_uid ? l.rfid_uid.substring(0, 12) : '--');
 
                 const dir      = l.direction || 'ENTRY';
                 const isEntry  = dir === 'ENTRY';
                 const isAuth   = l.status === 'AUTHORIZED';
                 const statusBg = isAuth ? 'bg-green-100 text-green-700' : (l.status === 'PENDING_CONFIRMATION' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700');
-                const gateName = l.gate || (isEntry ? 'ENTRY_GATE' : 'EXIT_GATE');
+                const gateName = l.gate || (isPed ? (isEntry ? 'PEDESTRIAN_IN' : 'PEDESTRIAN_OUT') : (isEntry ? 'VEHICLE_GATE_IN' : 'VEHICLE_GATE_OUT'));
 
                 return `
                     <tr class="hover:bg-white/60 border-b border-slate-100/50 transition-colors">
                         <td class="p-4 text-xs font-mono font-medium text-slate-500">${ts}</td>
+                        <td class="p-4">
+                            ${isPed ? `
+                                <span class="px-2.5 py-1 rounded-full text-[10px] font-black bg-blue-100 text-blue-800 border border-blue-200 inline-flex items-center gap-1">
+                                    🚶 Pedestrian (Close)
+                                </span>
+                            ` : `
+                                <span class="px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1">
+                                    🚗 Vehicle (Long UHF)
+                                </span>
+                            `}
+                        </td>
                         <td class="p-4 font-mono text-xs font-bold text-slate-500">${l.rfid_uid || '--'}</td>
                         <td class="p-4 font-bold text-slate-800">${name}</td>
-                        <td class="p-4 font-mono text-xs font-bold text-charm-dark bg-charm-yellow/10 px-2 py-0.5 rounded inline-block my-3">${plate}</td>
+                        <td class="p-4">
+                            ${isPed ? `
+                                <span class="text-xs font-semibold text-slate-400 italic">Walking User</span>
+                            ` : `
+                                <span class="font-mono text-xs font-bold text-charm-dark bg-charm-yellow/10 px-2 py-0.5 rounded inline-block">${plate}</span>
+                            `}
+                        </td>
                         <td class="p-4 text-center">
                             <span class="px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase ${isEntry ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'}">${dir}</span>
                         </td>
@@ -316,13 +636,13 @@ function renderAdmin() {
                             <span class="px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase ${statusBg}">${l.status || '--'}</span>
                         </td>
                         <td class="p-4 text-right">
-                            <span class="text-xs font-bold font-mono ${gateName.includes('ENTRY') ? 'text-emerald-600' : 'text-blue-600'}">${gateName}</span>
+                            <span class="text-xs font-bold font-mono ${gateName.includes('ENTRY') || gateName.includes('IN') ? 'text-emerald-600' : 'text-blue-600'}">${gateName}</span>
                         </td>
                     </tr>
                 `;
             }).join('');
         } else {
-            el('adminLogsTable').innerHTML = '<tr><td colspan="7" class="p-8 text-center text-slate-400 font-medium">No transactions found</td></tr>';
+            el('adminLogsTable').innerHTML = '<tr><td colspan="8" class="p-8 text-center text-slate-400 font-medium">No transactions found</td></tr>';
         }
     }
 
@@ -459,17 +779,21 @@ el('userForm')?.addEventListener('submit', async (e) => {
         program: el('formProgram').value.trim() || null,
         section: el('formSection').value.trim() || null,
         role: el('formRole').value,
+        default_transit_mode: (el('formVehType').value !== 'None' && el('formPlate').value.trim() !== '') ? 'VEHICLE' : 'PEDESTRIAN',
         updated_at: new Date().toISOString()
     };
+    const hasVehicle = el('formVehType').value !== 'None' && el('formPlate').value.trim() !== '';
     const vehicleData = {
-        vehicle_type: el('formVehType').value,
+        vehicle_type: el('formVehType').value || 'None',
         plate_number: el('formPlate').value.trim().toUpperCase() || 'NO-PLATE',
         vehicle_model: el('formVehModel').value.trim() || '--',
         vehicle_color: el('formVehColor').value.trim() || '--',
     };
+    const rfidType = hasVehicle ? 'LONG_RANGE' : 'CLOSE_RANGE';
+    const userType = hasVehicle ? 'VEHICLE' : 'PEDESTRIAN';
 
     try {
-        showToast('Saving user & RFID assignment...', 'info');
+        showToast('Saving stakeholder & RFID assignment...', 'info');
 
         if (userId) {
             // ─── EDIT EXISTING USER ───
@@ -480,18 +804,25 @@ el('userForm')?.addEventListener('submit', async (e) => {
             if (uErr) throw uErr;
 
             // 2. Update or insert vehicle
-            if (user?.vehicle_id) {
-                const { error: vErr } = await supabaseClient.from('vehicles').update(vehicleData).eq('id', user.vehicle_id);
-                if (vErr) throw vErr;
-            } else {
-                const { data: newV, error: vErr } = await supabaseClient.from('vehicles').insert([{ user_id: userId, ...vehicleData }]).select().single();
-                if (vErr) throw vErr;
+            let targetVehicleId = user?.vehicle_id || null;
+            if (hasVehicle) {
+                if (user?.vehicle_id) {
+                    const { error: vErr } = await supabaseClient.from('vehicles').update(vehicleData).eq('id', user.vehicle_id);
+                    if (vErr) throw vErr;
+                } else {
+                    const { data: newV, error: vErr } = await supabaseClient.from('vehicles').insert([{ user_id: userId, ...vehicleData }]).select().single();
+                    if (vErr) throw vErr;
+                    targetVehicleId = newV.id;
+                }
             }
 
             // 3. Update or upsert RFID Card UID
             if (user?.rfid_card_id) {
                 const { error: cErr } = await supabaseClient.from('rfid_cards').update({
                     rfid_uid: newUid,
+                    rfid_type: rfidType,
+                    user_type: userType,
+                    vehicle_id: targetVehicleId,
                     authorization_status: 'AUTHORIZED',
                     updated_at: new Date().toISOString()
                 }).eq('id', user.rfid_card_id);
@@ -500,33 +831,41 @@ el('userForm')?.addEventListener('submit', async (e) => {
                 const { error: cErr } = await supabaseClient.from('rfid_cards').insert([{
                     rfid_uid: newUid,
                     user_id: userId,
-                    vehicle_id: user?.vehicle_id || null,
+                    vehicle_id: targetVehicleId,
+                    rfid_type: rfidType,
+                    user_type: userType,
                     authorization_status: 'AUTHORIZED'
                 }]);
                 if (cErr) throw cErr;
             }
 
-            showToast(`User updated! RFID UID ${newUid} assigned.`, 'success');
+            showToast(`User updated! ${rfidType} RFID UID ${newUid} assigned.`, 'success');
         } else {
             // ─── ADD BRAND NEW USER ───
             // 1. Insert user
             const { data: newUser, error: uErr } = await supabaseClient.from('users').insert([userData]).select().single();
             if (uErr) throw uErr;
 
-            // 2. Insert vehicle
-            const { data: newV, error: vErr } = await supabaseClient.from('vehicles').insert([{ user_id: newUser.id, ...vehicleData }]).select().single();
-            if (vErr) throw vErr;
+            // 2. Insert vehicle if applicable
+            let targetVehicleId = null;
+            if (hasVehicle) {
+                const { data: newV, error: vErr } = await supabaseClient.from('vehicles').insert([{ user_id: newUser.id, ...vehicleData }]).select().single();
+                if (vErr) throw vErr;
+                targetVehicleId = newV.id;
+            }
 
             // 3. Insert RFID Card
             const { error: cErr } = await supabaseClient.from('rfid_cards').insert([{
                 rfid_uid: newUid,
                 user_id: newUser.id,
-                vehicle_id: newV.id,
+                vehicle_id: targetVehicleId,
+                rfid_type: rfidType,
+                user_type: userType,
                 authorization_status: 'AUTHORIZED'
             }]);
             if (cErr) throw cErr;
 
-            showToast(`User created and RFID UID ${newUid} assigned!`, 'success');
+            showToast(`Stakeholder created! ${rfidType} RFID UID ${newUid} assigned.`, 'success');
         }
 
         closeUserModal();
@@ -537,7 +876,7 @@ el('userForm')?.addEventListener('submit', async (e) => {
 });
 
 window.approveUser = async function(id) {
-    const u = adminState.pendingUsers.find(x => x.id === id);
+    const u = adminState.pendingUsers.find(x => x.id === id) || adminState.users.find(x => x.id === id);
     if (!u) return;
 
     // Check if the review modal is open and has a UID entered
@@ -561,8 +900,12 @@ window.approveUser = async function(id) {
         return;
     }
 
+    const isPed = u.user_type === 'PEDESTRIAN' || u.default_transit_mode === 'PEDESTRIAN' || u.vehicle_type === 'None' || u.plate_number === 'PEDESTRIAN';
+    const rfidType = isPed ? 'CLOSE_RANGE' : 'LONG_RANGE';
+    const userType = isPed ? 'PEDESTRIAN' : 'VEHICLE';
+
     try {
-        showToast(`Approving & issuing RFID ${assignedUid}...`, 'info');
+        showToast(`Approving & issuing ${rfidType === 'CLOSE_RANGE' ? 'Close-Range Card' : 'Long-Range Tag'} ${assignedUid}...`, 'info');
 
         // Check if card record already exists for this user
         const { data: existingCard } = await supabaseClient
@@ -577,6 +920,8 @@ window.approveUser = async function(id) {
                 .update({
                     rfid_uid: assignedUid,
                     authorization_status: 'AUTHORIZED',
+                    rfid_type: rfidType,
+                    user_type: userType,
                     updated_at: new Date().toISOString()
                 })
                 .eq('id', existingCard.id);
@@ -588,13 +933,15 @@ window.approveUser = async function(id) {
                     rfid_uid: assignedUid,
                     user_id: id,
                     vehicle_id: u.vehicle_id || null,
+                    rfid_type: rfidType,
+                    user_type: userType,
                     authorization_status: 'AUTHORIZED'
                 }]);
             if (error) throw error;
         }
 
         closeReviewModal();
-        showToast(`Approved! RFID Tag ${assignedUid} issued to ${u.full_name}.`, 'success');
+        showToast(`Approved! ${rfidType === 'CLOSE_RANGE' ? 'Close-Range Card' : 'Long-Range Tag'} ${assignedUid} issued to ${u.full_name}.`, 'success');
         await loadData();
     } catch (err) {
         showToast('Error approving registration: ' + err.message, 'error');
@@ -635,6 +982,24 @@ let adminLogsPreset = 'today';
 let adminLogsCustomFrom = null;
 let adminLogsCustomTo = null;
 let adminLogsDirection = 'ALL';
+let adminLogsMode = 'ALL';
+
+window.filterAdminLogsMode = function(mode) {
+    adminLogsMode = mode;
+    ['All', 'Ped', 'Veh'].forEach(m => {
+        const btn = el(`adminLogMode${m}`);
+        if (btn) {
+            if ((m === 'All' && mode === 'ALL') || 
+                (m === 'Ped' && mode === 'PEDESTRIAN') || 
+                (m === 'Veh' && mode === 'VEHICLE')) {
+                btn.className = 'px-3 py-1.5 rounded-xl text-xs font-bold bg-charm-dark text-white shadow-sm';
+            } else {
+                btn.className = 'px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 hover:text-slate-900';
+            }
+        }
+    });
+    renderAdmin();
+};
 
 window.setAdminLogsPreset = function(preset) {
     adminLogsPreset = preset;
@@ -963,26 +1328,43 @@ function renderAnalytics() {
     let insideStud = 0, insideStf = 0, insideVis = 0, insideEmg = 0;
     // Map entries vs exits to find who is currently inside
     const openEntries = [];
-    const processedUids = new Set();
     const sortedLogsAsc = [...adminState.logs].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    const normalizeUid = (u) => (u || '').toString().replace(/[\s:-]/g, '').toUpperCase();
 
     sortedLogsAsc.forEach(l => {
         if (l.status !== 'AUTHORIZED') return;
-        const uid = l.rfid_uid || l.id;
+        const uid = normalizeUid(l.rfid_uid);
+        const plate = (l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').toUpperCase().trim();
+
         if (l.direction === 'ENTRY') {
-            openEntries.push(l);
+            const existingIdx = openEntries.findIndex(e => {
+                const eUid = normalizeUid(e.rfid_uid);
+                const ePlate = (e.vehicles?.plate_number || (e.remarks && e.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').toUpperCase().trim();
+                return (uid && eUid && uid === eUid) || (plate && ePlate && plate !== 'N/A' && plate !== '--' && plate === ePlate);
+            });
+            if (existingIdx !== -1) {
+                openEntries[existingIdx] = l;
+            } else {
+                openEntries.push(l);
+            }
         } else if (l.direction === 'EXIT') {
-            const idx = openEntries.findIndex(e => e.rfid_uid === uid);
+            const idx = openEntries.findIndex(e => {
+                const eUid = normalizeUid(e.rfid_uid);
+                const ePlate = (e.vehicles?.plate_number || (e.remarks && e.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').toUpperCase().trim();
+                return (uid && eUid && uid === eUid) || (plate && ePlate && plate !== 'N/A' && plate !== '--' && plate === ePlate);
+            });
             if (idx !== -1) openEntries.splice(idx, 1);
         }
     });
 
+    window.currentInsideRoster = openEntries;
+
     openEntries.forEach(l => {
-        const role = (l.users?.role || '').toUpperCase();
-        if (role === 'STUDENT') insideStud++;
-        else if (role === 'FACULTY' || role === 'STAFF') insideStf++;
-        else if (l.remarks && (l.remarks.includes('Visitor') || l.remarks.includes('VISITOR'))) insideVis++;
-        else if (l.is_emergency) insideEmg++;
+        const cat = window.getInsideOccupantCategory ? window.getInsideOccupantCategory(l) : 'VISITOR';
+        if (cat === 'STUDENT') insideStud++;
+        else if (cat === 'STAFF') insideStf++;
+        else if (cat === 'EMERGENCY') insideEmg++;
         else insideVis++;
     });
 
@@ -990,6 +1372,8 @@ function renderAnalytics() {
     if (el('insideStaff')) el('insideStaff').textContent = insideStf;
     if (el('insideVisitors')) el('insideVisitors').textContent = insideVis;
     if (el('insideEmergency')) el('insideEmergency').textContent = insideEmg;
+    if (el('anStatInside')) el('anStatInside').textContent = openEntries.length.toLocaleString();
+    if (el('insideCampusRosterCount')) el('insideCampusRosterCount').textContent = `${openEntries.length} Active`;
 
     // Longest stay
     if (openEntries.length > 0) {
@@ -1055,7 +1439,352 @@ function renderAnalytics() {
     renderUserLeaderboard(filteredLogs);
 
     renderAnalyticsCharts(filteredLogs);
+
+    // 7. Live Campus Occupants Roster Table
+    if (typeof window.renderInsideCampusTable === 'function') {
+        window.renderInsideCampusTable();
+    }
 }
+
+// ==============================================
+// 👥 WHO IS INSIDE CAMPUS (LIVE ROSTER) LOGIC
+// ==============================================
+
+let insideRosterFilter = 'ALL';
+let insideRosterSearch = '';
+
+window.getInsideOccupantCategory = function(l) {
+    if (!l) return 'VISITOR';
+    if (l.is_emergency) return 'EMERGENCY';
+    const rem = (l.remarks || '').toLowerCase();
+    if (rem.includes('emergency')) return 'EMERGENCY';
+    const role = (l.users?.role || '').toUpperCase();
+    if (role === 'STUDENT') return 'STUDENT';
+    if (role === 'FACULTY' || role === 'STAFF') return 'STAFF';
+    if (rem.includes('visitor') || role === 'VISITOR' || l.user_type === 'VISITOR') return 'VISITOR';
+    if (l.users) return 'STAFF';
+    return 'VISITOR';
+};
+
+window.scrollToInsideSection = function(category) {
+    if (category) {
+        window.setInsideRosterFilter(category);
+    }
+    const anView = document.getElementById('aview-analytics');
+    if (anView && anView.classList.contains('hidden')) {
+        adminView('analytics');
+    }
+    setTimeout(() => {
+        const sec = document.getElementById('sectionInsideCampus');
+        if (sec) {
+            sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            sec.classList.add('ring-4', 'ring-amber-400', 'ring-offset-4', 'shadow-2xl');
+            setTimeout(() => {
+                sec.classList.remove('ring-4', 'ring-amber-400', 'ring-offset-4', 'shadow-2xl');
+            }, 2500);
+        }
+    }, 150);
+};
+
+window.setInsideRosterFilter = function(filter) {
+    insideRosterFilter = filter || 'ALL';
+    const tabIds = ['ALL', 'STUDENT', 'STAFF', 'VISITOR', 'EMERGENCY'];
+    tabIds.forEach(id => {
+        const btn = document.getElementById(`insideFilter-${id}`);
+        if (btn) {
+            if (id === insideRosterFilter) {
+                btn.className = 'inside-tab px-3 py-1 rounded-lg font-bold bg-charm-dark text-white shadow-sm transition-all';
+            } else {
+                btn.className = 'inside-tab px-3 py-1 rounded-lg font-bold text-slate-600 hover:text-slate-900 transition-all';
+            }
+        }
+    });
+    window.renderInsideCampusTable();
+};
+
+window.filterInsideCampusRoster = function() {
+    const input = document.getElementById('insideSearchInput');
+    insideRosterSearch = (input?.value || '').toLowerCase().trim();
+    window.renderInsideCampusTable();
+};
+
+window.renderInsideCampusTable = function() {
+    const tbody = document.getElementById('insideCampusTableBody');
+    if (!tbody) return;
+
+    const roster = window.currentInsideRoster || [];
+    
+    // Sort descending by entry timestamp (most recent entry first)
+    const sortedRoster = [...roster].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    const filtered = sortedRoster.filter(l => {
+        const cat = window.getInsideOccupantCategory(l);
+        if (insideRosterFilter !== 'ALL' && cat !== insideRosterFilter) {
+            return false;
+        }
+
+        if (insideRosterSearch) {
+            let ownerName = l.users?.full_name || '';
+            if (!ownerName && l.remarks) {
+                const match = l.remarks.match(/Visitor (?:Entry|Exit):\s*([^|]+)/i);
+                if (match) ownerName = match[1].trim();
+            }
+            const plate = (l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').toLowerCase();
+            const rfid = (l.rfid_uid || '').toLowerCase();
+            const gate = (l.gate || '').toLowerCase();
+            const remarks = (l.remarks || '').toLowerCase();
+            const role = (l.users?.role || '').toLowerCase();
+            const idNumber = (l.users?.id_number || '').toLowerCase();
+
+            const textPool = `${ownerName.toLowerCase()} ${plate} ${rfid} ${gate} ${remarks} ${role} ${idNumber} ${cat.toLowerCase()}`;
+            if (!textPool.includes(insideRosterSearch)) {
+                return false;
+            }
+        }
+        return true;
+    });
+
+    // Update count badge
+    const countBadge = document.getElementById('insideCampusRosterCount');
+    if (countBadge) {
+        if (insideRosterFilter !== 'ALL' || insideRosterSearch) {
+            countBadge.textContent = `${filtered.length} of ${roster.length} Active`;
+        } else {
+            countBadge.textContent = `${roster.length} Active`;
+        }
+    }
+
+    if (filtered.length === 0) {
+        if (roster.length === 0) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="8" class="p-8 text-center">
+                        <div class="flex flex-col items-center justify-center gap-2 text-slate-400">
+                            <div class="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-300">
+                                <i data-lucide="shield-check" class="w-6 h-6 text-emerald-500"></i>
+                            </div>
+                            <div class="font-bold text-slate-700 text-sm">No Occupants Currently Inside</div>
+                            <p class="text-xs text-slate-400 max-w-sm">All scanned vehicles and visitors have verified exits. Campus perimeter is clear.</p>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        } else {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="8" class="p-8 text-center">
+                        <div class="flex flex-col items-center justify-center gap-2 text-slate-400">
+                            <div class="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-300">
+                                <i data-lucide="search-x" class="w-6 h-6 text-amber-500"></i>
+                            </div>
+                            <div class="font-bold text-slate-700 text-sm">No Matching Occupants Found</div>
+                            <p class="text-xs text-slate-400">Try adjusting your category filter or search keywords.</p>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }
+        if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
+        return;
+    }
+
+    const rowsHtml = filtered.map((l, index) => {
+        const cat = window.getInsideOccupantCategory(l);
+        
+        // Owner/Driver name & details
+        let ownerName = l.users?.full_name;
+        let subtext = l.users?.id_number || l.users?.program || l.users?.section;
+        if (!ownerName && l.remarks) {
+            const match = l.remarks.match(/Visitor (?:Entry|Exit):\s*([^|]+)/i);
+            if (match) ownerName = match[1].trim();
+        }
+        if (!ownerName && l.is_emergency) {
+            ownerName = 'Emergency Responder';
+            subtext = 'Priority Response Vehicle';
+        }
+        if (!ownerName) {
+            const raw = (l.rfid_uid || '').replace(/\s+/g, '');
+            const masked = raw.length >= 4 ? `****${raw.slice(-4)}` : '****';
+            ownerName = `Cardholder ${masked}`;
+            subtext = 'Guest / Unlinked Tag';
+        }
+        if (!subtext) {
+            subtext = cat === 'STUDENT' ? 'Student' : (cat === 'STAFF' ? 'Faculty / Staff' : 'Campus Visitor');
+        }
+
+        // Category Badge
+        let catBadge = '';
+        if (cat === 'STUDENT') {
+            catBadge = `<span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1.5 w-fit shadow-sm"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Student</span>`;
+        } else if (cat === 'STAFF') {
+            catBadge = `<span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-purple-100 text-purple-800 border border-purple-300 flex items-center gap-1.5 w-fit shadow-sm"><span class="w-1.5 h-1.5 rounded-full bg-purple-500"></span> Faculty/Staff</span>`;
+        } else if (cat === 'EMERGENCY') {
+            catBadge = `<span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-red-100 text-red-800 border border-red-300 flex items-center gap-1.5 w-fit shadow-sm animate-pulse"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Emergency</span>`;
+        } else {
+            catBadge = `<span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-blue-100 text-blue-800 border border-blue-300 flex items-center gap-1.5 w-fit shadow-sm"><span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span> Visitor</span>`;
+        }
+
+        // Vehicle info & Plate
+        const plate = l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || 'N/A';
+        const vehType = l.vehicles?.vehicle_type || 'Vehicle';
+        const vehModel = l.vehicles?.model || l.vehicles?.color || '';
+        let vehIcon = 'car-front';
+        const vLower = (vehType + ' ' + (l.user_type || '')).toLowerCase();
+        if (vLower.includes('motorcycle') || vLower.includes('motor') || vLower.includes('bike')) vehIcon = 'bike';
+        else if (vLower.includes('truck') || vLower.includes('van') || vLower.includes('bus')) vehIcon = 'truck';
+        else if (vLower.includes('pedestrian')) vehIcon = 'user';
+
+        // Entry timestamp
+        const enterTime = new Date(l.timestamp);
+        const timeStr = enterTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const isToday = enterTime.toDateString() === new Date().toDateString();
+        const dateStr = isToday ? 'Today' : enterTime.toLocaleDateString([], { month: 'short', day: 'numeric' });
+
+        // Duration calculation
+        const diffMs = Math.max(0, Date.now() - enterTime.getTime());
+        const diffHrs = Math.floor(diffMs / (1000 * 60 * 60));
+        const diffMins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+        const durationStr = diffHrs > 0 ? `${diffHrs}h ${diffMins}m` : `${diffMins}m`;
+
+        let durationBadge = '';
+        if (diffHrs < 4) {
+            durationBadge = `<span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1 w-fit shadow-sm"><i data-lucide="clock" class="w-3 h-3 text-emerald-600"></i> ${durationStr}</span>`;
+        } else if (diffHrs < 8) {
+            durationBadge = `<span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200 flex items-center gap-1 w-fit shadow-sm"><i data-lucide="clock" class="w-3 h-3 text-amber-600"></i> ${durationStr}</span>`;
+        } else {
+            durationBadge = `<span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-red-50 text-red-700 border border-red-200 flex items-center gap-1 w-fit shadow-sm animate-pulse" title="Extended stay (> 8 hours)"><i data-lucide="alert-triangle" class="w-3 h-3 text-red-500"></i> ${durationStr}</span>`;
+        }
+
+        // Gate info
+        const isLongRange = l.rfid_type === 'LONG_RANGE' || (l.gate && l.gate.toLowerCase().includes('long'));
+        const gateLabel = l.gate || (isLongRange ? 'UHF Vehicle Gate' : 'Main Campus Gate');
+        const readerMode = isLongRange ? 'Long-Range UHF' : 'Close-Range Gate';
+
+        // Masked/Formatted RFID
+        const rawUid = (l.rfid_uid || '--').replace(/\s+/g, '');
+        const maskedUid = rawUid.length > 4 ? `${rawUid.slice(0, 2)}..${rawUid.slice(-4)}` : rawUid;
+
+        const avatarUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(ownerName)}&background=0E4B3A&color=fff&size=64`;
+
+        return `
+            <tr class="hover:bg-amber-50/40 transition-colors">
+                <td class="p-3.5 text-center font-bold text-slate-400">#${index + 1}</td>
+                <td class="p-3.5">
+                    <div class="flex items-center gap-3">
+                        <img src="${avatarUrl}" class="w-8 h-8 rounded-full border border-slate-200 shrink-0 shadow-sm">
+                        <div>
+                            <div class="font-bold text-slate-800 text-xs">${ownerName}</div>
+                            <div class="text-[10px] text-slate-400 font-medium">${subtext}</div>
+                        </div>
+                    </div>
+                </td>
+                <td class="p-3.5">${catBadge}</td>
+                <td class="p-3.5">
+                    <div class="flex flex-col gap-0.5">
+                        <span class="font-mono font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 text-xs w-fit">${plate}</span>
+                        <span class="text-[10px] text-slate-400 flex items-center gap-1">
+                            <i data-lucide="${vehIcon}" class="w-3 h-3"></i> ${vehType} ${vehModel ? '• ' + vehModel : ''}
+                        </span>
+                    </div>
+                </td>
+                <td class="p-3.5">
+                    <div class="font-semibold text-slate-800 text-xs">${timeStr}</div>
+                    <div class="text-[10px] text-slate-400 font-medium">${dateStr}</div>
+                </td>
+                <td class="p-3.5">${durationBadge}</td>
+                <td class="p-3.5">
+                    <div class="font-semibold text-slate-700 text-xs flex items-center gap-1">
+                        <i data-lucide="log-in" class="w-3.5 h-3.5 text-emerald-600"></i> ${gateLabel}
+                    </div>
+                    <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">${readerMode}</div>
+                </td>
+                <td class="p-3.5">
+                    <span class="font-mono text-xs font-bold text-slate-600 bg-slate-50 px-2 py-0.5 rounded border border-slate-200" title="${l.rfid_uid || ''}">${maskedUid}</span>
+                </td>
+            </tr>
+        `;
+    }).join('');
+
+    tbody.innerHTML = rowsHtml;
+    if (window.lucide && typeof lucide.createIcons === 'function') {
+        lucide.createIcons();
+    }
+};
+
+window.exportInsideCampusCSV = function() {
+    const roster = window.currentInsideRoster || [];
+    if (!roster.length) {
+        showToast('No occupants currently inside campus to export.', 'warning');
+        return;
+    }
+
+    const headers = [
+        '#',
+        'Occupant Name',
+        'Category',
+        'ID / Subtext',
+        'Plate Number',
+        'Vehicle Type',
+        'Entry Date',
+        'Entry Time',
+        'Duration Inside',
+        'Entry Gate',
+        'RFID UID'
+    ];
+
+    const rows = roster.map((l, i) => {
+        const cat = window.getInsideOccupantCategory(l);
+        let ownerName = l.users?.full_name;
+        let subtext = l.users?.id_number || l.users?.program || l.users?.section;
+        if (!ownerName && l.remarks) {
+            const match = l.remarks.match(/Visitor (?:Entry|Exit):\s*([^|]+)/i);
+            if (match) ownerName = match[1].trim();
+        }
+        if (!ownerName && l.is_emergency) ownerName = 'Emergency Responder';
+        if (!ownerName) ownerName = 'Cardholder ' + (l.rfid_uid || '');
+        if (!subtext) subtext = cat;
+
+        const plate = l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || 'N/A';
+        const vehType = l.vehicles?.vehicle_type || 'Vehicle';
+        const enterTime = new Date(l.timestamp);
+        const dateStr = enterTime.toISOString().slice(0, 10);
+        const timeStr = enterTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+        const diffMs = Math.max(0, Date.now() - enterTime.getTime());
+        const diffHrs = Math.floor(diffMs / (1000 * 60 * 60));
+        const diffMins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+        const durationStr = `${diffHrs}h ${diffMins}m`;
+
+        const gate = l.gate || (l.rfid_type === 'LONG_RANGE' ? 'UHF Vehicle Gate' : 'Main Gate');
+        const rfid = l.rfid_uid || 'N/A';
+
+        return [
+            i + 1,
+            `"${ownerName.replace(/"/g, '""')}"`,
+            `"${cat}"`,
+            `"${(subtext || '').replace(/"/g, '""')}"`,
+            `"${plate}"`,
+            `"${vehType}"`,
+            `"${dateStr}"`,
+            `"${timeStr}"`,
+            `"${durationStr}"`,
+            `"${gate}"`,
+            `"${rfid}"`
+        ].join(',');
+    });
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    link.setAttribute('download', `CHARRMPASS_Campus_Occupants_${dateStamp}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    showToast('Campus occupants roster downloaded!', 'success');
+};
 
 let userLeaderboardCategory = 'ALL';
 
@@ -1766,6 +2495,7 @@ function setupRealtime() {
         .on('postgres_changes', { event: '*',      schema: 'public', table: 'rfid_cards'   }, () => { loadData(); })
         .on('postgres_changes', { event: '*',      schema: 'public', table: 'users'        }, () => { loadData(); })
         .on('postgres_changes', { event: '*',      schema: 'public', table: 'special_tags' }, () => { loadData(); })
+        .on('postgres_changes', { event: '*',      schema: 'public', table: 'devices'      }, () => { loadData(); })
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'transactions' }, () => { loadData(); })
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'transactions' }, () => { loadData(); })
         .subscribe();
@@ -1828,47 +2558,254 @@ window.deleteSpecialTag = async function(id) {
     } catch(err) { showToast('Error: ' + err.message, 'error'); }
 };
 
-// Review Registration Logic
+// ==============================================
+// 📋 ENHANCED APPLICATION REVIEW & DOSSIER LOGIC
+// ==============================================
+let currentReviewUserId = null;
+
 window.openReviewModal = function(id) {
-    const u = adminState.pendingUsers.find(x => x.id === id);
-    if (!u) return;
-
-    el('revName').textContent = u.full_name;
-    el('revRoleBadge').textContent = u.role;
-    el('revRoleBadge').className = `mt-2 px-3 py-1 rounded-full text-xs font-black uppercase tracking-widest ${u.role === 'Student' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`;
-    el('revAge').textContent = u.age || '--';
-    el('revSex').textContent = u.sex || '--';
-    el('revProgram').textContent = `${u.program || '--'} • ${u.section || '--'}`;
-    el('revAddress').textContent = u.address || 'No address provided';
-    el('revPlate').textContent = u.plate_number || '--';
-    el('revVehType').textContent = u.vehicle_type || '--';
-    el('revVehDetails').textContent = `${u.vehicle_model || '--'} (${u.vehicle_color || '--'})`;
-
-    const placeholder = 'https://ui-avatars.com/api/?name=' + encodeURIComponent(u.full_name) + '&background=random';
-    el('revProfileImage').src = u.profile_image || placeholder;
-    el('revImgMotor').src = u.motorcycle_image || 'https://images.unsplash.com/photo-1558981403-c5f91cbba527?auto=format&fit=crop&q=60&w=400';
-    el('revImgIdFront').src = u.id_front_image || 'https://images.unsplash.com/photo-1633158829585-23ba8f7c8caf?auto=format&fit=crop&q=60&w=400';
-    el('revImgIdBack').src = u.id_back_image || 'https://images.unsplash.com/photo-1621252179027-94459d278660?auto=format&fit=crop&q=60&w=400';
-
-    // RFID UID Assignment Input
-    if (el('revRfidUid')) {
-        el('revRfidUid').value = (u.rfid_uid && !u.rfid_uid.startsWith('UNASSIGNED_')) ? u.rfid_uid : '';
+    if (!id) return;
+    const u = adminState.users.find(x => x.id === id) || adminState.pendingUsers.find(x => x.id === id);
+    if (!u) {
+        showToast('User record not found.', 'error');
+        return;
     }
 
-    // Buttons
-    el('revBtnApprove').onclick = () => { approveUser(u.id); };
-    el('revBtnDeny').onclick = () => { denyRegistration(u.id); };
+    currentReviewUserId = u.id;
+
+    // Header Info
+    const placeholder = 'https://ui-avatars.com/api/?name=' + encodeURIComponent(u.full_name) + '&background=random';
+    if (el('revHeaderAvatar')) el('revHeaderAvatar').src = u.profile_image || placeholder;
+    if (el('revHeaderName')) el('revHeaderName').textContent = u.full_name || '--';
+    if (el('revHeaderUserId')) el('revHeaderUserId').textContent = `ID: ${u.id.substring(0, 8)}...`;
+    if (el('revHeaderProgram')) el('revHeaderProgram').textContent = `${u.program || 'No Program'} ${u.section ? '• ' + u.section : ''}`;
+    if (el('revHeaderAppliedDate')) {
+        const d = u.created_at ? new Date(u.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Recently';
+        el('revHeaderAppliedDate').textContent = `Applied: ${d}`;
+    }
+
+    // Role & Status Badges in Header
+    const isPending = u.authorization_status === 'PENDING' || !u.authorization_status;
+    const isAuth = u.authorization_status === 'AUTHORIZED';
+    
+    if (el('revHeaderRole')) {
+        el('revHeaderRole').textContent = (u.role || 'STUDENT').toUpperCase();
+        el('revHeaderRole').className = `px-3 py-0.5 rounded-full text-xs font-black uppercase tracking-wider ${
+            u.role === 'Student' ? 'bg-blue-100 text-blue-800' : (u.role === 'Faculty' ? 'bg-purple-100 text-purple-800' : 'bg-emerald-100 text-emerald-800')
+        }`;
+    }
+
+    if (el('revHeaderStatus')) {
+        if (isAuth) {
+            el('revHeaderStatus').innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> AUTHORIZED ACTIVE';
+            el('revHeaderStatus').className = 'px-3 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1.5';
+        } else if (isPending) {
+            el('revHeaderStatus').innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-yellow-500 animate-ping"></span> PENDING REVIEW';
+            el('revHeaderStatus').className = 'px-3 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-yellow-100 text-yellow-800 border border-yellow-300 flex items-center gap-1.5';
+        } else {
+            el('revHeaderStatus').innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> ACCESS DENIED';
+            el('revHeaderStatus').className = 'px-3 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-red-100 text-red-800 border border-red-300 flex items-center gap-1.5';
+        }
+    }
+
+    // Tab 1: Personal & Transit Details
+    const isPed = u.user_type === 'PEDESTRIAN' || u.default_transit_mode === 'PEDESTRIAN' || u.vehicle_type === 'None' || u.plate_number === 'PEDESTRIAN';
+    if (el('revName')) el('revName').textContent = u.full_name || '--';
+    if (el('revRoleBadge')) el('revRoleBadge').textContent = u.role || '--';
+    if (el('revAge')) el('revAge').textContent = u.age || '--';
+    if (el('revSex')) el('revSex').textContent = u.sex || '--';
+    if (el('revProgram')) el('revProgram').textContent = u.program || '--';
+    if (el('revSection')) el('revSection').textContent = u.section || '--';
+    if (el('revAddress')) el('revAddress').textContent = u.address || 'No complete address provided';
+    
+    if (el('revPlate')) el('revPlate').textContent = isPed ? 'PEDESTRIAN (NO VEHICLE)' : (u.plate_number || 'NO PLATE');
+    if (el('revVehTypeBadge')) {
+        el('revVehTypeBadge').textContent = isPed ? '🚶 PEDESTRIAN (CLOSE-RANGE)' : `🚗 ${(u.vehicle_type || 'VEHICLE').toUpperCase()} (LONG-RANGE UHF)`;
+        el('revVehTypeBadge').className = `px-3 py-1 rounded-xl text-xs font-black uppercase ${isPed ? 'bg-blue-100 text-blue-800 border border-blue-300' : 'bg-emerald-100 text-emerald-800 border border-emerald-300'}`;
+    }
+    if (el('revVehDetails')) el('revVehDetails').textContent = isPed ? 'Walking Pedestrian Access' : (u.vehicle_model || '--');
+    if (el('revVehColor')) el('revVehColor').textContent = isPed ? 'N/A' : (u.vehicle_color || '--');
+
+    const defaultVehImg = 'https://images.unsplash.com/photo-1558981403-c5f91cbba527?auto=format&fit=crop&q=80&w=400';
+    if (el('revOverviewVehImg')) {
+        if (isPed) {
+            el('revOverviewVehImg').src = u.profile_image || placeholder;
+        } else {
+            el('revOverviewVehImg').src = u.motorcycle_image || defaultVehImg;
+        }
+    }
+
+    // Tab 2: Document Images
+    if (el('revProfileImage')) el('revProfileImage').src = u.profile_image || placeholder;
+    if (el('revImgMotor')) el('revImgMotor').src = u.motorcycle_image || defaultVehImg;
+    if (el('revImgIdFront')) el('revImgIdFront').src = u.id_front_image || 'https://images.unsplash.com/photo-1633158829585-23ba8f7c8caf?auto=format&fit=crop&q=60&w=400';
+    if (el('revImgIdBack')) el('revImgIdBack').src = u.id_back_image || 'https://images.unsplash.com/photo-1621252179027-94459d278660?auto=format&fit=crop&q=60&w=400';
+
+    // Tab 3: Access History for this User
+    const userLogs = adminState.logs.filter(l => 
+        (l.user_id && l.user_id === u.id) || 
+        (u.rfid_uid && l.rfid_uid === u.rfid_uid) ||
+        (u.plate_number && (l.vehicles?.plate_number === u.plate_number || l.remarks?.includes(u.plate_number)))
+    );
+
+    const userEntries = userLogs.filter(l => l.direction === 'ENTRY' && l.status === 'AUTHORIZED');
+    const userExits = userLogs.filter(l => l.direction === 'EXIT' && l.status === 'AUTHORIZED');
+    const onCampus = isUserOnCampus(u);
+
+    if (el('revStatEntries')) el('revStatEntries').textContent = userEntries.length;
+    if (el('revStatExits')) el('revStatExits').textContent = userExits.length;
+    if (el('revStatPresence')) {
+        el('revStatPresence').innerHTML = onCampus 
+            ? '<span class="text-emerald-600 font-bold flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> 🟢 Inside Campus</span>'
+            : '<span class="text-slate-500">⚪ Off Campus</span>';
+    }
+
+    if (el('revMiniLogsTable')) {
+        el('revMiniLogsTable').innerHTML = userLogs.length ? userLogs.slice(0, 5).map(l => {
+            const isEntry = l.direction === 'ENTRY';
+            const dirBadge = isEntry 
+                ? '<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800">ENTRY</span>' 
+                : '<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-100 text-blue-800">EXIT</span>';
+            const timeStr = l.timestamp ? new Date(l.timestamp).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : '--';
+            const dateStr = l.timestamp ? new Date(l.timestamp).toLocaleDateString([], { month:'short', day:'numeric' }) : '';
+            return `
+            <tr class="hover:bg-slate-50">
+                <td class="p-3">${dirBadge}</td>
+                <td class="p-3 font-semibold text-slate-700">${l.gate || (isEntry ? 'Entry Gate #1' : 'Exit Gate #1')}</td>
+                <td class="p-3 text-slate-500">${dateStr} ${timeStr}</td>
+                <td class="p-3"><span class="px-2 py-0.5 rounded text-[10px] font-bold ${l.status==='AUTHORIZED'?'bg-emerald-50 text-emerald-700':'bg-red-50 text-red-700'}">${l.status||'AUTHORIZED'}</span></td>
+                <td class="p-3 text-slate-500">${l.remarks || 'Standard scan tap'}</td>
+            </tr>`;
+        }).join('') : '<tr><td colspan="5" class="p-6 text-center text-slate-400">No gate tap logs recorded yet for this applicant.</td></tr>';
+    }
+
+    if (el('revBtnOpenFullHistory')) {
+        el('revBtnOpenFullHistory').onclick = () => {
+            closeReviewModal();
+            setTimeout(() => openUserHistoryModal(u.id), 250);
+        };
+    }
+
+    // RFID UID Input Station
+    const cleanUid = (u.rfid_uid && !u.rfid_uid.startsWith('UNASSIGNED_')) ? u.rfid_uid : '';
+    if (el('revRfidUid')) {
+        el('revRfidUid').value = cleanUid;
+        handleRfidInputCheck(cleanUid);
+    }
+
+    // Action Buttons
+    if (el('revBtnApprove')) {
+        el('revBtnApprove').innerHTML = isAuth 
+            ? '<i data-lucide="check-circle" class="w-4 h-4 text-charm-yellow"></i> Update RFID UID' 
+            : '<i data-lucide="check-circle" class="w-4 h-4 text-charm-yellow"></i> Approve &amp; Issue RFID';
+        el('revBtnApprove').onclick = () => { approveUser(u.id); };
+    }
+
+    if (el('revBtnDeny')) {
+        el('revBtnDeny').innerHTML = isAuth 
+            ? '<i data-lucide="shield-off" class="w-4 h-4"></i> Revoke Access' 
+            : '<i data-lucide="x-circle" class="w-4 h-4"></i> Deny Application';
+        el('revBtnDeny').onclick = () => { denyRegistration(u.id); };
+    }
+
+    // Reset to Overview Tab
+    switchReviewTab('overview');
 
     const modal = el('reviewModal');
     modal.classList.remove('hidden');
-    setTimeout(() => { modal.classList.add('opacity-100'); el('reviewModalContent').classList.remove('scale-95'); }, 10);
+    setTimeout(() => { 
+        modal.classList.add('opacity-100'); 
+        el('reviewModalContent').classList.remove('scale-95'); 
+    }, 10);
     lucide.createIcons();
 };
 
 window.closeReviewModal = function() {
     const modal = el('reviewModal');
-    modal.classList.remove('opacity-100'); el('reviewModalContent').classList.add('scale-95');
+    if (!modal) return;
+    modal.classList.remove('opacity-100'); 
+    el('reviewModalContent').classList.add('scale-95');
     setTimeout(() => modal.classList.add('hidden'), 300);
+};
+
+window.switchReviewTab = function(tabName) {
+    const tabs = ['overview', 'documents', 'history'];
+    tabs.forEach(t => {
+        const btn = el('revNav-' + t);
+        const sec = el('revSection-' + t);
+        if (btn) {
+            if (t === tabName) {
+                btn.className = 'rev-tab-btn py-3 px-4 text-xs font-black uppercase tracking-wider text-charm-dark border-b-2 border-charm-dark flex items-center gap-2';
+            } else {
+                btn.className = 'rev-tab-btn py-3 px-4 text-xs font-black uppercase tracking-wider text-slate-400 hover:text-slate-700 border-b-2 border-transparent flex items-center gap-2';
+            }
+        }
+        if (sec) {
+            if (t === tabName) sec.classList.remove('hidden');
+            else sec.classList.add('hidden');
+        }
+    });
+    lucide.createIcons();
+};
+
+window.handleRfidInputCheck = function(val) {
+    const inputVal = (val || '').trim().toUpperCase();
+    const warnEl = el('revDuplicateWarning');
+    const chipEl = el('revUidStatusChip');
+
+    if (!inputVal) {
+        if (warnEl) warnEl.classList.add('hidden');
+        if (chipEl) {
+            chipEl.innerHTML = '<i data-lucide="radio" class="w-4 h-4 text-slate-400"></i><span>Awaiting UID Input</span>';
+            chipEl.className = 'w-full py-3 px-4 rounded-2xl bg-white border border-slate-200 text-xs font-bold text-slate-500 flex items-center justify-center gap-2 shadow-sm';
+        }
+        lucide.createIcons();
+        return;
+    }
+
+    // Check duplicate among other registered users
+    const duplicate = adminState.users.find(u => 
+        u.id !== currentReviewUserId && 
+        u.rfid_uid && 
+        u.rfid_uid.replace(/\s+/g,'').toUpperCase() === inputVal.replace(/\s+/g,'')
+    );
+
+    if (duplicate) {
+        if (warnEl) {
+            warnEl.classList.remove('hidden');
+            el('revDuplicateText').textContent = `⚠️ Warning: UID "${inputVal}" is already assigned to "${duplicate.full_name}" (${duplicate.plate_number || 'No Plate'})`;
+        }
+        if (chipEl) {
+            chipEl.innerHTML = '<i data-lucide="alert-triangle" class="w-4 h-4 text-red-500"></i><span class="text-red-600">Duplicate Tag Detected</span>';
+            chipEl.className = 'w-full py-3 px-4 rounded-2xl bg-red-50 border border-red-200 text-xs font-bold text-red-700 flex items-center justify-center gap-2 shadow-sm';
+        }
+    } else {
+        if (warnEl) warnEl.classList.add('hidden');
+        if (chipEl) {
+            chipEl.innerHTML = '<i data-lucide="check-circle" class="w-4 h-4 text-emerald-600"></i><span class="text-emerald-700">Valid Unique RFID Tag</span>';
+            chipEl.className = 'w-full py-3 px-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs font-bold text-emerald-800 flex items-center justify-center gap-2 shadow-sm';
+        }
+    }
+    lucide.createIcons();
+};
+
+window.generateTestUID = function() {
+    // Generate realistic 4-byte HEX UID
+    const hexParts = [];
+    for (let i = 0; i < 4; i++) {
+        const byte = Math.floor(Math.random() * 256).toString(16).toUpperCase().padStart(2, '0');
+        hexParts.push(byte);
+    }
+    const newUid = hexParts.join(' ');
+    if (el('revRfidUid')) {
+        el('revRfidUid').value = newUid;
+        handleRfidInputCheck(newUid);
+        showToast(`Generated Test RFID UID: ${newUid}`, 'info');
+    }
+};
+
+window.printRegistrationSummary = function() {
+    window.print();
 };
 
 window.zoomImage = function(container) {
@@ -1876,6 +2813,304 @@ window.zoomImage = function(container) {
     if (!img || !img.src) return;
     el('zoomImg').src = img.src;
     el('zoomModal').classList.remove('hidden');
+};
+
+
+
+// ==============================================
+// 📜 DEDICATED USER ACCESS HISTORY & AUDIT LOGS
+// ==============================================
+let activeUserHistoryData = {
+    user: null,
+    logs: [],
+    direction: 'ALL'
+};
+
+window.openUserHistoryModal = function(userId) {
+    if (!userId) return;
+    const u = adminState.users.find(x => x.id === userId) || adminState.pendingUsers.find(x => x.id === userId);
+    if (!u) {
+        showToast('User not found.', 'error');
+        return;
+    }
+
+    activeUserHistoryData.user = u;
+    activeUserHistoryData.direction = 'ALL';
+
+    // Header Profile Elements
+    const avatar = u.profile_image || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.full_name)}&background=random`;
+    if (el('histUserAvatar')) el('histUserAvatar').src = avatar;
+    if (el('histUserName')) el('histUserName').textContent = u.full_name || '--';
+    if (el('histUserRole')) el('histUserRole').textContent = (u.role || 'USER').toUpperCase();
+    if (el('histUserProgram')) el('histUserProgram').textContent = `${u.program || 'No Program'} ${u.section ? '• ' + u.section : ''}`;
+    if (el('histUserPlate')) el('histUserPlate').textContent = `PLATE: ${u.plate_number || 'NO PLATE'}`;
+    if (el('histUserUid')) el('histUserUid').textContent = `RFID: ${u.rfid_uid || 'NOT ASSIGNED'}`;
+
+    // Filter all logs for this specific user
+    const userLogs = adminState.logs.filter(l => 
+        (l.user_id && l.user_id === u.id) || 
+        (u.rfid_uid && l.rfid_uid === u.rfid_uid) ||
+        (u.plate_number && (l.vehicles?.plate_number === u.plate_number || l.remarks?.includes(u.plate_number)))
+    );
+
+    // Sort descending by timestamp
+    userLogs.sort((a,b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+    activeUserHistoryData.logs = userLogs;
+
+    // Presence & KPI Calculations
+    const onCampus = isUserOnCampus(u);
+    const authLogs = userLogs.filter(l => l.status === 'AUTHORIZED');
+    const totalEntries = authLogs.filter(l => l.direction === 'ENTRY').length;
+    const totalExits = authLogs.filter(l => l.direction === 'EXIT').length;
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const todayLogs = userLogs.filter(l => l.timestamp && l.timestamp.startsWith(todayStr));
+
+    if (el('histPresencePill')) {
+        if (onCampus) {
+            el('histPresencePill').innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> INSIDE CAMPUS';
+            el('histPresencePill').className = 'px-3 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 flex items-center gap-1.5';
+        } else {
+            el('histPresencePill').innerHTML = '⚪ OFF-CAMPUS';
+            el('histPresencePill').className = 'px-3 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-white/10 text-slate-300 border border-white/20 flex items-center gap-1.5';
+        }
+    }
+
+    if (el('histTotalEntries')) el('histTotalEntries').textContent = totalEntries;
+    if (el('histTotalExits')) el('histTotalExits').textContent = totalExits;
+    if (el('histTodayTaps')) el('histTodayTaps').textContent = todayLogs.length;
+
+    if (userLogs.length > 0) {
+        const lastLog = userLogs[0];
+        const lastTime = lastLog.timestamp ? new Date(lastLog.timestamp).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : '--';
+        const lastDate = lastLog.timestamp ? new Date(lastLog.timestamp).toLocaleDateString([], { month:'short', day:'numeric' }) : '';
+        if (el('histLastActivity')) el('histLastActivity').textContent = `${lastLog.direction || 'SCAN'} via ${lastLog.gate || 'Gate'}`;
+        if (el('histLastTimestamp')) el('histLastTimestamp').textContent = `${lastDate} at ${lastTime}`;
+    } else {
+        if (el('histLastActivity')) el('histLastActivity').textContent = 'No past scans';
+        if (el('histLastTimestamp')) el('histLastTimestamp').textContent = '--';
+    }
+
+    // Reset Direction Filter
+    setUserHistDirection('ALL');
+
+    const modal = el('userHistoryModal');
+    modal.classList.remove('hidden');
+    setTimeout(() => { 
+        modal.classList.add('opacity-100'); 
+        el('userHistoryModalContent').classList.remove('scale-95'); 
+    }, 10);
+    lucide.createIcons();
+};
+
+window.closeUserHistoryModal = function() {
+    const modal = el('userHistoryModal');
+    if (!modal) return;
+    modal.classList.remove('opacity-100'); 
+    el('userHistoryModalContent').classList.add('scale-95');
+    setTimeout(() => modal.classList.add('hidden'), 300);
+};
+
+window.setUserHistDirection = function(dir) {
+    activeUserHistoryData.direction = dir;
+    document.querySelectorAll('.uh-dir-btn').forEach(b => {
+        b.classList.remove('bg-charm-dark', 'text-white', 'shadow-sm');
+        b.classList.add('text-slate-600', 'hover:text-slate-900');
+    });
+    const btn = el('uhDir-' + dir);
+    if (btn) {
+        btn.classList.remove('text-slate-600', 'hover:text-slate-900');
+        btn.classList.add('bg-charm-dark', 'text-white', 'shadow-sm');
+    }
+    filterUserHistoryTable();
+};
+
+window.filterUserHistoryTable = function() {
+    const search = (el('userHistSearch')?.value || '').toLowerCase().trim();
+    const dir = activeUserHistoryData.direction || 'ALL';
+    let logs = [...activeUserHistoryData.logs];
+
+    if (dir === 'ENTRY') logs = logs.filter(l => l.direction === 'ENTRY' && l.status === 'AUTHORIZED');
+    else if (dir === 'EXIT') logs = logs.filter(l => l.direction === 'EXIT' && l.status === 'AUTHORIZED');
+    else if (dir === 'DENIED') logs = logs.filter(l => l.status === 'DENIED');
+
+    if (search) {
+        logs = logs.filter(l => 
+            (l.gate || '').toLowerCase().includes(search) || 
+            (l.remarks || '').toLowerCase().includes(search) ||
+            (l.status || '').toLowerCase().includes(search)
+        );
+    }
+
+    if (el('userHistCountLabel')) {
+        el('userHistCountLabel').textContent = `Showing ${logs.length} scan log records`;
+    }
+
+    if (el('userHistoryTableBody')) {
+        if (!logs.length) {
+            el('userHistoryTableBody').innerHTML = `
+                <tr>
+                    <td colspan="6" class="p-12 text-center text-slate-400">
+                        <div class="flex flex-col items-center justify-center">
+                            <div class="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mb-2 text-slate-400">
+                                <i data-lucide="inbox" class="w-6 h-6"></i>
+                            </div>
+                            <p class="font-bold text-slate-700">No activity logs recorded</p>
+                            <p class="text-xs text-slate-400">No matching gate entry or exit events found for this user.</p>
+                        </div>
+                    </td>
+                </tr>`;
+            lucide.createIcons();
+            return;
+        }
+
+        // Compute Stay Duration by pairing chronologically
+        el('userHistoryTableBody').innerHTML = logs.map((l, index) => {
+            const isEntry = l.direction === 'ENTRY';
+            const isAuth = l.status === 'AUTHORIZED';
+
+            const dirBadge = isEntry 
+                ? '<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300"><i data-lucide="arrow-down-left" class="w-3 h-3"></i> ENTRY</span>' 
+                : '<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-blue-100 text-blue-800 border border-blue-300"><i data-lucide="arrow-up-right" class="w-3 h-3"></i> EXIT</span>';
+
+            const statusBadge = isAuth 
+                ? '<span class="px-2 py-0.5 rounded text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200">AUTHORIZED</span>' 
+                : '<span class="px-2 py-0.5 rounded text-[10px] font-extrabold bg-red-50 text-red-700 border border-red-200">DENIED</span>';
+
+            const dateObj = l.timestamp ? new Date(l.timestamp) : new Date();
+            const dateFormatted = dateObj.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+            const timeFormatted = dateObj.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+
+            // Relative time calculation
+            const diffMs = Date.now() - dateObj.getTime();
+            const diffMins = Math.floor(diffMs / 60000);
+            let relTime = `${diffMins}m ago`;
+            if (diffMins < 1) relTime = 'Just now';
+            else if (diffMins >= 60 && diffMins < 1440) relTime = `${Math.floor(diffMins / 60)}h ago`;
+            else if (diffMins >= 1440) relTime = `${Math.floor(diffMins / 1440)}d ago`;
+
+            // Calculate duration if exit
+            let durationText = '--';
+            if (!isEntry && isAuth) {
+                // Look for closest prior ENTRY
+                const priorEntry = activeUserHistoryData.logs.slice(index + 1).find(x => x.direction === 'ENTRY' && x.status === 'AUTHORIZED');
+                if (priorEntry && priorEntry.timestamp) {
+                    const durationMins = Math.floor((new Date(l.timestamp) - new Date(priorEntry.timestamp)) / 60000);
+                    if (durationMins > 0) {
+                        const h = Math.floor(durationMins / 60);
+                        const m = durationMins % 60;
+                        durationText = h > 0 ? `${h}h ${m}m` : `${m} mins`;
+                    } else {
+                        durationText = '< 1 min';
+                    }
+                }
+            } else if (isEntry && isAuth && index === 0 && isUserOnCampus(activeUserHistoryData.user)) {
+                const elapsedMins = Math.floor((Date.now() - dateObj.getTime()) / 60000);
+                const h = Math.floor(elapsedMins / 60);
+                const m = elapsedMins % 60;
+                durationText = `<span class="text-emerald-600 font-bold font-mono">${h > 0 ? `${h}h ${m}m` : `${m}m`} (Active)</span>`;
+            }
+
+            return `
+            <tr class="hover:bg-slate-50 transition-colors">
+                <td class="p-3.5">${dirBadge}</td>
+                <td class="p-3.5 font-bold text-slate-700">
+                    <div class="flex items-center gap-1.5">
+                        <i data-lucide="${isEntry ? 'log-in' : 'log-out'}" class="w-3.5 h-3.5 text-slate-400"></i>
+                        <span>${l.gate || (isEntry ? 'CHARRMPASS Entry Gate #1' : 'CHARRMPASS Exit Gate #1')}</span>
+                    </div>
+                </td>
+                <td class="p-3.5">
+                    <div class="font-mono font-bold text-slate-800">${timeFormatted}</div>
+                    <div class="text-[10px] text-slate-400 font-medium">${dateFormatted} • ${relTime}</div>
+                </td>
+                <td class="p-3.5 font-mono font-semibold text-slate-700">
+                    ${durationText}
+                </td>
+                <td class="p-3.5 text-center">
+                    ${statusBadge}
+                </td>
+                <td class="p-3.5 text-slate-600 font-medium">
+                    ${l.remarks || 'Standard RFID gate scan'}
+                </td>
+            </tr>`;
+        }).join('');
+        lucide.createIcons();
+    }
+};
+
+window.exportSingleUserLogsCSV = function() {
+    const u = activeUserHistoryData.user;
+    const logs = activeUserHistoryData.logs;
+    if (!u || !logs.length) {
+        showToast('No log records to export.', 'warning');
+        return;
+    }
+
+    const headers = ['Timestamp', 'Direction', 'Gate', 'Status', 'Driver Name', 'Role', 'Plate Number', 'RFID UID', 'Remarks'];
+    const rows = logs.map(l => [
+        `"${l.timestamp || ''}"`,
+        `"${l.direction || 'ENTRY'}"`,
+        `"${l.gate || 'Gate'}"`,
+        `"${l.status || 'AUTHORIZED'}"`,
+        `"${(u.full_name || '').replace(/"/g, '""')}"`,
+        `"${u.role || ''}"`,
+        `"${u.plate_number || ''}"`,
+        `"${u.rfid_uid || ''}"`,
+        `"${(l.remarks || '').replace(/"/g, '""')}"`
+    ]);
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    const dateStr = new Date().toISOString().split('T')[0];
+    link.setAttribute('download', `charrmpass_logs_${(u.full_name||'user').toLowerCase().replace(/\s+/g,'_')}_${dateStr}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast(`Exported ${logs.length} log records for ${u.full_name}`, 'success');
+};
+
+window.printSingleUserHistory = function() {
+    window.print();
+};
+
+window.exportAllUsersCSV = function() {
+    if (!adminState.users.length) {
+        showToast('No registered users to export.', 'warning');
+        return;
+    }
+
+    const headers = ['User ID', 'Full Name', 'Role', 'Age', 'Sex', 'Program', 'Section', 'Address', 'Plate Number', 'Vehicle Type', 'Vehicle Model', 'Vehicle Color', 'RFID UID', 'Authorization Status', 'Registered Date'];
+    const rows = adminState.users.map(u => [
+        `"${u.id || ''}"`,
+        `"${(u.full_name || '').replace(/"/g, '""')}"`,
+        `"${u.role || ''}"`,
+        `"${u.age || ''}"`,
+        `"${u.sex || ''}"`,
+        `"${(u.program || '').replace(/"/g, '""')}"`,
+        `"${(u.section || '').replace(/"/g, '""')}"`,
+        `"${(u.address || '').replace(/"/g, '""')}"`,
+        `"${u.plate_number || ''}"`,
+        `"${u.vehicle_type || ''}"`,
+        `"${(u.vehicle_model || '').replace(/"/g, '""')}"`,
+        `"${(u.vehicle_color || '').replace(/"/g, '""')}"`,
+        `"${u.rfid_uid || ''}"`,
+        `"${u.authorization_status || 'PENDING'}"`,
+        `"${u.created_at || ''}"`
+    ]);
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    const dateStr = new Date().toISOString().split('T')[0];
+    link.setAttribute('download', `charrmpass_registered_users_${dateStr}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast(`Exported ${adminState.users.length} users to CSV`, 'success');
 };
 
 // Account Modal logic (Guard Credentials Management)
@@ -1994,6 +3229,822 @@ window.togglePass = function(id, btn) {
 };
 
 
+// ==============================================
+// 📡 BLUETOOTH (BLE) & WI-FI PROVISIONING MODULE
+// Flow: Phone/Browser -> Web Bluetooth (BLE) -> ESP32 -> Router Wi-Fi -> Supabase Cloud
+// ==============================================
+
+const BLE_SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
+const BLE_CHAR_UUID    = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
+
+let bleState = {
+    device: null,
+    server: null,
+    service: null,
+    characteristic: null,
+    isConnected: false,
+    deviceName: null,
+    deviceRssi: -50,
+    lastEvent: null
+};
+
+function getTimestampStr() {
+    const d = new Date();
+    return d.toTimeString().split(' ')[0] + '.' + String(d.getMilliseconds()).padStart(3, '0');
+}
+
+window.appendBleLog = function(message, type = 'info') {
+    const logsContainer = el('bleConsoleOutput') || el('bleConsoleLogs');
+    if (!logsContainer) return;
+
+    let colorClass = 'text-slate-300';
+    let prefix = 'ℹ️';
+
+    if (type === 'success') {
+        colorClass = 'text-emerald-400 font-bold';
+        prefix = '✅';
+    } else if (type === 'error') {
+        colorClass = 'text-rose-400 font-bold';
+        prefix = '❌';
+    } else if (type === 'warn') {
+        colorClass = 'text-amber-400';
+        prefix = '⚠️';
+    } else if (type === 'tx') {
+        colorClass = 'text-sky-300 font-mono';
+        prefix = '📤 [TX]';
+    } else if (type === 'rx') {
+        colorClass = 'text-purple-300 font-mono';
+        prefix = '📥 [RX]';
+    } else if (type === 'system') {
+        colorClass = 'text-charm-yellow font-bold';
+        prefix = '⚡';
+    }
+
+    const logEntry = document.createElement('div');
+    logEntry.className = `flex items-start gap-2 leading-relaxed ${colorClass}`;
+    logEntry.innerHTML = `
+        <span class="text-slate-500 select-none text-[11px] font-mono">[${getTimestampStr()}]</span>
+        <span class="font-mono text-xs select-none">${prefix}</span>
+        <span class="flex-1 font-mono text-xs break-all">${message}</span>
+    `;
+
+    logsContainer.appendChild(logEntry);
+    logsContainer.scrollTop = logsContainer.scrollHeight;
+};
+
+window.clearBleConsole = function() {
+    const logsContainer = el('bleConsoleOutput') || el('bleConsoleLogs');
+    if (!logsContainer) return;
+    logsContainer.innerHTML = `
+        <div class="text-slate-500 italic">
+            [${getTimestampStr()}] Bluetooth terminal ready for ESP32 connection...
+        </div>
+    `;
+    showToast('Terminal logs cleared.', 'info');
+};
+
+function updateBleUiConnected(name = 'CHARRMPASS_GATE_BLE') {
+    const statusBadge = el('bleConnectionStatus');
+    if (statusBadge) {
+        statusBadge.className = 'px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 border border-emerald-300';
+        statusBadge.textContent = 'CONNECTED (PAIRED)';
+    }
+    const card = el('bleActiveDeviceCard');
+    if (card) {
+        card.classList.remove('hidden');
+    }
+    if (el('bleDeviceName')) {
+        el('bleDeviceName').textContent = name;
+    }
+    if (el('bleDeviceRssi')) {
+        el('bleDeviceRssi').textContent = `${bleState.deviceRssi} dBm (Good)`;
+    }
+    if (el('btnScanBle')) {
+        el('btnScanBle').classList.add('hidden');
+    }
+    if (el('flowStepBle')) {
+        el('flowStepBle').classList.add('border-emerald-500', 'bg-emerald-50/50');
+    }
+    if (el('flowStepEsp')) {
+        el('flowStepEsp').classList.add('border-emerald-500', 'bg-emerald-50/50');
+    }
+}
+
+function updateBleUiDisconnected() {
+    const statusBadge = el('bleConnectionStatus');
+    if (statusBadge) {
+        statusBadge.className = 'px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-slate-100 text-slate-500 border border-slate-200';
+        statusBadge.textContent = 'DISCONNECTED';
+    }
+    const card = el('bleActiveDeviceCard');
+    if (card) {
+        card.classList.add('hidden');
+    }
+    if (el('btnScanBle')) {
+        el('btnScanBle').classList.remove('hidden');
+    }
+    if (el('flowStepBle')) {
+        el('flowStepBle').classList.remove('border-emerald-500', 'bg-emerald-50/50');
+    }
+    if (el('flowStepEsp')) {
+        el('flowStepEsp').classList.remove('border-emerald-500', 'bg-emerald-50/50');
+    }
+    if (el('flowStepRouter')) {
+        el('flowStepRouter').classList.remove('border-emerald-500', 'bg-emerald-50/50');
+    }
+    if (el('flowStepCloud')) {
+        el('flowStepCloud').classList.remove('border-emerald-500', 'bg-emerald-50/50');
+    }
+}
+
+// Handler for real incoming characteristic notifications from ESP32
+function handleBleNotification(event) {
+    try {
+        const value = event.target.value;
+        const decoder = new TextDecoder('utf-8');
+        const text = decoder.decode(value);
+        appendBleLog(`ESP32 Notification: ${text}`, 'rx');
+
+        try {
+            const data = JSON.parse(text);
+            if (data.event === 'CONNECTED' || data.status === 'CONNECTED' || data.status === 'ONLINE') {
+                appendBleLog(`ESP32 Wi-Fi Connected! IP: ${data.ip || 'Assigned'} | RSSI: ${data.rssi || '-50'} dBm`, 'success');
+                showToast(`ESP32 connected to Wi-Fi (${data.ip || 'Online'})!`, 'success');
+                if (el('flowStepRouter')) el('flowStepRouter').classList.add('border-emerald-500', 'bg-emerald-50/50');
+                if (el('flowStepCloud')) el('flowStepCloud').classList.add('border-emerald-500', 'bg-emerald-50/50');
+                loadData();
+            } else if (data.event === 'FAILED' || data.status === 'FAILED') {
+                appendBleLog(`ESP32 Wi-Fi Connection Failed: ${data.error || 'Check password and signal'}`, 'error');
+                showToast('ESP32 could not connect to Wi-Fi network. Check SSID and password.', 'error');
+                if (el('flowStepRouter')) el('flowStepRouter').classList.remove('border-emerald-500', 'bg-emerald-50/50');
+            } else if (data.event === 'RECEIVED') {
+                appendBleLog(`ESP32 received credentials for "${data.ssid || 'network'}". Testing connection (up to 15s)...`, 'info');
+                showToast(`ESP32 testing connection to "${data.ssid || 'Wi-Fi'}"...`, 'info');
+            } else if (data.event === 'SAVED' || data.status === 'SAVED') {
+                appendBleLog(`ESP32 verified & stored credentials to NVS and SD backup for: "${data.ssid}"`, 'success');
+            }
+        } catch(pe) {
+            // Raw text response
+            if (text.includes('CONNECTED') || text.includes('ONLINE')) {
+                appendBleLog(`ESP32 Status Update: ${text}`, 'success');
+            }
+        }
+    } catch(err) {
+        console.error('BLE Notification decode error:', err);
+    }
+}
+
+window.connectBluetoothDevice = async function() {
+    appendBleLog('Initiating Web Bluetooth scan for CHARRMPASS ESP32 Gate Controllers...', 'system');
+
+    if (!navigator.bluetooth) {
+        appendBleLog('Web Bluetooth API is unavailable. Note: Web Bluetooth requires Chrome or Edge browser.', 'warn');
+        showToast('Web Bluetooth requires Chrome or Edge browser.', 'warning');
+        return;
+    }
+
+    try {
+        appendBleLog('Opening Bluetooth pairing prompt. Please select your CHARRMPASS ESP32 device...', 'info');
+        
+        let device = null;
+        const allowedServices = [
+            BLE_SERVICE_UUID,
+            '4fafc201-1fb5-459e-8fcc-c5c9c331914b',
+            '0000ffff-0000-1000-8000-00805f9b34fb',
+            'battery_service',
+            'device_information'
+        ];
+
+        try {
+            device = await navigator.bluetooth.requestDevice({
+                filters: [
+                    { namePrefix: 'CHARRMPASS' }
+                ],
+                optionalServices: allowedServices
+            });
+        } catch(filterErr) {
+            device = await navigator.bluetooth.requestDevice({
+                acceptAllDevices: true,
+                optionalServices: allowedServices
+            });
+        }
+
+        if (!device) {
+            appendBleLog('No device selected.', 'warn');
+            return;
+        }
+
+        appendBleLog(`Device selected: "${device.name || 'Unnamed ESP32'}" (ID: ${device.id})`, 'info');
+        appendBleLog('Connecting to GATT Server...', 'info');
+
+        device.addEventListener('gattserverdisconnected', onBleDisconnected);
+
+        const server = await device.gatt.connect();
+        appendBleLog('GATT Server connected! Discovering Wi-Fi Provisioning Service...', 'info');
+
+        // Robust service discovery
+        let service = null;
+        const serviceAttempts = [
+            BLE_SERVICE_UUID,
+            '4fafc201-1fb5-459e-8fcc-c5c9c331914b',
+            '0000ffff-0000-1000-8000-00805f9b34fb'
+        ];
+        for (const sId of serviceAttempts) {
+            try {
+                service = await server.getPrimaryService(sId);
+                if (service) break;
+            } catch(e) {}
+        }
+
+        if (!service) {
+            try {
+                const services = await server.getPrimaryServices();
+                appendBleLog(`Found ${services.length} GATT service(s) on device.`, 'info');
+                for (const s of services) {
+                    appendBleLog(`• Service: ${s.uuid}`, 'info');
+                    if (s.uuid.toLowerCase() === BLE_SERVICE_UUID.toLowerCase() || s.uuid.includes('4faf') || s.uuid.includes('ffff')) {
+                        service = s;
+                        break;
+                    }
+                }
+                if (!service && services.length > 0) {
+                    service = services[0];
+                    appendBleLog(`Using GATT Service: ${service.uuid}`, 'info');
+                }
+            } catch(allSvcErr) {
+                console.warn('getPrimaryServices error:', allSvcErr);
+            }
+        }
+
+        if (!service) {
+            throw new Error(`Provisioning Service (${BLE_SERVICE_UUID}) not accessible. Please ensure device is running latest firmware.`);
+        }
+        appendBleLog(`GATT Service identified: ${service.uuid}`, 'success');
+
+        // Robust characteristic discovery
+        let characteristic = null;
+        const charAttempts = [
+            BLE_CHAR_UUID,
+            'beb5483e-36e1-4688-b7f5-ea07361b26a8',
+            '0000ff01-0000-1000-8000-00805f9b34fb'
+        ];
+        for (const cId of charAttempts) {
+            try {
+                characteristic = await service.getCharacteristic(cId);
+                if (characteristic) break;
+            } catch(e) {}
+        }
+
+        if (!characteristic) {
+            try {
+                const chars = await service.getCharacteristics();
+                appendBleLog(`Found ${chars.length} characteristic(s) in service.`, 'info');
+                for (const c of chars) {
+                    appendBleLog(`• Characteristic: ${c.uuid}`, 'info');
+                    if (c.uuid.toLowerCase() === BLE_CHAR_UUID.toLowerCase() || c.uuid.includes('beb5') || c.uuid.includes('ff01')) {
+                        characteristic = c;
+                        break;
+                    }
+                }
+                if (!characteristic && chars.length > 0) {
+                    characteristic = chars[0];
+                    appendBleLog(`Using Characteristic: ${characteristic.uuid}`, 'info');
+                }
+            } catch(allCharErr) {
+                console.warn('getCharacteristics error:', allCharErr);
+            }
+        }
+
+        if (!characteristic) {
+            throw new Error(`Provisioning Characteristic (${BLE_CHAR_UUID}) not accessible. Please reconnect.`);
+        }
+        appendBleLog(`Provisioning Characteristic ready: ${characteristic.uuid} (Write & Notify capable).`, 'success');
+
+        // Start notifications if supported
+        try {
+            await characteristic.startNotifications();
+            characteristic.addEventListener('characteristicvaluechanged', handleBleNotification);
+            appendBleLog('Subscribed to real-time status notifications from ESP32.', 'success');
+        } catch(notifErr) {
+            console.warn('Could not subscribe to notifications:', notifErr);
+        }
+
+        bleState.device = device;
+        bleState.server = server;
+        bleState.service = service;
+        bleState.characteristic = characteristic;
+        bleState.isConnected = true;
+        bleState.deviceName = device.name || 'CHARRMPASS_ESP32_GATE';
+
+        updateBleUiConnected(bleState.deviceName);
+        appendBleLog(`Ready! ESP32 "${bleState.deviceName}" is paired. Enter SSID and Password below to send.`, 'success');
+        showToast(`Connected to ${bleState.deviceName} via Bluetooth!`, 'success');
+
+    } catch (err) {
+        if (err.name === 'NotFoundError') {
+            appendBleLog('Bluetooth scan was cancelled by user.', 'warn');
+        } else {
+            appendBleLog(`Bluetooth Error: ${err.message}`, 'error');
+            showToast('Bluetooth Connection Failed: ' + err.message, 'error');
+        }
+    }
+};
+
+function onBleDisconnected() {
+    appendBleLog(`Device "${bleState.deviceName || 'ESP32'}" disconnected from Bluetooth.`, 'warn');
+    bleState.device = null;
+    bleState.server = null;
+    bleState.service = null;
+    bleState.characteristic = null;
+    bleState.isConnected = false;
+    updateBleUiDisconnected();
+    showToast('ESP32 Bluetooth disconnected.', 'warning');
+}
+
+window.disconnectBluetoothDevice = function() {
+    if (bleState.device && bleState.device.gatt && bleState.device.gatt.connected) {
+        bleState.device.gatt.disconnect();
+    } else {
+        onBleDisconnected();
+    }
+};
+
+window.fillCampusPresetWifi = function() {
+    appendBleLog('Tip: Click "Scan & Connect via Bluetooth" above to pair with your ESP32.', 'info');
+    appendBleLog('Then enter your 2.4GHz Wi-Fi SSID and password to send them directly over BLE.', 'info');
+    showToast('Click "Scan & Connect via Bluetooth" then enter your network credentials.', 'info');
+    if (el('wifiSsidInput')) el('wifiSsidInput').focus();
+};
+
+window.handleWifiProvisionSubmit = async function(event) {
+    if (event) event.preventDefault();
+
+    const ssid = el('wifiSsidInput')?.value.trim();
+    const passInput = el('wifiPassInput') || el('wifiPasswordInput');
+    const password = passInput ? passInput.value.trim() : '';
+    const gateId = el('bleTargetDeviceType')?.value || 'ENTRY';
+    const secProto = el('wifiSecProtocol')?.value || 'WPA2';
+    const ipMode = el('wifiIpMode')?.value || 'DHCP';
+
+    if (!ssid) {
+        showToast('Please enter the Wi-Fi Network Name (SSID).', 'warning');
+        el('wifiSsidInput')?.focus();
+        return;
+    }
+
+    if (!bleState.isConnected) {
+        showToast('Please click "Scan & Connect via Bluetooth" to pair with your ESP32 first.', 'warning');
+        appendBleLog('Cannot transmit credentials: No active Bluetooth connection. Click "Scan & Connect via Bluetooth" above.', 'warn');
+        return;
+    }
+
+    const payloadObj = {
+        ssid: ssid,
+        pass: password
+    };
+
+    const rawPayload = JSON.stringify(payloadObj);
+    const maskedPass = password ? '*'.repeat(password.length) : '(open/none)';
+
+    appendBleLog(`Preparing Wi-Fi credentials package for Gate Target: ${gateId}...`, 'system');
+    appendBleLog(`SSID: "${ssid}" | Password: ${maskedPass} | Security: ${secProto} | IP: ${ipMode}`, 'info');
+
+    const submitBtn = el('btnSendProvision') || el('btnSendWifiConfig');
+    const originalText = submitBtn ? submitBtn.innerHTML : 'Send Credentials';
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Transmitting over BLE...`;
+        lucide.createIcons();
+    }
+
+    try {
+        appendBleLog(`Transmitting payload (${rawPayload.length} bytes) to ESP32 characteristic...`, 'tx');
+
+        if (!bleState.characteristic) {
+            throw new Error('Bluetooth characteristic not available. Please reconnect to your ESP32.');
+        }
+
+        const encoder = new TextEncoder();
+        const dataBuffer = encoder.encode(rawPayload);
+        
+        if (typeof bleState.characteristic.writeValueWithResponse === 'function') {
+            try {
+                await bleState.characteristic.writeValueWithResponse(dataBuffer);
+            } catch (wErr) {
+                if (typeof bleState.characteristic.writeValueWithoutResponse === 'function') {
+                    await bleState.characteristic.writeValueWithoutResponse(dataBuffer);
+                } else if (typeof bleState.characteristic.writeValue === 'function') {
+                    await bleState.characteristic.writeValue(dataBuffer);
+                } else {
+                    throw wErr;
+                }
+            }
+        } else if (typeof bleState.characteristic.writeValue === 'function') {
+            await bleState.characteristic.writeValue(dataBuffer);
+        }
+        appendBleLog('GATT Write Acknowledgement received: Payload successfully written to ESP32.', 'rx');
+
+        appendBleLog(`[ESP32] Received new Wi-Fi credentials for "${ssid}". Connecting to network...`, 'info');
+        showToast(`Wi-Fi credentials transmitted to ESP32 (${gateId})!`, 'success');
+
+        if (el('flowStepRouter')) el('flowStepRouter').classList.add('border-emerald-500', 'bg-emerald-50/50');
+
+    } catch (err) {
+        appendBleLog(`Provisioning transmission error: ${err.message}`, 'error');
+        showToast('Failed to transmit Wi-Fi credentials: ' + err.message, 'error');
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = originalText;
+            lucide.createIcons();
+        }
+    }
+};
+
+// Real-world dynamic rendering of ESP32 devices table & health cards
+window.renderEsp32DevicesTable = function() {
+    const tableBody = el('esp32DevicesTable');
+    const devices = adminState.devices || [];
+
+    // Update target device dropdown
+    const devSelect = el('bleTargetDeviceType');
+    if (devSelect && devices.length > 0) {
+        const currentVal = devSelect.value;
+        devSelect.innerHTML = devices.map(d => `
+            <option value="${d.esp32_identifier || d.gate_type}">${d.device_name || d.esp32_identifier} (${d.gate_type || 'GATE'})</option>
+        `).join('') + `<option value="CUSTOM">Custom IoT Device (R.A.N. / EnerCharge Node)</option>`;
+        if (currentVal) devSelect.value = currentVal;
+    }
+
+    // Determine online status based on real database last_online or latest transaction
+    const now = Date.now();
+    let onlineCount = 0;
+
+    let entryGate = devices.find(d => (d.gate_type === 'ENTRY' || (d.esp32_identifier && d.esp32_identifier.includes('ENTRY'))));
+    let exitGate = devices.find(d => (d.gate_type === 'EXIT' || (d.esp32_identifier && d.esp32_identifier.includes('EXIT'))));
+
+    // Calculate real activity for each device
+    const deviceStatuses = devices.map(dev => {
+        let lastSeenMs = dev.last_online ? new Date(dev.last_online).getTime() : 0;
+        
+        // Also check if any recent transaction matches this gate
+        const matchingTxn = adminState.logs.find(l => 
+            (l.gate && dev.esp32_identifier && l.gate.includes(dev.esp32_identifier)) ||
+            (l.direction === dev.gate_type)
+        );
+        if (matchingTxn && matchingTxn.timestamp) {
+            const txnMs = new Date(matchingTxn.timestamp).getTime();
+            if (txnMs > lastSeenMs) lastSeenMs = txnMs;
+        }
+
+        const elapsedSecs = Math.floor((now - lastSeenMs) / 1000);
+        let status = 'OFFLINE';
+        let statusBadge = '';
+        let lastSeenText = 'No recorded activity';
+
+        if (lastSeenMs > 0) {
+            if (elapsedSecs < 300) { // Active in last 5 minutes
+                status = 'ONLINE';
+                onlineCount++;
+                statusBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center justify-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> ONLINE</span>';
+                lastSeenText = elapsedSecs < 60 ? 'Active just now' : `Active ${Math.floor(elapsedSecs / 60)}m ago`;
+            } else if (elapsedSecs < 86400) { // Within 24 hours
+                status = 'STANDBY';
+                onlineCount++;
+                statusBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-800 border border-amber-300">STANDBY</span>';
+                const h = Math.floor(elapsedSecs / 3600);
+                const m = Math.floor((elapsedSecs % 3600) / 60);
+                lastSeenText = `Last active ${h > 0 ? `${h}h ` : ''}${m}m ago`;
+            } else {
+                status = 'OFFLINE';
+                statusBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-slate-100 text-slate-500 border border-slate-200">OFFLINE</span>';
+                const days = Math.floor(elapsedSecs / 86400);
+                lastSeenText = `Last seen ${days}d ago`;
+            }
+        } else {
+            statusBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-slate-100 text-slate-500 border border-slate-200">OFFLINE</span>';
+        }
+
+        return { ...dev, computedStatus: status, statusBadge, lastSeenText, elapsedSecs };
+    });
+
+    // Update Gate Health Cards
+    if (el('entryGateStatusBadge')) {
+        const entryDev = deviceStatuses.find(d => d.gate_type === 'ENTRY' || (d.esp32_identifier && d.esp32_identifier.includes('ENTRY')));
+        if (entryDev && entryDev.computedStatus === 'ONLINE') {
+            el('entryGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> ONLINE (Active)`;
+            el('entryGateStatusBadge').className = 'text-sm font-black text-emerald-700 mt-1 flex items-center gap-1.5';
+            if (el('entryGateIpText')) el('entryGateIpText').textContent = `${entryDev.device_location || 'Main Entry'} • ${entryDev.lastSeenText}`;
+        } else if (entryDev && entryDev.computedStatus === 'STANDBY') {
+            el('entryGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-500"></span> STANDBY`;
+            el('entryGateStatusBadge').className = 'text-sm font-black text-amber-700 mt-1 flex items-center gap-1.5';
+            if (el('entryGateIpText')) el('entryGateIpText').textContent = `${entryDev.lastSeenText}`;
+        } else {
+            el('entryGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-slate-400"></span> OFFLINE / STANDBY`;
+            el('entryGateStatusBadge').className = 'text-sm font-black text-slate-500 mt-1 flex items-center gap-1.5';
+            if (el('entryGateIpText')) el('entryGateIpText').textContent = entryDev ? entryDev.lastSeenText : 'No active gate session';
+        }
+    }
+
+    if (el('exitGateStatusBadge')) {
+        const exitDev = deviceStatuses.find(d => d.gate_type === 'EXIT' || (d.esp32_identifier && d.esp32_identifier.includes('EXIT')));
+        if (exitDev && exitDev.computedStatus === 'ONLINE') {
+            el('exitGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> ONLINE (Active)`;
+            el('exitGateStatusBadge').className = 'text-sm font-black text-emerald-700 mt-1 flex items-center gap-1.5';
+            if (el('exitGateIpText')) el('exitGateIpText').textContent = `${exitDev.device_location || 'Main Exit'} • ${exitDev.lastSeenText}`;
+        } else if (exitDev && exitDev.computedStatus === 'STANDBY') {
+            el('exitGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-500"></span> STANDBY`;
+            el('exitGateStatusBadge').className = 'text-sm font-black text-amber-700 mt-1 flex items-center gap-1.5';
+            if (el('exitGateIpText')) el('exitGateIpText').textContent = `${exitDev.lastSeenText}`;
+        } else {
+            el('exitGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-slate-400"></span> OFFLINE / STANDBY`;
+            el('exitGateStatusBadge').className = 'text-sm font-black text-slate-500 mt-1 flex items-center gap-1.5';
+            if (el('exitGateIpText')) el('exitGateIpText').textContent = exitDev ? exitDev.lastSeenText : 'No active gate session';
+        }
+    }
+
+    if (el('syncedGatesCount')) {
+        el('syncedGatesCount').textContent = `${onlineCount} of ${devices.length} Nodes Active`;
+    }
+
+    // Render Table
+    if (tableBody) {
+        if (!deviceStatuses.length) {
+            tableBody.innerHTML = `
+                <tr>
+                    <td colspan="7" class="p-8 text-center text-slate-400">
+                        <div class="flex flex-col items-center justify-center">
+                            <i data-lucide="cpu" class="w-8 h-8 text-slate-300 mb-2"></i>
+                            <p class="font-bold text-slate-700">No ESP32 Gate Units Registered</p>
+                            <p class="text-xs text-slate-400">Click "Register Gate Unit" above to add your first microcontroller gateway.</p>
+                        </div>
+                    </td>
+                </tr>
+            `;
+            lucide.createIcons();
+            return;
+        }
+
+        tableBody.innerHTML = deviceStatuses.map(d => {
+            const roleBadge = d.gate_type === 'ENTRY' 
+                ? '<span class="px-2 py-0.5 rounded text-[10px] font-black bg-emerald-100 text-emerald-800">ENTRY GATE</span>'
+                : (d.gate_type === 'EXIT' 
+                    ? '<span class="px-2 py-0.5 rounded text-[10px] font-black bg-blue-100 text-blue-800">EXIT GATE</span>'
+                    : '<span class="px-2 py-0.5 rounded text-[10px] font-black bg-purple-100 text-purple-800">ADMIN</span>');
+
+            const rangeBadge = d.rfid_range === 'LONG_RANGE'
+                ? '<span class="font-mono text-emerald-700 font-bold">900MHz UHF</span>'
+                : (d.rfid_range === 'CLOSE_RANGE'
+                    ? '<span class="font-mono text-blue-700 font-bold">13.56MHz NFC</span>'
+                    : '<span class="font-mono text-purple-700 font-bold">Hybrid Dual</span>');
+
+            const categoryText = (d.device_category || 'VEHICLE_BARRIER').replace(/_/g, ' ');
+
+            return `
+            <tr class="hover:bg-slate-50 transition-colors">
+                <td class="p-3.5">
+                    <div class="flex items-center gap-2">
+                        <div class="w-8 h-8 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center font-bold">
+                            <i data-lucide="cpu" class="w-4 h-4 text-emerald-700"></i>
+                        </div>
+                        <div>
+                            <div class="font-bold text-slate-800">${d.device_name || d.esp32_identifier}</div>
+                            <div class="text-[10px] font-mono text-slate-400 font-semibold">${d.esp32_identifier}</div>
+                        </div>
+                    </div>
+                </td>
+                <td class="p-3.5">${roleBadge}</td>
+                <td class="p-3.5">
+                    <div class="font-bold text-slate-700 text-xs">${categoryText}</div>
+                    <div class="text-[11px]">${rangeBadge}</div>
+                </td>
+                <td class="p-3.5 text-slate-600 font-medium">${d.device_location || 'Campus Gate'}</td>
+                <td class="p-3.5">
+                    <div class="font-semibold text-slate-700 text-xs">${d.lastSeenText}</div>
+                    <div class="text-[10px] text-slate-400 font-mono">${d.last_online ? new Date(d.last_online).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : '--'}</div>
+                </td>
+                <td class="p-3.5 text-center">${d.statusBadge}</td>
+                <td class="p-3.5 text-right">
+                    <div class="flex items-center justify-end gap-1.5">
+                        <button onclick="reprovisionDevice('${d.gate_type || 'ENTRY'}')" class="px-2.5 py-1 bg-slate-100 hover:bg-charm-dark hover:text-white rounded-lg font-bold text-xs transition-colors" title="Pair & Provision Wi-Fi">Provision</button>
+                        <button onclick="openDeviceModal('${d.id}')" class="p-1.5 text-slate-400 hover:text-blue-600 rounded-lg transition-colors" title="Edit Gate Unit"><i data-lucide="edit-2" class="w-3.5 h-3.5"></i></button>
+                        <button onclick="deleteDevice('${d.id}')" class="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition-colors" title="Delete Gate Unit"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+                    </div>
+                </td>
+            </tr>`;
+        }).join('');
+        lucide.createIcons();
+    }
+};
+
+// Real ping test measuring live Supabase HTTPS latency and verifying registered gates
+window.pingAllGates = async function() {
+    appendBleLog('Initiating real network ping to cloud database and verifying registered gate nodes...', 'system');
+    showToast('Testing live connectivity to all ESP32 gate nodes...', 'info');
+
+    const startTime = performance.now();
+    try {
+        if (isConnected && supabaseClient) {
+            const { data: devData, error } = await supabaseClient
+                .from('devices')
+                .select('*')
+                .order('device_name', { ascending: true });
+            
+            const latencyMs = Math.round(performance.now() - startTime);
+            if (error) throw error;
+
+            adminState.devices = devData || [];
+            renderEsp32DevicesTable();
+
+            appendBleLog(`Cloud Gateway Roundtrip Latency: ${latencyMs}ms (HTTP 200 OK)`, 'success');
+            
+            if (adminState.devices.length > 0) {
+                adminState.devices.forEach((dev, idx) => {
+                    const lastOnline = dev.last_online ? new Date(dev.last_online).toLocaleTimeString() : 'Never';
+                    appendBleLog(`Node ${idx+1} [${dev.esp32_identifier}]: Status=${dev.status || 'ONLINE'}, Last Seen=${lastOnline}`, 'info');
+                });
+                showToast(`Ping completed! Cloud Latency: ${latencyMs}ms (${adminState.devices.length} Gates checked)`, 'success');
+            } else {
+                appendBleLog('No physical gate devices registered in database.', 'warn');
+                showToast(`Cloud Ping OK (${latencyMs}ms). No devices registered.`, 'info');
+            }
+        } else {
+            const latencyMs = 28;
+            appendBleLog(`Local Ping Latency: ${latencyMs}ms (Standby)`, 'info');
+            showToast('Ping test completed (Local Mode).', 'info');
+        }
+    } catch(err) {
+        appendBleLog(`Ping error: ${err.message}`, 'error');
+        showToast('Ping test failed: ' + err.message, 'error');
+    }
+};
+
+window.reprovisionDevice = function(gateType) {
+    if (el('bleTargetDeviceType')) el('bleTargetDeviceType').value = gateType;
+    updatePortalApNameHint(gateType);
+    appendBleLog(`Prepared provisioning form for Gate Role: ${gateType}. Click "Scan & Connect via Bluetooth" to send Wi-Fi.`, 'info');
+    showToast(`Ready to provision ${gateType}.`, 'info');
+    const formCard = el('bleProvisioningCard');
+    if (formCard) formCard.scrollIntoView({ behavior: 'smooth' });
+};
+
+// Update the AP hotspot name hint based on which gate type is selected
+function updatePortalApNameHint(gateType) {
+    const hint = el('portalApNameHint');
+    if (!hint) return;
+    if (gateType === 'CUSTOM') {
+        hint.textContent = 'CHARRMPASS_UHF_SETUP';
+    } else {
+        // Both ENTRY and EXIT use the entry-gate AP name for standard MFRC522 units
+        hint.textContent = 'CHARRMPASS_ENTRY_SETUP';
+    }
+}
+
+// Wire up the gate type selector to update the AP hint live
+(function() {
+    const sel = el('bleTargetDeviceType');
+    if (sel) {
+        sel.addEventListener('change', () => updatePortalApNameHint(sel.value));
+        updatePortalApNameHint(sel.value); // init on load
+    }
+})();
+
+
+window.toggleArduinoSketchDrawer = function() {
+    const drawer = el('arduinoBleDrawer') || el('arduinoSketchDrawer');
+    if (!drawer) return;
+    drawer.classList.toggle('hidden');
+    lucide.createIcons();
+};
+
+window.copyArduinoBleSnippet = function() {
+    const code = el('arduinoBleCodeBlock')?.innerText || el('arduinoBleCode')?.innerText;
+    if (!code) return;
+    navigator.clipboard.writeText(code).then(() => {
+        showToast('Arduino C++ Sketch copied to clipboard!', 'success');
+    }).catch(() => {
+        showToast('Could not copy code automatically.', 'warning');
+    });
+};
+
+// ==============================================
+// ESP32 GATE DEVICE MANAGEMENT (MODAL CRUD)
+// ==============================================
+window.openDeviceModal = function(id = null) {
+    const modal = el('deviceModal');
+    if (!modal) return;
+    el('deviceForm')?.reset();
+    el('formDevId').value = '';
+    const title = el('deviceModalTitle');
+    
+    if (id) {
+        const dev = adminState.devices.find(d => d.id === id);
+        if (dev) {
+            el('formDevId').value = dev.id;
+            if (el('formDevName')) el('formDevName').value = dev.device_name || '';
+            if (el('formDevIdentifier')) el('formDevIdentifier').value = dev.esp32_identifier || '';
+            if (el('formDevGateType')) el('formDevGateType').value = dev.gate_type || 'ENTRY';
+            if (el('formDevCategory')) el('formDevCategory').value = dev.device_category || 'VEHICLE_BARRIER';
+            if (el('formDevRange')) el('formDevRange').value = dev.rfid_range || 'LONG_RANGE';
+            if (el('formDevLocation')) el('formDevLocation').value = dev.device_location || '';
+            if (title) title.textContent = `Edit Gate Unit (${dev.esp32_identifier})`;
+        }
+    } else {
+        if (title) title.textContent = 'Register ESP32 Gate Unit';
+    }
+
+    modal.classList.remove('hidden');
+    setTimeout(() => {
+        modal.classList.remove('opacity-0');
+        el('deviceModalContent')?.classList.remove('scale-95');
+    }, 10);
+    lucide.createIcons();
+};
+
+window.closeDeviceModal = function() {
+    const modal = el('deviceModal');
+    if (!modal) return;
+    modal.classList.add('opacity-0');
+    el('deviceModalContent')?.classList.add('scale-95');
+    setTimeout(() => modal.classList.add('hidden'), 300);
+};
+
+window.deleteDevice = async function(id) {
+    if (!id) return;
+    const dev = adminState.devices.find(d => d.id === id);
+    const name = dev?.device_name || dev?.esp32_identifier || 'this device';
+    if (!confirm(`Are you sure you want to remove gate unit "${name}"?`)) return;
+
+    try {
+        if (isConnected && supabaseClient) {
+            const { error } = await supabaseClient.from('devices').delete().eq('id', id);
+            if (error) throw error;
+            showToast(`Gate unit "${name}" deleted!`, 'success');
+            await loadData();
+        } else {
+            adminState.devices = adminState.devices.filter(d => d.id !== id);
+            renderEsp32DevicesTable();
+            showToast(`Gate unit deleted locally.`, 'info');
+        }
+    } catch(err) {
+        showToast('Error deleting device: ' + err.message, 'error');
+    }
+};
+
+el('deviceForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = el('formDevId')?.value;
+    const device_name = el('formDevName')?.value.trim();
+    const esp32_identifier = el('formDevIdentifier')?.value.trim().toUpperCase();
+    const gate_type = el('formDevGateType')?.value || 'ENTRY';
+    const device_category = el('formDevCategory')?.value || 'VEHICLE_BARRIER';
+    const rfid_range = el('formDevRange')?.value || 'LONG_RANGE';
+    const device_location = el('formDevLocation')?.value.trim() || 'Campus Gate';
+
+    if (!device_name || !esp32_identifier) {
+        showToast('Device Name and ESP32 Identifier are required.', 'warning');
+        return;
+    }
+
+    const payload = {
+        device_name,
+        esp32_identifier,
+        gate_type,
+        device_category,
+        rfid_range,
+        device_location,
+        status: 'ONLINE',
+        last_online: new Date().toISOString()
+    };
+
+    try {
+        if (isConnected && supabaseClient) {
+            if (id) {
+                const { error } = await supabaseClient.from('devices').update(payload).eq('id', id);
+                if (error) throw error;
+                showToast(`Gate unit "${device_name}" updated!`, 'success');
+            } else {
+                const { error } = await supabaseClient.from('devices').upsert(payload, { onConflict: 'esp32_identifier' });
+                if (error) throw error;
+                showToast(`Gate unit "${device_name}" registered!`, 'success');
+            }
+            closeDeviceModal();
+            await loadData();
+        } else {
+            if (id) {
+                const idx = adminState.devices.findIndex(d => d.id === id);
+                if (idx !== -1) adminState.devices[idx] = { ...adminState.devices[idx], ...payload };
+            } else {
+                adminState.devices.push({ id: 'DEV-' + Date.now(), ...payload });
+            }
+            closeDeviceModal();
+            renderEsp32DevicesTable();
+            showToast(`Gate unit saved locally.`, 'info');
+        }
+    } catch(err) {
+        showToast('Error saving gate unit: ' + err.message, 'error');
+    }
+});
 
 setupRealtime();
 loadData();

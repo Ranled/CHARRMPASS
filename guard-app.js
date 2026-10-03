@@ -170,16 +170,28 @@ function loadGuardInfo() {
 // =====================
 // VIEW SWITCHING
 // =====================
-let currentActiveView = 'entry';
+let currentActiveView = 'dual';
 
 function switchView(view) {
     currentActiveView = view;
     document.querySelectorAll('.app-view').forEach(v => { v.classList.add('hidden'); v.classList.remove('flex'); });
     const target = document.getElementById('view-' + view);
     if (target) { target.classList.remove('hidden'); target.classList.add('flex'); }
+    
+    // Update sidebar
     document.querySelectorAll('.sidebar-item').forEach(s => s.classList.remove('active'));
     const nav = document.getElementById('nav-' + view);
     if (nav) nav.classList.add('active');
+
+    // Update header quick tabs
+    document.querySelectorAll('.guard-view-tab').forEach(b => {
+        b.className = 'guard-view-tab px-3 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900 flex items-center gap-1.5';
+    });
+    const headerTab = document.getElementById('tabBtn-' + view);
+    if (headerTab) {
+        headerTab.className = 'guard-view-tab px-3 py-1.5 rounded-xl text-xs font-bold transition-all bg-charm-dark text-white shadow-sm flex items-center gap-1.5';
+    }
+
     renderAll();
 }
 window.switchView = switchView;
@@ -358,34 +370,35 @@ function renderAll() {
     const inside = appState.vehiclesInside ?? (appState.activeVehicles?.length || 0);
 
     const el = (id) => document.getElementById(id);
-    if(el('statTotal'))     el('statTotal').textContent     = appState.totalVehicles || appState.users.length;
-    if(el('statEntries'))   el('statEntries').textContent   = appState.entriesToday;
-    if(el('statExits'))     el('statExits').textContent     = appState.exitsToday;
-    if(el('statAvailable')) el('statAvailable').textContent = inside + ' inside';
+    if(el('statTotal'))       el('statTotal').textContent       = appState.totalVehicles || appState.users.length;
+    if(el('statEntries'))     el('statEntries').textContent     = appState.entriesToday;
+    if(el('statExits'))       el('statExits').textContent       = appState.exitsToday;
+    if(el('statAvailable'))   el('statAvailable').textContent   = inside + ' inside';
+
+    // Dual view counters
+    if(el('statDualEntries')) el('statDualEntries').textContent = appState.entriesToday;
+    if(el('statDualExits'))   el('statDualExits').textContent   = appState.exitsToday;
+    if(el('statDualInside'))  el('statDualInside').textContent  = inside;
 
     renderLogsTable();
 
-    // Render Recent Entries List
-    const entryContainer = el('recentScansContainerEntry');
-    if (entryContainer) {
-        const entries = (appState.recentScans || []).filter(s => s.event === 'ENTRY').slice(0, 8);
-        if (entries.length > 0) {
-            entryContainer.innerHTML = entries.map(s => renderRecentScanCard(s, 'ENTRY')).join('');
-        } else {
-            entryContainer.innerHTML = `<div class="text-center text-slate-400 text-sm py-8"><i data-lucide="inbox" class="w-8 h-8 mx-auto mb-2 text-slate-300"></i>No entries yet</div>`;
-        }
-    }
+    // Render Recent Entries List (Single & Dual Views)
+    const entries = (appState.recentScans || []).filter(s => s.event === 'ENTRY').slice(0, 8);
+    const entryHtml = entries.length > 0 
+        ? entries.map(s => renderRecentScanCard(s, 'ENTRY')).join('')
+        : `<div class="text-center text-slate-400 text-xs py-4"><i data-lucide="inbox" class="w-6 h-6 mx-auto mb-1 text-slate-300"></i>No entries yet</div>`;
 
-    // Render Recent Exits List
-    const exitContainer = el('recentScansContainerExit');
-    if (exitContainer) {
-        const exits = (appState.recentScans || []).filter(s => s.event === 'EXIT').slice(0, 8);
-        if (exits.length > 0) {
-            exitContainer.innerHTML = exits.map(s => renderRecentScanCard(s, 'EXIT')).join('');
-        } else {
-            exitContainer.innerHTML = `<div class="text-center text-slate-400 text-sm py-8"><i data-lucide="inbox" class="w-8 h-8 mx-auto mb-2 text-slate-300"></i>No exits yet</div>`;
-        }
-    }
+    if (el('recentScansContainerEntry'))     el('recentScansContainerEntry').innerHTML = entryHtml;
+    if (el('recentScansContainerDualEntry')) el('recentScansContainerDualEntry').innerHTML = entryHtml;
+
+    // Render Recent Exits List (Single & Dual Views)
+    const exits = (appState.recentScans || []).filter(s => s.event === 'EXIT').slice(0, 8);
+    const exitHtml = exits.length > 0 
+        ? exits.map(s => renderRecentScanCard(s, 'EXIT')).join('')
+        : `<div class="text-center text-slate-400 text-xs py-4"><i data-lucide="inbox" class="w-6 h-6 mx-auto mb-1 text-slate-300"></i>No exits yet</div>`;
+
+    if (el('recentScansContainerExit'))     el('recentScansContainerExit').innerHTML = exitHtml;
+    if (el('recentScansContainerDualExit')) el('recentScansContainerDualExit').innerHTML = exitHtml;
 
     try { lucide.createIcons(); } catch(e){}
 }
@@ -397,18 +410,18 @@ function renderRecentScanCard(s, type) {
     const badgeBg = isAuth ? (isEntry ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700') : 'bg-red-100 text-red-700';
 
     return `
-        <div class="bg-white/80 p-3 rounded-2xl border border-white shadow-sm flex items-center gap-3">
-            <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${badgeBg}">
-                <i data-lucide="${icon}" class="w-5 h-5"></i>
+        <div class="bg-white/80 p-2.5 sm:p-3 rounded-2xl border border-white shadow-sm flex items-center gap-2.5 sm:gap-3">
+            <div class="w-8 h-8 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shrink-0 ${badgeBg}">
+                <i data-lucide="${icon}" class="w-4 h-4 sm:w-5 sm:h-5"></i>
             </div>
             <div class="flex-1 overflow-hidden">
                 <div class="flex justify-between items-center mb-0.5">
-                    <span class="font-bold text-sm text-slate-800 truncate">${s.name || '--'}</span>
-                    <span class="text-[10px] font-bold text-slate-400">${s.time || '--'}</span>
+                    <span class="font-bold text-xs sm:text-sm text-slate-800 truncate">${s.name || '--'}</span>
+                    <span class="text-[10px] font-bold text-slate-400 shrink-0">${s.time || '--'}</span>
                 </div>
-                <div class="flex items-center gap-2">
-                    <span class="text-xs font-mono font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded">${s.plate || s.uid?.substring(0, 8) || '--'}</span>
-                    <span class="text-[10px] font-bold uppercase ${isAuth ? (isEntry ? 'text-green-600' : 'text-blue-600') : 'text-red-600'}">${s.status || '--'}</span>
+                <div class="flex items-center gap-1.5 sm:gap-2">
+                    <span class="text-[10px] sm:text-xs font-mono font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded">${s.plate || s.uid?.substring(0, 8) || '--'}</span>
+                    <span class="text-[9px] sm:text-[10px] font-bold uppercase ${isAuth ? (isEntry ? 'text-green-600' : 'text-blue-600') : 'text-red-600'}">${s.status || '--'}</span>
                 </div>
             </div>
         </div>
@@ -419,17 +432,28 @@ function renderRecentScanCard(s, type) {
 // MANUAL GATE SCAN TRIGGER
 // =====================
 window.processManualGateScan = function(direction) {
-    const inputId = direction === 'EXIT' ? 'demoUidInputExit' : 'demoUidInputEntry';
-    const input = document.getElementById(inputId);
-    if (!input) return;
-    const uid = input.value.trim();
+    const isExit = direction === 'EXIT';
+    let uid = '';
+    
+    // Check both single view input and dual view input
+    const dualInput = document.getElementById(isExit ? 'demoUidInputDualExit' : 'demoUidInputDualEntry');
+    const singleInput = document.getElementById(isExit ? 'demoUidInputExit' : 'demoUidInputEntry');
+
+    if (dualInput && dualInput.value.trim()) {
+        uid = dualInput.value.trim();
+        dualInput.value = '';
+    } else if (singleInput && singleInput.value.trim()) {
+        uid = singleInput.value.trim();
+        singleInput.value = '';
+    }
+
     if (!uid) {
         showToast('Please enter an RFID UID to scan.', 'warning');
-        input.focus();
+        if (dualInput && currentActiveView === 'dual') dualInput.focus();
+        else if (singleInput) singleInput.focus();
         return;
     }
     processRFIDScan(uid, null, null, direction);
-    input.value = '';
 };
 
 // =====================
@@ -464,56 +488,46 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
         gateResetTimers[gateKey] = null;
     }
 
-    // Smooth tab notification if guard is viewing a different tab
-    const targetView = isEntry ? 'entry' : 'exit';
-    if (currentActiveView !== targetView && currentActiveView !== 'logs') {
-        // Subtle indicator without disrupting current guard work
-        const otherNav = document.getElementById(isEntry ? 'nav-entry' : 'nav-exit');
-        if (otherNav) {
-            otherNav.classList.add('animate-pulse');
-            setTimeout(() => otherNav.classList.remove('animate-pulse'), 3000);
+    // Set UI to Scanning state for both single and dual view
+    ['', 'Dual'].forEach(prefix => {
+        const radar = document.getElementById(`radarContainer${prefix}${gateKey}`);
+        const scanStatusText = document.getElementById(`scanStatusText${prefix}${gateKey}`);
+        const scanSubtext = document.getElementById(`scanSubtext${prefix}${gateKey}`);
+        const radarCenter = document.getElementById(`radarCenter${prefix}${gateKey}`);
+        const scanEmpty = document.getElementById(`scanResultEmpty${prefix}${gateKey}`);
+        const scanData = document.getElementById(`scanResultData${prefix}${gateKey}`);
+
+        if (radar) {
+            radar.classList.add('scanning');
+            radar.parentElement.classList.remove('status-authorized', 'status-denied');
         }
-    }
+        if (scanStatusText) {
+            scanStatusText.textContent = `SCANNING ${direction}...`;
+            scanStatusText.className = 'text-sm sm:text-xl font-bold font-display text-blue-600 mb-1 sm:mb-2';
+        }
+        if (scanSubtext) scanSubtext.textContent = `UID: ${uid}`;
+        if (radarCenter) radarCenter.innerHTML = '<i data-lucide="loader-2" class="w-6 h-6 sm:w-10 sm:h-10 text-blue-500 animate-spin"></i>';
 
-    // UI Elements for the active gate
-    const radar = document.getElementById(`radarContainer${gateKey}`);
-    const scanStatusText = document.getElementById(`scanStatusText${gateKey}`);
-    const scanSubtext = document.getElementById(`scanSubtext${gateKey}`);
-    const radarCenter = document.getElementById(`radarCenter${gateKey}`);
-    const scanEmpty = document.getElementById(`scanResultEmpty${gateKey}`);
-    const scanData = document.getElementById(`scanResultData${gateKey}`);
+        if (scanEmpty) scanEmpty.classList.add('hidden');
+        if (scanData) {
+            scanData.classList.remove('hidden');
+            scanData.classList.add('opacity-70');
+        }
 
-    if (radar) {
-        radar.classList.add('scanning');
-        radar.parentElement.classList.remove('status-authorized', 'status-denied');
-    }
-    if (scanStatusText) {
-        scanStatusText.textContent = `SCANNING ${direction}...`;
-        scanStatusText.className = 'text-xl font-bold font-display text-blue-600 mb-2';
-    }
-    if (scanSubtext) scanSubtext.textContent = `UID: ${uid}`;
-    if (radarCenter) radarCenter.innerHTML = '<i data-lucide="loader-2" class="w-10 h-10 text-blue-500 animate-spin"></i>';
-
-    if (scanEmpty) scanEmpty.classList.add('hidden');
-    if (scanData) {
-        scanData.classList.remove('hidden');
-        scanData.classList.add('opacity-70');
-    }
-
-    // Placeholder data
-    const el = (id) => document.getElementById(id);
-    if(el(`resUid${gateKey}`)) el(`resUid${gateKey}`).textContent = uid;
-    if(el(`resName${gateKey}`)) el(`resName${gateKey}`).textContent = 'Verifying credentials...';
-    if(el(`resRole${gateKey}`)) el(`resRole${gateKey}`).textContent = 'READING...';
-    if(el(`resProgram${gateKey}`)) el(`resProgram${gateKey}`).textContent = 'Fetching vehicle and driver record...';
-    if(el(`resPlate${gateKey}`)) el(`resPlate${gateKey}`).textContent = '...';
-    if(el(`resVehType${gateKey}`)) el(`resVehType${gateKey}`).textContent = '...';
-    if(el(`resVehModel${gateKey}`)) el(`resVehModel${gateKey}`).textContent = '...';
-    if(el(`resColor${gateKey}`)) el(`resColor${gateKey}`).textContent = '...';
-    if(el(`resStatusLabel${gateKey}`)) {
-        el(`resStatusLabel${gateKey}`).className = 'px-4 py-2 rounded-xl font-bold text-sm tracking-wide shadow-sm border bg-amber-50 border-amber-200 text-amber-700 animate-pulse';
-        el(`resStatusLabel${gateKey}`).textContent = 'VERIFYING...';
-    }
+        const el = (id) => document.getElementById(id);
+        if(el(`resUid${prefix}${gateKey}`)) el(`resUid${prefix}${gateKey}`).textContent = uid;
+        if(el(`resName${prefix}${gateKey}`)) el(`resName${prefix}${gateKey}`).textContent = 'Verifying credentials...';
+        if(el(`resRole${prefix}${gateKey}`)) el(`resRole${prefix}${gateKey}`).textContent = 'READING...';
+        if(el(`resProgram${prefix}${gateKey}`)) el(`resProgram${prefix}${gateKey}`).textContent = 'Fetching vehicle and driver record...';
+        if(el(`resPlate${prefix}${gateKey}`)) el(`resPlate${prefix}${gateKey}`).textContent = '...';
+        if(el(`resVehType${prefix}${gateKey}`)) el(`resVehType${prefix}${gateKey}`).textContent = '...';
+        if(el(`resVehModel${prefix}${gateKey}`)) el(`resVehModel${prefix}${gateKey}`).textContent = '...';
+        if(el(`resColor${prefix}${gateKey}`)) el(`resColor${prefix}${gateKey}`).textContent = '...';
+        if(el(`resStatusLabel${prefix}${gateKey}`)) {
+            el(`resStatusLabel${prefix}${gateKey}`).className = 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-amber-50 border-amber-200 text-amber-700 animate-pulse';
+            el(`resStatusLabel${prefix}${gateKey}`).textContent = 'VERIFYING...';
+        }
+    });
     lucide.createIcons();
 
     // 2. Query Supabase for RFID Card and User
@@ -687,21 +701,29 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                 // Visual pause for radar feel
                 await new Promise(r => setTimeout(r, 600));
 
-                if (radar) {
-                    radar.classList.remove('scanning');
-                    radar.parentElement.classList.add('status-authorized');
-                }
-                if (scanStatusText) {
-                    scanStatusText.textContent = 'EXIT AUTHORIZED';
-                    scanStatusText.className = 'text-xl font-bold font-display text-blue-600 mb-2';
-                }
-                if (radarCenter) radarCenter.innerHTML = '<i data-lucide="check" class="w-10 h-10 text-white"></i>';
-                if (scanSubtext) scanSubtext.textContent = `Visitor ${visitorName} departure logged. Safe travels!`;
+                ['', 'Dual'].forEach(prefix => {
+                    const radar = document.getElementById(`radarContainer${prefix}Exit`);
+                    const scanStatusText = document.getElementById(`scanStatusText${prefix}Exit`);
+                    const radarCenter = document.getElementById(`radarCenter${prefix}Exit`);
+                    const scanSubtext = document.getElementById(`scanSubtext${prefix}Exit`);
+                    const statusLabel = document.getElementById(`resStatusLabel${prefix}Exit`);
 
-                if (el('resStatusLabelExit')) {
-                    el('resStatusLabelExit').className = 'px-4 py-2 rounded-xl font-bold text-sm tracking-wide shadow-sm border bg-blue-50 border-blue-200 text-blue-700';
-                    el('resStatusLabelExit').innerHTML = '✓ EXIT AUTHORIZED';
-                }
+                    if (radar) {
+                        radar.classList.remove('scanning');
+                        radar.parentElement.classList.add('status-authorized');
+                    }
+                    if (scanStatusText) {
+                        scanStatusText.textContent = 'EXIT AUTHORIZED';
+                        scanStatusText.className = 'text-sm sm:text-xl font-bold font-display text-blue-600 mb-1 sm:mb-2';
+                    }
+                    if (radarCenter) radarCenter.innerHTML = '<i data-lucide="check" class="w-6 h-6 sm:w-10 sm:h-10 text-white"></i>';
+                    if (scanSubtext) scanSubtext.textContent = `Visitor ${visitorName} departure logged. Safe travels!`;
+
+                    if (statusLabel) {
+                        statusLabel.className = 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-blue-50 border-blue-200 text-blue-700';
+                        statusLabel.innerHTML = '✓ EXIT AUTHORIZED';
+                    }
+                });
 
                 // Log exit transaction & clear tag for new visitors
                 if (!fromRealtimeTxn && isConnected) {
@@ -746,8 +768,12 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
     // Visual pause for radar feel
     await new Promise(r => setTimeout(r, 600));
 
-    if (radar) radar.classList.remove('scanning');
-    if (scanData) scanData.classList.remove('opacity-70');
+    ['', 'Dual'].forEach(prefix => {
+        const radar = document.getElementById(`radarContainer${prefix}${gateKey}`);
+        const scanData = document.getElementById(`scanResultData${prefix}${gateKey}`);
+        if (radar) radar.classList.remove('scanning');
+        if (scanData) scanData.classList.remove('opacity-70');
+    });
 
     const isAuth = result.status === 'AUTHORIZED' || (fromRealtimeTxn && fromRealtimeTxn.status === 'AUTHORIZED');
 
@@ -783,18 +809,26 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                 gateKey
             };
 
-            if (radar) radar.parentElement.classList.add('status-authorized');
-            if (scanStatusText) {
-                scanStatusText.textContent = 'ALREADY ENTERED';
-                scanStatusText.className = 'text-xl font-bold font-display text-amber-600 mb-2';
-            }
-            if (scanSubtext) scanSubtext.textContent = `Entered ${formattedString}. Awaiting guard confirmation.`;
-            if (radarCenter) radarCenter.innerHTML = '<i data-lucide="alert-triangle" class="w-10 h-10 text-amber-500"></i>';
+            ['', 'Dual'].forEach(prefix => {
+                const radar = document.getElementById(`radarContainer${prefix}${gateKey}`);
+                const scanStatusText = document.getElementById(`scanStatusText${prefix}${gateKey}`);
+                const scanSubtext = document.getElementById(`scanSubtext${prefix}${gateKey}`);
+                const radarCenter = document.getElementById(`radarCenter${prefix}${gateKey}`);
+                const statusLabel = document.getElementById(`resStatusLabel${prefix}${gateKey}`);
 
-            if (el(`resStatusLabel${gateKey}`)) {
-                el(`resStatusLabel${gateKey}`).className = 'px-4 py-2 rounded-xl font-bold text-sm tracking-wide shadow-sm border bg-amber-50 border-amber-300 text-amber-800 animate-pulse';
-                el(`resStatusLabel${gateKey}`).innerHTML = '⚠️ ALREADY ENTERED';
-            }
+                if (radar) radar.parentElement.classList.add('status-authorized');
+                if (scanStatusText) {
+                    scanStatusText.textContent = 'ALREADY ENTERED';
+                    scanStatusText.className = 'text-sm sm:text-xl font-bold font-display text-amber-600 mb-1 sm:mb-2';
+                }
+                if (scanSubtext) scanSubtext.textContent = `Entered ${formattedString}. Awaiting guard confirmation.`;
+                if (radarCenter) radarCenter.innerHTML = '<i data-lucide="alert-triangle" class="w-6 h-6 sm:w-10 sm:h-10 text-amber-500"></i>';
+
+                if (statusLabel) {
+                    statusLabel.className = 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-amber-50 border-amber-300 text-amber-800 animate-pulse';
+                    statusLabel.innerHTML = '⚠️ ALREADY ENTERED';
+                }
+            });
 
             // Populate data card
             populateScanResultCard(result, gateKey);
@@ -802,32 +836,46 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
             return;
         }
 
-        if (radar) radar.parentElement.classList.add('status-authorized');
-        if (scanStatusText) {
-            scanStatusText.textContent = isEntry ? 'ENTRY AUTHORIZED' : 'EXIT AUTHORIZED';
-            scanStatusText.className = `text-xl font-bold font-display ${isEntry ? 'text-green-600' : 'text-blue-600'} mb-2`;
-        }
-        if (radarCenter) radarCenter.innerHTML = '<i data-lucide="check" class="w-10 h-10 text-white"></i>';
+        ['', 'Dual'].forEach(prefix => {
+            const radar = document.getElementById(`radarContainer${prefix}${gateKey}`);
+            const scanStatusText = document.getElementById(`scanStatusText${prefix}${gateKey}`);
+            const radarCenter = document.getElementById(`radarCenter${prefix}${gateKey}`);
+            const scanSubtext = document.getElementById(`scanSubtext${prefix}${gateKey}`);
+            const statusLabel = document.getElementById(`resStatusLabel${prefix}${gateKey}`);
 
-        if (el(`resStatusLabel${gateKey}`)) {
-            el(`resStatusLabel${gateKey}`).className = isEntry
-                ? 'px-4 py-2 rounded-xl font-bold text-sm tracking-wide shadow-sm border bg-green-50 border-green-200 text-green-700'
-                : 'px-4 py-2 rounded-xl font-bold text-sm tracking-wide shadow-sm border bg-blue-50 border-blue-200 text-blue-700';
-            el(`resStatusLabel${gateKey}`).innerHTML = isEntry ? '✓ ENTRY AUTHORIZED' : '✓ EXIT AUTHORIZED';
-        }
+            if (radar) radar.parentElement.classList.add('status-authorized');
+            if (scanStatusText) {
+                scanStatusText.textContent = isEntry ? 'ENTRY AUTHORIZED' : 'EXIT AUTHORIZED';
+                scanStatusText.className = `text-sm sm:text-xl font-bold font-display ${isEntry ? 'text-green-600' : 'text-blue-600'} mb-1 sm:mb-2`;
+            }
+            if (radarCenter) radarCenter.innerHTML = '<i data-lucide="check" class="w-6 h-6 sm:w-10 sm:h-10 text-white"></i>';
 
-        if (scanSubtext) scanSubtext.textContent = isEntry ? 'Welcome to campus! Entry logged.' : 'Vehicle departure recorded. Safe travels!';
+            if (statusLabel) {
+                statusLabel.className = isEntry
+                    ? 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-green-50 border-green-200 text-green-700'
+                    : 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-blue-50 border-blue-200 text-blue-700';
+                statusLabel.innerHTML = isEntry ? '✓ ENTRY AUTHORIZED' : '✓ EXIT AUTHORIZED';
+            }
+
+            if (scanSubtext) scanSubtext.textContent = isEntry ? 'Welcome to campus! Entry logged.' : 'Vehicle departure recorded. Safe travels!';
+        });
 
         // Log transaction if manual scan
         if (!fromRealtimeTxn && isConnected) {
+            const isPed = result.type === 'None' || result.plate === 'PEDESTRIAN' || result.type === 'Walking / Pedestrian' || result.role === 'PEDESTRIAN';
+            const userType = isPed ? 'PEDESTRIAN' : 'VEHICLE';
+            const rfidType = isPed ? 'CLOSE_RANGE' : 'LONG_RANGE';
+
             await supabaseClient.from('transactions').insert({
                 rfid_uid: uid,
                 direction: direction,
-                gate: isEntry ? 'ENTRY_GATE' : 'EXIT_GATE',
+                gate: isEntry ? (isPed ? 'PEDESTRIAN_ENTRY' : 'ENTRY_GATE') : (isPed ? 'PEDESTRIAN_EXIT' : 'EXIT_GATE'),
                 vehicle_id: result.vehicle_id || null,
                 user_id: userId || null,
+                user_type: userType,
+                rfid_type: rfidType,
                 status: 'AUTHORIZED',
-                remarks: `Guard station ${direction}`
+                remarks: `Guard station ${direction} (${isPed ? 'Pedestrian Close-Range' : 'Vehicle Long-Range UHF'})`
             });
             if (isEntry) {
                 appState.entriesToday++;
@@ -839,18 +887,26 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
         }
         result.event = direction;
     } else {
-        if (radar) radar.parentElement.classList.add('status-denied');
-        if (scanStatusText) {
-            scanStatusText.textContent = 'ACCESS DENIED';
-            scanStatusText.className = 'text-xl font-bold font-display text-red-600 mb-2';
-        }
-        if (radarCenter) radarCenter.innerHTML = '<i data-lucide="x" class="w-10 h-10 text-white"></i>';
-        if (scanSubtext) scanSubtext.textContent = 'Unauthorized or unregistered RFID card.';
+        ['', 'Dual'].forEach(prefix => {
+            const radar = document.getElementById(`radarContainer${prefix}${gateKey}`);
+            const scanStatusText = document.getElementById(`scanStatusText${prefix}${gateKey}`);
+            const radarCenter = document.getElementById(`radarCenter${prefix}${gateKey}`);
+            const scanSubtext = document.getElementById(`scanSubtext${prefix}${gateKey}`);
+            const statusLabel = document.getElementById(`resStatusLabel${prefix}${gateKey}`);
 
-        if (el(`resStatusLabel${gateKey}`)) {
-            el(`resStatusLabel${gateKey}`).className = 'px-4 py-2 rounded-xl font-bold text-sm tracking-wide shadow-sm border bg-red-50 border-red-200 text-red-700';
-            el(`resStatusLabel${gateKey}`).innerHTML = '✗ ACCESS DENIED';
-        }
+            if (radar) radar.parentElement.classList.add('status-denied');
+            if (scanStatusText) {
+                scanStatusText.textContent = 'ACCESS DENIED';
+                scanStatusText.className = 'text-sm sm:text-xl font-bold font-display text-red-600 mb-1 sm:mb-2';
+            }
+            if (radarCenter) radarCenter.innerHTML = '<i data-lucide="x" class="w-6 h-6 sm:w-10 sm:h-10 text-white"></i>';
+            if (scanSubtext) scanSubtext.textContent = 'Unauthorized or unregistered RFID card.';
+
+            if (statusLabel) {
+                statusLabel.className = 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-red-50 border-red-200 text-red-700';
+                statusLabel.innerHTML = '✗ ACCESS DENIED';
+            }
+        });
 
         if (!fromRealtimeTxn && isConnected) {
             await supabaseClient.from('transactions').insert({
@@ -858,7 +914,7 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                 direction: direction,
                 gate: isEntry ? 'ENTRY_GATE' : 'EXIT_GATE',
                 status: 'DENIED',
-                remarks: 'Unauthorized RFID card'
+                remarks: 'Unauthorized RFID UID scan attempt'
             });
         }
         result.event = direction;
@@ -883,25 +939,31 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
 function populateScanResultCard(result, gateKey) {
     const el = (id) => document.getElementById(id);
     const isVisitor = result.role === 'VISITOR' || result.isVisitor;
-    if (el(`resIconContainer${gateKey}`) && el(`resProfileImage${gateKey}`)) {
-        if (isVisitor) {
-            el(`resIconContainer${gateKey}`).classList.remove('hidden');
-            el(`resProfileImage${gateKey}`).classList.add('hidden');
-        } else {
-            el(`resIconContainer${gateKey}`).classList.add('hidden');
-            el(`resProfileImage${gateKey}`).classList.remove('hidden');
-            el(`resProfileImage${gateKey}`).src = result.profileImage || `https://ui-avatars.com/api/?name=${encodeURIComponent(result.name)}&background=0E4B3A&color=fff&size=200`;
-        }
-    }
 
-    if(el(`resName${gateKey}`))    el(`resName${gateKey}`).textContent = result.name;
-    if(el(`resRole${gateKey}`))    el(`resRole${gateKey}`).textContent = result.role;
-    if(el(`resProgram${gateKey}`)) el(`resProgram${gateKey}`).textContent = `${result.program || '--'} • ${result.section || '--'}`;
-    if(el(`resUid${gateKey}`))     el(`resUid${gateKey}`).textContent = result.uid;
-    if(el(`resVehType${gateKey}`)) el(`resVehType${gateKey}`).textContent = result.type;
-    if(el(`resPlate${gateKey}`))   el(`resPlate${gateKey}`).textContent = result.plate;
-    if(el(`resVehModel${gateKey}`))el(`resVehModel${gateKey}`).textContent = result.model;
-    if(el(`resColor${gateKey}`))   el(`resColor${gateKey}`).textContent = result.color;
+    ['', 'Dual'].forEach(prefix => {
+        if (el(`resIconContainer${prefix}${gateKey}`) && el(`resProfileImage${prefix}${gateKey}`)) {
+            if (isVisitor) {
+                el(`resIconContainer${prefix}${gateKey}`).classList.remove('hidden');
+                el(`resProfileImage${prefix}${gateKey}`).classList.add('hidden');
+            } else {
+                el(`resIconContainer${prefix}${gateKey}`).classList.add('hidden');
+                el(`resProfileImage${prefix}${gateKey}`).classList.remove('hidden');
+                el(`resProfileImage${prefix}${gateKey}`).src = result.profileImage || `https://ui-avatars.com/api/?name=${encodeURIComponent(result.name)}&background=0E4B3A&color=fff&size=200`;
+            }
+        }
+
+        if(el(`resName${prefix}${gateKey}`))     el(`resName${prefix}${gateKey}`).textContent = result.name;
+        if(el(`resRole${prefix}${gateKey}`))     el(`resRole${prefix}${gateKey}`).textContent = result.role;
+        if(el(`resProgram${prefix}${gateKey}`))  el(`resProgram${prefix}${gateKey}`).textContent = `${result.program || '--'} • ${result.section || '--'}`;
+        if(el(`resUid${prefix}${gateKey}`))      el(`resUid${prefix}${gateKey}`).textContent = result.uid;
+        if(el(`resVehType${prefix}${gateKey}`))  el(`resVehType${prefix}${gateKey}`).textContent = result.type;
+        if(el(`resPlate${prefix}${gateKey}`))    el(`resPlate${prefix}${gateKey}`).textContent = result.plate;
+        if(el(`resVehModel${prefix}${gateKey}`)) el(`resVehModel${prefix}${gateKey}`).textContent = result.model;
+        if(el(`resColor${prefix}${gateKey}`))    el(`resColor${prefix}${gateKey}`).textContent = result.color;
+
+        if(el(`scanResultEmpty${prefix}${gateKey}`)) el(`scanResultEmpty${prefix}${gateKey}`).classList.add('hidden');
+        if(el(`scanResultData${prefix}${gateKey}`))  el(`scanResultData${prefix}${gateKey}`).classList.remove('hidden');
+    });
 }
 
 // =====================
@@ -974,17 +1036,24 @@ window.confirmDuplicateEntry = async function() {
 };
 
 function resetGateScanner(gateKey) {
-    const radar = document.getElementById(`radarContainer${gateKey}`);
-    if (radar) radar.parentElement.classList.remove('status-authorized', 'status-denied');
-    const statusText = document.getElementById(`scanStatusText${gateKey}`);
-    if (statusText) {
-        statusText.textContent = `${gateKey.toUpperCase()} READY`;
-        statusText.className = 'text-xl font-bold font-display text-slate-600 mb-2';
-    }
-    const subtext = document.getElementById(`scanSubtext${gateKey}`);
-    if (subtext) subtext.textContent = `Tap card on ${gateKey} reader.`;
-    const radarCenter = document.getElementById(`radarCenter${gateKey}`);
-    if (radarCenter) radarCenter.innerHTML = '<i data-lucide="nfc" class="w-10 h-10 text-slate-400"></i>';
+    ['', 'Dual'].forEach(prefix => {
+        const radar = document.getElementById(`radarContainer${prefix}${gateKey}`);
+        if (radar) radar.parentElement.classList.remove('status-authorized', 'status-denied');
+        const statusText = document.getElementById(`scanStatusText${prefix}${gateKey}`);
+        if (statusText) {
+            statusText.textContent = `${gateKey.toUpperCase()} READY`;
+            statusText.className = 'text-sm sm:text-base font-bold font-display text-slate-600 mb-1';
+        }
+        const subtext = document.getElementById(`scanSubtext${prefix}${gateKey}`);
+        if (subtext) subtext.textContent = `Tap card on ${gateKey} reader.`;
+        const radarCenter = document.getElementById(`radarCenter${prefix}${gateKey}`);
+        if (radarCenter) radarCenter.innerHTML = '<i data-lucide="nfc" class="w-6 h-6 sm:w-8 sm:h-8 text-slate-400"></i>';
+
+        const scanEmpty = document.getElementById(`scanResultEmpty${prefix}${gateKey}`);
+        const scanData = document.getElementById(`scanResultData${prefix}${gateKey}`);
+        if (scanEmpty) scanEmpty.classList.remove('hidden');
+        if (scanData) scanData.classList.add('hidden');
+    });
     lucide.createIcons();
 }
 

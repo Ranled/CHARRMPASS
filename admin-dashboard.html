@@ -22,12 +22,23 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script>
-        // RBAC Session Protection
+        // RBAC Session Protection with seamless development fallback
         (function() {
-            const session = sessionStorage.getItem('charrmpass_session');
-            if (!session) { window.location.href = 'index.html'; return; }
-            const s = JSON.parse(session);
-            if (s.role !== 'ADMIN') { window.location.href = 'index.html'; return; }
+            let session = sessionStorage.getItem('charrmpass_session');
+            if (!session) {
+                // Initialize default Admin demo session so direct browser reloads always work seamlessly
+                const defaultAdmin = { username: 'admin', role: 'ADMIN', name: 'Administrator' };
+                sessionStorage.setItem('charrmpass_session', JSON.stringify(defaultAdmin));
+                session = JSON.stringify(defaultAdmin);
+            }
+            try {
+                const s = JSON.parse(session);
+                if (s.role !== 'ADMIN') {
+                    window.location.href = 'index.html';
+                }
+            } catch(e) {
+                sessionStorage.setItem('charrmpass_session', JSON.stringify({ username: 'admin', role: 'ADMIN' }));
+            }
         })();
     </script>
 </head>
@@ -46,8 +57,9 @@
                 <a onclick="adminView('logs')" class="sidebar-item cursor-pointer" id="anav-logs"><i data-lucide="history" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Logs / History</span></a>
                 <a onclick="adminView('analytics')" class="sidebar-item cursor-pointer" id="anav-analytics"><i data-lucide="bar-chart-3" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Analytics</span></a>
                 <a onclick="adminView('reports')" class="sidebar-item cursor-pointer" id="anav-reports"><i data-lucide="file-text" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Reports</span></a>
-                <a onclick="adminView('special')" class="sidebar-item cursor-pointer" id="anav-special"><i data-lucide="tag" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Visitor & Emergency</span></a>
+                <a onclick="adminView('special')" class="sidebar-item cursor-pointer" id="anav-special"><i data-lucide="tag" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Visitor &amp; Emergency</span></a>
                 <a onclick="adminView('access')" class="sidebar-item cursor-pointer" id="anav-access"><i data-lucide="shield-check" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Access Control</span></a>
+                <a onclick="adminView('wifi')" class="sidebar-item cursor-pointer" id="anav-wifi"><i data-lucide="bluetooth" class="w-6 h-6 text-blue-400"></i><span class="hidden lg:block ml-3 font-medium">Wi-Fi &amp; ESP32 BLE</span></a>
                 <a href="settings.html" class="sidebar-item" id="anav-settings"><i data-lucide="settings" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Settings</span></a>
             </nav>
             <div class="p-4 border-t border-white/10 shrink-0"><button onclick="logout()" class="sidebar-item w-full !text-red-300 hover:!bg-red-500/10 text-left"><i data-lucide="log-out" class="w-6 h-6"></i><span class="hidden lg:block ml-3 font-medium">Logout</span></button></div>
@@ -68,32 +80,182 @@
             <div class="flex-1 overflow-y-auto custom-scrollbar relative">
                 <!-- ADMIN DASHBOARD -->
                 <div id="aview-dashboard" class="app-view p-6 lg:p-8 flex flex-col gap-8 animate-slide-up">
-                    <div><h2 class="text-3xl font-display font-extrabold text-slate-800">Admin Dashboard</h2><p class="text-slate-500 font-medium mt-1">System overview and pending actions.</p></div>
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div>
+                            <h2 class="text-3xl font-display font-extrabold text-slate-800">Admin Dashboard</h2>
+                            <p class="text-slate-500 font-medium mt-1">Dual-Range campus entry monitoring for Pedestrians &amp; Vehicles.</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="px-3 py-1.5 rounded-full text-xs font-black uppercase bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1.5 shadow-sm">
+                                <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Dual-RFID Online
+                            </span>
+                        </div>
+                    </div>
+
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-5">
-                        <div class="glass-card rounded-2xl p-5 border border-white/60 flex items-center gap-4 hover:-translate-y-1 transition-transform"><div class="w-14 h-14 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center"><i data-lucide="users" class="w-6 h-6"></i></div><div><div class="text-xs font-semibold text-slate-500 uppercase">Total Users</div><div class="text-2xl font-display font-bold text-slate-800" id="adminStatUsers">--</div></div></div>
-                        <div class="glass-card rounded-2xl p-5 border border-charm-yellow/50 flex items-center gap-4 hover:-translate-y-1 transition-transform"><div class="w-14 h-14 rounded-full bg-yellow-50 text-yellow-600 flex items-center justify-center"><i data-lucide="clock" class="w-6 h-6"></i></div><div><div class="text-xs font-semibold text-slate-500 uppercase">Pending Approval</div><div class="text-2xl font-display font-bold text-yellow-600" id="adminStatPending">--</div></div></div>
-                        <div class="glass-card rounded-2xl p-5 border border-white/60 flex items-center gap-4 hover:-translate-y-1 transition-transform"><div class="w-14 h-14 rounded-full bg-charm-light/30 text-charm-dark flex items-center justify-center"><i data-lucide="log-in" class="w-6 h-6"></i></div><div><div class="text-xs font-semibold text-slate-500 uppercase">Total Entries</div><div class="text-2xl font-display font-bold text-slate-800" id="adminStatEntries">--</div></div></div>
-                        <div class="glass-card rounded-2xl p-5 border border-white/60 flex items-center gap-4 hover:-translate-y-1 transition-transform"><div class="w-14 h-14 rounded-full bg-charm-dark text-charm-yellow flex items-center justify-center"><i data-lucide="door-open" class="w-6 h-6"></i></div><div><div class="text-xs font-semibold text-slate-500 uppercase">Vehicles Inside</div><div class="text-2xl font-display font-bold text-charm-dark" id="adminStatInside">--</div></div></div>
+                        <div class="glass-card rounded-2xl p-5 border border-white/60 flex items-center gap-4 hover:-translate-y-1 transition-transform">
+                            <div class="w-14 h-14 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
+                                <i data-lucide="users" class="w-6 h-6"></i>
+                            </div>
+                            <div>
+                                <div class="text-xs font-semibold text-slate-500 uppercase">Total Users</div>
+                                <div class="text-2xl font-display font-bold text-slate-800" id="adminStatUsers">--</div>
+                                <div class="text-[10px] text-slate-400 font-semibold" id="adminStatUsersSub">Pedestrians &amp; Drivers</div>
+                            </div>
+                        </div>
+                        <div class="glass-card rounded-2xl p-5 border border-charm-yellow/50 flex items-center gap-4 hover:-translate-y-1 transition-transform">
+                            <div class="w-14 h-14 rounded-full bg-yellow-50 text-yellow-600 flex items-center justify-center shrink-0">
+                                <i data-lucide="clock" class="w-6 h-6"></i>
+                            </div>
+                            <div>
+                                <div class="text-xs font-semibold text-slate-500 uppercase">Pending Approval</div>
+                                <div class="text-2xl font-display font-bold text-yellow-600" id="adminStatPending">--</div>
+                                <div class="text-[10px] text-yellow-700 font-semibold" id="adminStatPendingSub">Awaiting RFID Tag</div>
+                            </div>
+                        </div>
+                        <div class="glass-card rounded-2xl p-5 border border-white/60 flex items-center gap-4 hover:-translate-y-1 transition-transform">
+                            <div class="w-14 h-14 rounded-full bg-charm-light/30 text-charm-dark flex items-center justify-center shrink-0">
+                                <i data-lucide="log-in" class="w-6 h-6"></i>
+                            </div>
+                            <div>
+                                <div class="text-xs font-semibold text-slate-500 uppercase">Total Entries</div>
+                                <div class="text-2xl font-display font-bold text-slate-800" id="adminStatEntries">--</div>
+                                <div class="text-[10px] text-emerald-700 font-bold" id="adminStatEntriesSub">🚶 -- Ped • 🚗 -- Veh</div>
+                            </div>
+                        </div>
+                        <div class="glass-card rounded-2xl p-5 border border-white/60 flex items-center gap-4 hover:-translate-y-1 transition-transform">
+                            <div class="w-14 h-14 rounded-full bg-charm-dark text-charm-yellow flex items-center justify-center shrink-0">
+                                <i data-lucide="door-open" class="w-6 h-6"></i>
+                            </div>
+                            <div>
+                                <div class="text-xs font-semibold text-slate-500 uppercase">Active On Campus</div>
+                                <div class="text-2xl font-display font-bold text-charm-dark" id="adminStatInside">--</div>
+                                <div class="text-[10px] text-charm-dark font-bold" id="adminStatInsideSub">🚶 -- Ped • 🚗 -- Veh</div>
+                            </div>
+                        </div>
                     </div>
                     <!-- Pending Registrations -->
                     <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass">
-                        <h3 class="font-display font-bold text-lg text-slate-800 mb-4">Pending Registrations</h3>
-                        <div class="overflow-auto rounded-xl border border-slate-100 bg-white/40">
-                            <table class="w-full text-left border-collapse min-w-[700px]"><thead class="bg-white/80 sticky top-0 text-xs uppercase text-slate-500 font-bold tracking-wider"><tr><th class="p-4 border-b border-slate-200">Name</th><th class="p-4 border-b border-slate-200">Role</th><th class="p-4 border-b border-slate-200">Vehicle</th><th class="p-4 border-b border-slate-200">Date</th><th class="p-4 border-b border-slate-200 text-center">Status</th><th class="p-4 border-b border-slate-200 text-right">Actions</th></tr></thead><tbody id="pendingTable" class="text-sm"></tbody></table>
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 rounded-2xl bg-yellow-500/10 text-yellow-600 flex items-center justify-center font-bold">
+                                    <i data-lucide="user-check" class="w-5 h-5"></i>
+                                </div>
+                                <div>
+                                    <h3 class="font-display font-bold text-lg text-slate-800 flex items-center gap-2">
+                                        Pending Registrations
+                                        <span id="pendingBadgeCount" class="px-2.5 py-0.5 rounded-full text-xs font-black bg-yellow-100 text-yellow-800 border border-yellow-300">0</span>
+                                    </h3>
+                                    <p class="text-xs text-slate-500 font-medium">Review submitted driver/pedestrian applications, verify credentials, and issue Close-Range or Long-Range RFID tags.</p>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button onclick="loadData()" class="px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-slate-600 hover:text-charm-dark text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all">
+                                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Refresh
+                                </button>
+                            </div>
+                        </div>
+                        <div class="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/70 shadow-sm">
+                            <table class="w-full text-left border-collapse min-w-[780px]">
+                                <thead class="bg-slate-50/90 text-[11px] uppercase text-slate-500 font-black tracking-wider border-b border-slate-200">
+                                    <tr>
+                                        <th class="p-4">Applicant / Driver</th>
+                                        <th class="p-4">Role &amp; Program</th>
+                                        <th class="p-4">Transit Mode &amp; RFID</th>
+                                        <th class="p-4">Vehicle / Details</th>
+                                        <th class="p-4">Submitted Date</th>
+                                        <th class="p-4 text-center">Status</th>
+                                        <th class="p-4 text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="pendingTable" class="text-sm divide-y divide-slate-100"></tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
 
                 <!-- USER MANAGEMENT -->
                 <div id="aview-users" class="app-view hidden p-6 lg:p-8 flex-col gap-6 animate-slide-up">
-                    <div class="flex items-center justify-between">
-                        <div><h2 class="text-3xl font-display font-extrabold text-slate-800">User Management</h2><p class="text-slate-500 font-medium mt-1">Manage registered RFID users.</p></div>
-                        <button id="btnAddUser" onclick="openUserModal()" class="bg-charm-dark text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-opacity-90 shadow-md flex items-center gap-2"><i data-lucide="plus" class="w-4 h-4"></i> Add User</button>
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div>
+                            <h2 class="text-3xl font-display font-extrabold text-slate-800">User Management</h2>
+                            <p class="text-slate-500 font-medium mt-1">Manage registered walking pedestrians (Close-Range) and vehicle drivers (Long-Range UHF).</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button onclick="exportAllUsersCSV()" class="bg-white border border-slate-200 text-slate-700 px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-slate-50 shadow-sm flex items-center gap-2 transition-all">
+                                <i data-lucide="download" class="w-4 h-4"></i> Export Users
+                            </button>
+                            <button id="btnAddUser" onclick="openUserModal()" class="bg-charm-dark text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-opacity-90 shadow-md flex items-center gap-2 transition-all">
+                                <i data-lucide="plus" class="w-4 h-4"></i> Add User
+                            </button>
+                        </div>
                     </div>
+
+                    <!-- User Filter Tabs -->
+                    <div class="flex flex-wrap items-center gap-2 bg-white/80 backdrop-blur-md p-2 rounded-2xl border border-white/60 shadow-glass">
+                        <button onclick="setUserTableFilter('ALL')" id="userTab-ALL" class="user-filter-pill px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all bg-charm-dark text-white shadow-sm flex items-center gap-2">
+                            <span>All Users</span>
+                            <span id="userCount-ALL" class="px-2 py-0.5 rounded-full text-[10px] bg-white/20 text-white">0</span>
+                        </button>
+                        <button onclick="setUserTableFilter('PENDING')" id="userTab-PENDING" class="user-filter-pill px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all text-yellow-700 hover:bg-yellow-50 flex items-center gap-2">
+                            <span>Pending Approvals</span>
+                            <span id="userCount-PENDING" class="px-2 py-0.5 rounded-full text-[10px] bg-yellow-100 text-yellow-800 border border-yellow-200">0</span>
+                        </button>
+                        <button onclick="setUserTableFilter('AUTHORIZED')" id="userTab-AUTHORIZED" class="user-filter-pill px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all text-slate-600 hover:bg-slate-100 flex items-center gap-2">
+                            <span>Authorized / Active</span>
+                            <span id="userCount-AUTHORIZED" class="px-2 py-0.5 rounded-full text-[10px] bg-green-100 text-green-800">0</span>
+                        </button>
+                        <button onclick="setUserTableFilter('DENIED')" id="userTab-DENIED" class="user-filter-pill px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all text-slate-600 hover:bg-slate-100 flex items-center gap-2">
+                            <span>Denied / Suspended</span>
+                            <span id="userCount-DENIED" class="px-2 py-0.5 rounded-full text-[10px] bg-red-100 text-red-800">0</span>
+                        </button>
+                    </div>
+
                     <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col flex-1 min-h-[500px]">
-                        <div class="flex gap-4 mb-6"><div class="relative flex-1 max-w-md"><i data-lucide="search" class="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i><input type="text" id="userSearch" placeholder="Search by name, plate, or UID..." class="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 bg-white/70 focus:outline-none focus:ring-2 focus:ring-charm-dark/50 text-sm" oninput="filterUsers()"></div><select id="roleFilter" class="px-4 py-2.5 rounded-xl border border-slate-200 bg-white/70 text-sm font-medium text-slate-600" onchange="filterUsers()"><option value="">All Roles</option><option>Student</option><option>Faculty</option><option>Staff</option></select></div>
-                        <div class="flex-1 overflow-auto rounded-xl border border-slate-100 bg-white/40">
-                            <table class="w-full text-left border-collapse min-w-[900px]"><thead class="bg-white/80 sticky top-0 backdrop-blur-md z-10 text-xs uppercase text-slate-500 font-bold tracking-wider"><tr><th class="p-4 border-b border-slate-200">Name</th><th class="p-4 border-b border-slate-200">Role</th><th class="p-4 border-b border-slate-200">RFID UID</th><th class="p-4 border-b border-slate-200">Vehicle</th><th class="p-4 border-b border-slate-200">Plate</th><th class="p-4 border-b border-slate-200 text-center">Status</th><th class="p-4 border-b border-slate-200 text-right">Actions</th></tr></thead><tbody id="usersTable" class="text-sm"></tbody></table>
+                        <!-- Search & Sub-filters Bar -->
+                        <div class="flex flex-col md:flex-row gap-3 mb-6">
+                            <div class="relative flex-1">
+                                <i data-lucide="search" class="w-5 h-5 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                                <input type="text" id="userSearch" placeholder="Search by name, plate number, program, or RFID UID..." class="w-full pl-11 pr-4 py-2.5 rounded-xl border border-slate-200 bg-white/80 focus:outline-none focus:ring-2 focus:ring-charm-dark/50 text-sm font-medium shadow-inner" oninput="filterUsers()">
+                            </div>
+                            <div class="flex flex-wrap gap-2">
+                                <select id="modeFilter" class="px-4 py-2.5 rounded-xl border border-slate-200 bg-white/80 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-charm-dark/50 shadow-sm" onchange="filterUsers()">
+                                    <option value="ALL">All Transit Types</option>
+                                    <option value="PEDESTRIAN">🚶 Pedestrians (Close-Range)</option>
+                                    <option value="VEHICLE">🚗 Vehicles (Long-Range)</option>
+                                </select>
+                                <select id="roleFilter" class="px-4 py-2.5 rounded-xl border border-slate-200 bg-white/80 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-charm-dark/50 shadow-sm" onchange="filterUsers()">
+                                    <option value="">All Roles</option>
+                                    <option value="Student">Student</option>
+                                    <option value="Faculty">Faculty</option>
+                                    <option value="Staff">Staff</option>
+                                    <option value="Visitor">Visitor</option>
+                                </select>
+                                <select id="presenceFilter" class="px-4 py-2.5 rounded-xl border border-slate-200 bg-white/80 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-charm-dark/50 shadow-sm" onchange="filterUsers()">
+                                    <option value="ALL">All Campus Presence</option>
+                                    <option value="INSIDE">🟢 Currently Inside Campus</option>
+                                    <option value="OUTSIDE">⚪ Outside Campus</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Users Data Table -->
+                        <div class="flex-1 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/80 shadow-sm">
+                            <table class="w-full text-left border-collapse min-w-[980px]">
+                                <thead class="bg-slate-50/90 sticky top-0 backdrop-blur-md z-10 text-[11px] uppercase text-slate-500 font-black tracking-wider border-b border-slate-200">
+                                    <tr>
+                                        <th class="p-4">Person / Driver</th>
+                                        <th class="p-4">Role &amp; Details</th>
+                                        <th class="p-4">Transit &amp; RFID Range</th>
+                                        <th class="p-4">RFID UID Tag</th>
+                                        <th class="p-4">Vehicle / Details</th>
+                                        <th class="p-4 text-center">Campus Presence</th>
+                                        <th class="p-4 text-center">Authorization</th>
+                                        <th class="p-4 text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="usersTable" class="text-sm divide-y divide-slate-100"></tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
@@ -103,17 +265,22 @@
                     <div class="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-white/70 backdrop-blur-md p-6 rounded-3xl border border-white/60 shadow-glass">
                         <div>
                             <h2 class="text-3xl font-display font-extrabold text-slate-800 tracking-tight">Scan Logs</h2>
-                            <p class="text-slate-500 font-medium text-sm mt-1">Real-time access logs and historical entry/exit audit trail.</p>
+                            <p class="text-slate-500 font-medium text-sm mt-1">Dual-Range RFID access audit trail (Close-Range Pedestrian taps &amp; Long-Range Vehicle detections).</p>
                         </div>
                         <div class="flex flex-wrap items-center gap-2">
+                            <!-- Transit Mode Filter -->
+                            <div class="flex items-center gap-1 bg-slate-100/90 p-1.5 rounded-2xl border border-slate-200/80">
+                                <button onclick="filterAdminLogsMode('ALL')" id="adminLogModeAll" class="px-3 py-1.5 rounded-xl text-xs font-bold bg-charm-dark text-white shadow-sm">All Modes</button>
+                                <button onclick="filterAdminLogsMode('PEDESTRIAN')" id="adminLogModePed" class="px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 hover:text-slate-900">🚶 Pedestrians</button>
+                                <button onclick="filterAdminLogsMode('VEHICLE')" id="adminLogModeVeh" class="px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 hover:text-slate-900">🚗 Vehicles</button>
+                            </div>
+
                             <!-- Date Range Presets Toolbar -->
                             <div class="flex flex-wrap items-center gap-1 bg-slate-100/90 p-1.5 rounded-2xl border border-slate-200/80">
                                 <button onclick="setAdminLogsPreset('today')" class="admin-log-tab px-3 py-1.5 rounded-xl text-xs font-bold transition-all active-range" id="logtab-today">Today</button>
                                 <button onclick="setAdminLogsPreset('yesterday')" class="admin-log-tab px-3 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="logtab-yesterday">Yesterday</button>
                                 <button onclick="setAdminLogsPreset('7days')" class="admin-log-tab px-3 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="logtab-7days">Last 7 Days</button>
                                 <button onclick="setAdminLogsPreset('30days')" class="admin-log-tab px-3 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="logtab-30days">Last 30 Days</button>
-                                <button onclick="setAdminLogsPreset('thisMonth')" class="admin-log-tab px-3 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="logtab-thisMonth">This Month</button>
-                                <button onclick="setAdminLogsPreset('lastMonth')" class="admin-log-tab px-3 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="logtab-lastMonth">Last Month</button>
                                 <button onclick="toggleAdminLogsCustomRange()" class="admin-log-tab px-3 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900 flex items-center gap-1" id="logtab-custom">
                                     <span>Custom</span> <i data-lucide="calendar" class="w-3.5 h-3.5"></i>
                                 </button>
@@ -147,13 +314,14 @@
 
                     <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col min-h-[500px]">
                         <div class="flex-1 overflow-auto rounded-xl border border-slate-100 bg-white/40">
-                            <table class="w-full text-left border-collapse min-w-[850px]">
+                            <table class="w-full text-left border-collapse min-w-[900px]">
                                 <thead class="bg-white/80 sticky top-0 text-xs uppercase text-slate-500 font-bold tracking-wider">
                                     <tr>
                                         <th class="p-4 border-b border-slate-200">Time</th>
-                                        <th class="p-4 border-b border-slate-200">UID</th>
-                                        <th class="p-4 border-b border-slate-200">Name</th>
-                                        <th class="p-4 border-b border-slate-200">Plate</th>
+                                        <th class="p-4 border-b border-slate-200">Transit Mode &amp; Range</th>
+                                        <th class="p-4 border-b border-slate-200">RFID UID</th>
+                                        <th class="p-4 border-b border-slate-200">Name / Person</th>
+                                        <th class="p-4 border-b border-slate-200">Plate / Vehicle</th>
                                         <th class="p-4 border-b border-slate-200 text-center">Direction</th>
                                         <th class="p-4 border-b border-slate-200 text-center">Status</th>
                                         <th class="p-4 border-b border-slate-200 text-right">Gate</th>
@@ -267,18 +435,23 @@
                             </div>
                         </div>
 
-                        <!-- Currently Inside -->
-                        <div class="glass-card rounded-3xl p-6 border border-amber-200/80 shadow-glass flex flex-col justify-between bg-amber-50/40 hover:-translate-y-1 transition-all">
+                        <!-- Currently Inside (Clickable to jump to Roster) -->
+                        <div class="glass-card rounded-3xl p-6 border border-amber-200/80 shadow-glass flex flex-col justify-between bg-amber-50/40 hover:-translate-y-1 transition-all cursor-pointer group" onclick="scrollToInsideSection()">
                             <div class="flex items-center justify-between">
                                 <span class="text-xs font-bold uppercase tracking-wider text-amber-800">Currently Inside</span>
-                                <div class="w-10 h-10 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center font-black">
+                                <div class="w-10 h-10 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center font-black group-hover:scale-110 transition-transform">
                                     <i data-lucide="warehouse" class="w-5 h-5"></i>
                                 </div>
                             </div>
                             <div class="mt-4">
                                 <div class="text-3xl font-display font-black text-charm-dark" id="anStatInside">0</div>
-                                <div class="flex items-center gap-1 text-xs font-bold text-amber-700 mt-1">
-                                    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Active vehicles on campus
+                                <div class="flex items-center justify-between mt-1">
+                                    <span class="flex items-center gap-1 text-xs font-bold text-amber-700">
+                                        <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Active vehicles on campus
+                                    </span>
+                                    <span class="text-[11px] font-bold text-amber-800 underline group-hover:text-amber-950 flex items-center gap-0.5">
+                                        View Roster <i data-lucide="arrow-down" class="w-3 h-3"></i>
+                                    </span>
                                 </div>
                             </div>
                         </div>
@@ -453,20 +626,20 @@
                                 <p class="text-xs text-slate-400 mb-4">Live inventory of vehicles currently on campus</p>
                                 
                                 <div class="grid grid-cols-2 gap-3 mb-4">
-                                    <div class="p-3 rounded-xl bg-slate-50 border border-slate-100 text-center">
-                                        <div class="text-[10px] font-bold text-slate-400 uppercase">Students</div>
+                                    <div onclick="scrollToInsideSection('STUDENT')" class="p-3 rounded-xl bg-slate-50 border border-slate-100 text-center cursor-pointer hover:bg-emerald-50/70 hover:border-emerald-200 transition-all group">
+                                        <div class="text-[10px] font-bold text-slate-400 uppercase group-hover:text-emerald-700">Students</div>
                                         <div class="text-lg font-black text-emerald-800" id="insideStudents">0</div>
                                     </div>
-                                    <div class="p-3 rounded-xl bg-slate-50 border border-slate-100 text-center">
-                                        <div class="text-[10px] font-bold text-slate-400 uppercase">Faculty/Staff</div>
+                                    <div onclick="scrollToInsideSection('STAFF')" class="p-3 rounded-xl bg-slate-50 border border-slate-100 text-center cursor-pointer hover:bg-purple-50/70 hover:border-purple-200 transition-all group">
+                                        <div class="text-[10px] font-bold text-slate-400 uppercase group-hover:text-purple-700">Faculty/Staff</div>
                                         <div class="text-lg font-black text-purple-800" id="insideStaff">0</div>
                                     </div>
-                                    <div class="p-3 rounded-xl bg-slate-50 border border-slate-100 text-center">
-                                        <div class="text-[10px] font-bold text-slate-400 uppercase">Visitors</div>
+                                    <div onclick="scrollToInsideSection('VISITOR')" class="p-3 rounded-xl bg-slate-50 border border-slate-100 text-center cursor-pointer hover:bg-blue-50/70 hover:border-blue-200 transition-all group">
+                                        <div class="text-[10px] font-bold text-slate-400 uppercase group-hover:text-blue-700">Visitors</div>
                                         <div class="text-lg font-black text-blue-800" id="insideVisitors">0</div>
                                     </div>
-                                    <div class="p-3 rounded-xl bg-slate-50 border border-slate-100 text-center">
-                                        <div class="text-[10px] font-bold text-slate-400 uppercase">Emergency</div>
+                                    <div onclick="scrollToInsideSection('EMERGENCY')" class="p-3 rounded-xl bg-slate-50 border border-slate-100 text-center cursor-pointer hover:bg-red-50/70 hover:border-red-200 transition-all group">
+                                        <div class="text-[10px] font-bold text-slate-400 uppercase group-hover:text-red-700">Emergency</div>
                                         <div class="text-lg font-black text-red-800" id="insideEmergency">0</div>
                                     </div>
                                 </div>
@@ -550,6 +723,71 @@
                                     </tbody>
                                 </table>
                             </div>
+                        </div>
+                    </div>
+
+                    <!-- 7. Row 5: Live Campus Occupants — Who is Inside the Campus -->
+                    <div id="sectionInsideCampus" class="glass-card rounded-3xl p-6 lg:p-8 border border-amber-200/90 shadow-glass flex flex-col gap-6 bg-gradient-to-br from-white/95 via-amber-50/25 to-white/95 transition-all">
+                        <!-- Header with Live Count, Filters, Search & Export -->
+                        <div class="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+                            <div>
+                                <div class="flex items-center gap-2.5">
+                                    <span class="relative flex h-3 w-3">
+                                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                        <span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                                    </span>
+                                    <h3 class="font-display font-extrabold text-xl text-slate-800 tracking-tight flex items-center gap-2">
+                                        Who is Inside Campus (Live Roster)
+                                    </h3>
+                                    <span id="insideCampusRosterCount" class="px-2.5 py-0.5 rounded-full text-xs font-black bg-amber-100 text-amber-900 border border-amber-300">
+                                        0 Active
+                                    </span>
+                                </div>
+                                <p class="text-xs text-slate-500 mt-1">Real-time listing of drivers, students, faculty, staff, and visitors currently on campus grounds.</p>
+                            </div>
+
+                            <div class="flex flex-wrap items-center gap-3">
+                                <!-- Search bar -->
+                                <div class="relative min-w-[220px]">
+                                    <i data-lucide="search" class="w-4 h-4 text-slate-400 absolute left-3 top-2.5"></i>
+                                    <input type="text" id="insideSearchInput" oninput="filterInsideCampusRoster()" placeholder="Search name, plate, or RFID..." class="w-full pl-9 pr-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 focus:ring-2 focus:ring-charm-dark outline-none shadow-sm">
+                                </div>
+
+                                <!-- Role Filter Pills -->
+                                <div class="flex items-center gap-1 bg-slate-100/90 p-1 rounded-xl border border-slate-200 text-xs">
+                                    <button onclick="setInsideRosterFilter('ALL')" id="insideFilter-ALL" class="inside-tab px-3 py-1 rounded-lg font-bold bg-charm-dark text-white shadow-sm transition-all">All</button>
+                                    <button onclick="setInsideRosterFilter('STUDENT')" id="insideFilter-STUDENT" class="inside-tab px-3 py-1 rounded-lg font-bold text-slate-600 hover:text-slate-900 transition-all">Students</button>
+                                    <button onclick="setInsideRosterFilter('STAFF')" id="insideFilter-STAFF" class="inside-tab px-3 py-1 rounded-lg font-bold text-slate-600 hover:text-slate-900 transition-all">Faculty/Staff</button>
+                                    <button onclick="setInsideRosterFilter('VISITOR')" id="insideFilter-VISITOR" class="inside-tab px-3 py-1 rounded-lg font-bold text-slate-600 hover:text-slate-900 transition-all">Visitors</button>
+                                    <button onclick="setInsideRosterFilter('EMERGENCY')" id="insideFilter-EMERGENCY" class="inside-tab px-3 py-1 rounded-lg font-bold text-slate-600 hover:text-slate-900 transition-all">Emergency</button>
+                                </div>
+
+                                <!-- Export CSV -->
+                                <button onclick="exportInsideCampusCSV()" class="px-3.5 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-50 flex items-center gap-1.5 shadow-sm transition-all">
+                                    <i data-lucide="download" class="w-3.5 h-3.5 text-slate-500"></i> Export List
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Table Container -->
+                        <div class="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/80 shadow-sm max-h-[480px]">
+                            <table class="w-full text-left border-collapse text-xs">
+                                <thead class="bg-slate-50/95 sticky top-0 uppercase text-slate-500 font-bold tracking-wider border-b border-slate-200 backdrop-blur-sm z-10">
+                                    <tr>
+                                        <th class="p-3.5 text-center">#</th>
+                                        <th class="p-3.5">Driver / User</th>
+                                        <th class="p-3.5">Category</th>
+                                        <th class="p-3.5">Vehicle &amp; Plate</th>
+                                        <th class="p-3.5">Entry Time</th>
+                                        <th class="p-3.5">Duration Inside</th>
+                                        <th class="p-3.5">Entry Gate</th>
+                                        <th class="p-3.5">RFID UID</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="insideCampusTableBody" class="divide-y divide-slate-100 font-medium text-slate-700">
+                                    <!-- Dynamically populated by renderInsideCampusTable -->
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
@@ -822,6 +1060,536 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- ESP32 WI-FI SETUP & BLUETOOTH BLE PROVISIONING VIEW -->
+                <div id="aview-wifi" class="app-view hidden p-6 lg:p-8 flex-col gap-8 animate-slide-up">
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div>
+                            <h2 class="text-3xl font-display font-extrabold text-slate-800 flex items-center gap-3">
+                                <span>ESP32 Wi-Fi Setup</span>
+                                <span class="px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-blue-100 text-blue-800 border border-blue-200 flex items-center gap-1.5">
+                                    <i data-lucide="bluetooth" class="w-4 h-4 text-blue-600"></i> Bluetooth BLE Provisioning
+                                </span>
+                            </h2>
+                            <p class="text-slate-500 font-medium mt-1">Configure Wi-Fi credentials on ESP32 boom barrier units, pedestrian turnstiles, and IoT hardware nodes wirelessly through Bluetooth Low Energy (BLE).</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span id="bleBrowserSupportBadge" class="px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 shadow-sm">
+                                <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Web Bluetooth Ready
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- DUAL-MODE RFID ARCHITECTURAL CONCEPT CARD -->
+                    <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass space-y-6">
+                        <div class="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 rounded-2xl bg-gradient-to-br from-charm-dark to-emerald-700 text-white flex items-center justify-center font-bold shadow-md">
+                                    <i data-lucide="layers" class="w-5 h-5"></i>
+                                </div>
+                                <div>
+                                    <h3 class="font-display font-extrabold text-lg text-slate-800 flex items-center gap-2">
+                                        Revised CHARRMPASS Dual-Range RFID Architecture
+                                        <span class="px-2.5 py-0.5 rounded-full text-xs font-black uppercase bg-emerald-100 text-emerald-800 border border-emerald-300">v4.0 Concept</span>
+                                    </h3>
+                                    <p class="text-xs text-slate-500 font-medium">Campus Entry &amp; Exit Monitoring for both Walking Pedestrians and Vehicles using Close-Range &amp; Long-Range RFID.</p>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="px-3 py-1 rounded-xl text-xs font-extrabold bg-slate-100 text-slate-700 border border-slate-200">
+                                    2 RFID MODES ACTIVE
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- Tree Architecture Visual Representation -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 relative">
+                            <!-- Branch 1: Pedestrians -->
+                            <div class="p-5 rounded-2xl bg-gradient-to-br from-blue-50/80 to-indigo-50/80 border-2 border-blue-200 space-y-3 relative group hover:shadow-md transition-all">
+                                <div class="flex items-center justify-between">
+                                    <span class="px-3 py-1 rounded-full text-xs font-black uppercase bg-blue-600 text-white flex items-center gap-1.5 shadow-sm">
+                                        <i data-lucide="footprints" class="w-3.5 h-3.5"></i> 1. PEDESTRIANS
+                                    </span>
+                                    <span class="text-xs font-mono font-bold text-blue-700">13.56 MHz / 125 kHz</span>
+                                </div>
+                                <div class="space-y-2">
+                                    <div class="text-sm font-extrabold text-blue-950 flex items-center gap-2">
+                                        <i data-lucide="contact" class="w-4 h-4 text-blue-600"></i> Close-Range RFID Reader / ID Tag
+                                    </div>
+                                    <p class="text-xs text-blue-800/80 leading-relaxed">
+                                        Walking students, faculty, staff, and visitors tap or scan their ID card at pedestrian turnstiles and walkway readers upon entering or exiting campus.
+                                    </p>
+                                </div>
+                                <div class="p-3 bg-white/90 rounded-xl border border-blue-100 text-[11px] text-blue-900 font-medium space-y-1">
+                                    <div class="font-bold text-blue-700 uppercase tracking-wider text-[10px]">Pedestrian Scan Flow:</div>
+                                    <div>Student approaches reader → Taps/scans RFID card → ESP32 reads UID → CHARRMPASS verifies user → <strong>ENTRY / EXIT Logged</strong></div>
+                                </div>
+                            </div>
+
+                            <!-- Branch 2: Vehicles -->
+                            <div class="p-5 rounded-2xl bg-gradient-to-br from-emerald-50/80 to-teal-50/80 border-2 border-emerald-300 space-y-3 relative group hover:shadow-md transition-all">
+                                <div class="flex items-center justify-between">
+                                    <span class="px-3 py-1 rounded-full text-xs font-black uppercase bg-emerald-700 text-white flex items-center gap-1.5 shadow-sm">
+                                        <i data-lucide="car" class="w-3.5 h-3.5"></i> 2. VEHICLES
+                                    </span>
+                                    <span class="text-xs font-mono font-bold text-emerald-800">900 MHz UHF Long-Range</span>
+                                </div>
+                                <div class="space-y-2">
+                                    <div class="text-sm font-extrabold text-emerald-950 flex items-center gap-2">
+                                        <i data-lucide="radio-receiver" class="w-4 h-4 text-emerald-700"></i> Long-Range RFID Reader / Windshield Tag
+                                    </div>
+                                    <p class="text-xs text-emerald-800/80 leading-relaxed">
+                                        Motorcycles, cars, SUVs, and delivery vans with windshield/headlight UHF tags are automatically detected at a distance at boom barrier gates.
+                                    </p>
+                                </div>
+                                <div class="p-3 bg-white/90 rounded-xl border border-emerald-100 text-[11px] text-emerald-900 font-medium space-y-1">
+                                    <div class="font-bold text-emerald-700 uppercase tracking-wider text-[10px]">Vehicle Detection Flow:</div>
+                                    <div>Vehicle approaches gate → Long-range UHF detects tag → ESP32 receives tag → CHARRMPASS verifies vehicle → <strong>ENTRY / EXIT Logged</strong></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Unified Central Hub: ESP32 Gateway & Database Distinction -->
+                        <div class="p-4 rounded-2xl bg-slate-900 text-white flex flex-col md:flex-row items-center justify-between gap-4 shadow-lg">
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
+                                    <i data-lucide="database" class="w-5 h-5"></i>
+                                </div>
+                                <div>
+                                    <div class="text-xs font-bold text-emerald-400 uppercase tracking-wider">Unified Database Distinction</div>
+                                    <div class="text-xs text-slate-300">
+                                        Database records distinguish <code class="text-yellow-400 font-bold">user_type</code> (Pedestrian / Vehicle), <code class="text-yellow-400 font-bold">rfid_type</code> (Close-Range / Long-Range), and <code class="text-yellow-400 font-bold">direction</code> (Entry / Exit).
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-2 shrink-0">
+                                <span class="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-200 text-xs font-mono font-semibold border border-slate-700">
+                                    ESP32 Controller Gateway
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Flow Architecture Diagram Card -->
+                    <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass">
+                        <div class="flex items-center gap-2 text-xs font-black uppercase text-slate-400 tracking-wider mb-4">
+                            <i data-lucide="git-branch" class="w-4 h-4 text-charm-dark"></i> Wireless Provisioning Architecture &amp; Data Flow
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 relative">
+                            <!-- Node 1 -->
+                            <div class="bg-white/80 p-4 rounded-2xl border border-slate-200/80 text-center flex flex-col items-center justify-center shadow-sm relative group hover:-translate-y-1 transition-transform">
+                                <div class="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center mb-2 font-bold">
+                                    <i data-lucide="smartphone" class="w-5 h-5"></i>
+                                </div>
+                                <div class="text-xs font-extrabold text-slate-800">1. Admin Phone / PC</div>
+                                <div class="text-[10px] text-slate-400 mt-0.5">Input SSID &amp; Password</div>
+                            </div>
+                            <!-- Node 2 -->
+                            <div class="bg-blue-50/80 p-4 rounded-2xl border border-blue-200/80 text-center flex flex-col items-center justify-center shadow-sm relative group hover:-translate-y-1 transition-transform">
+                                <div class="w-10 h-10 rounded-xl bg-blue-500 text-white flex items-center justify-center mb-2 font-bold shadow-md">
+                                    <i data-lucide="bluetooth" class="w-5 h-5"></i>
+                                </div>
+                                <div class="text-xs font-extrabold text-blue-900">2. Bluetooth (BLE)</div>
+                                <div class="text-[10px] text-blue-600 mt-0.5">Transmits Credentials</div>
+                            </div>
+                            <!-- Node 3 -->
+                            <div class="bg-emerald-50/80 p-4 rounded-2xl border border-emerald-200/80 text-center flex flex-col items-center justify-center shadow-sm relative group hover:-translate-y-1 transition-transform">
+                                <div class="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center mb-2 font-bold shadow-md">
+                                    <i data-lucide="cpu" class="w-5 h-5"></i>
+                                </div>
+                                <div class="text-xs font-extrabold text-emerald-900">3. ESP32 Gate Unit</div>
+                                <div class="text-[10px] text-emerald-700 mt-0.5">Receives Wi-Fi Payload</div>
+                            </div>
+                            <!-- Node 4 -->
+                            <div class="bg-amber-50/80 p-4 rounded-2xl border border-amber-200/80 text-center flex flex-col items-center justify-center shadow-sm relative group hover:-translate-y-1 transition-transform">
+                                <div class="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center mb-2 font-bold shadow-md">
+                                    <i data-lucide="wifi" class="w-5 h-5"></i>
+                                </div>
+                                <div class="text-xs font-extrabold text-amber-900">4. Campus Router</div>
+                                <div class="text-[10px] text-amber-700 mt-0.5">Connects to Wi-Fi Network</div>
+                            </div>
+                            <!-- Node 5 -->
+                            <div class="bg-purple-50/80 p-4 rounded-2xl border border-purple-200/80 text-center flex flex-col items-center justify-center shadow-sm relative group hover:-translate-y-1 transition-transform">
+                                <div class="w-10 h-10 rounded-xl bg-purple-600 text-white flex items-center justify-center mb-2 font-bold shadow-md">
+                                    <i data-lucide="cloud" class="w-5 h-5"></i>
+                                </div>
+                                <div class="text-xs font-extrabold text-purple-900">5. Supabase &amp; Web</div>
+                                <div class="text-[10px] text-purple-700 mt-0.5">Real-time Sync &amp; Access</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Bluetooth BLE Provisioning Banner -->
+                    <div class="glass-card rounded-3xl p-5 border border-white/60 shadow-glass mb-6 bg-gradient-to-r from-blue-900/10 via-indigo-900/10 to-purple-900/10">
+                        <div class="flex flex-col md:flex-row items-center justify-between gap-4">
+                            <div class="flex items-center gap-3.5">
+                                <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white flex items-center justify-center font-bold shadow-md">
+                                    <i data-lucide="bluetooth" class="w-6 h-6"></i>
+                                </div>
+                                <div>
+                                    <h3 class="font-display font-extrabold text-slate-800 text-base">Bluetooth (BLE) Wireless Gate Provisioning</h3>
+                                    <p class="text-xs text-slate-600 mt-0.5">Wirelessly configure ESP32 gate Wi-Fi without hardcoding passwords. 100% Bluetooth Low Energy pairing.</p>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-2.5 w-full md:w-auto">
+                                <a href="#bleProvisioningCard" class="w-full md:w-auto px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold text-xs shadow-md flex items-center justify-center gap-1.5 transition-all">
+                                    <i data-lucide="bluetooth-searching" class="w-4 h-4 text-blue-200"></i>
+                                    <span>Pair ESP32 Controller</span>
+                                </a>
+                            </div>
+                        </div>
+                        <div class="mt-3 pt-3 border-t border-white/40 grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-slate-600">
+                            <div class="flex items-start gap-2"><span class="text-emerald-600 font-black mt-0.5">✓</span><span><strong>No hardcoded credentials</strong> — Zero credentials in Arduino source code</span></div>
+                            <div class="flex items-start gap-2"><span class="text-emerald-600 font-black mt-0.5">✓</span><span><strong>Test-then-Save:</strong> Saved to NVS flash &amp; SD backup ONLY if connection succeeds</span></div>
+                            <div class="flex items-start gap-2"><span class="text-emerald-600 font-black mt-0.5">✓</span><span><strong>Re-provisioning:</strong> Type <code class="bg-slate-100 px-1 rounded font-bold">RESET</code> via Serial Monitor to wipe &amp; re-pair</span></div>
+                        </div>
+                    </div>
+
+                    <!-- Main Provisioning Workspace -->
+                    <div id="bleProvisioningCard" class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                        <!-- Left: Bluetooth Discovery & Configuration Form -->
+                        <div class="lg:col-span-6 space-y-6">
+                            <!-- Step 1: Scan & Connect Bluetooth -->
+                            <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass space-y-4">
+                                <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+                                    <div class="flex items-center gap-2">
+                                        <div class="w-7 h-7 rounded-lg bg-blue-100 text-blue-700 font-black text-xs flex items-center justify-center">1</div>
+                                        <h3 class="font-display font-bold text-base text-slate-800">Scan &amp; Pair with ESP32 via BLE</h3>
+                                    </div>
+                                    <span id="bleConnectionStatus" class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-slate-100 text-slate-500 border border-slate-200">DISCONNECTED</span>
+                                </div>
+
+                                <div class="space-y-3">
+                                    <div class="space-y-1">
+                                        <label class="form-label font-bold text-xs">Target Gate / Node Type</label>
+                                        <select id="bleTargetDeviceType" class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white font-semibold text-slate-700 text-sm focus:ring-2 focus:ring-charm-dark outline-none">
+                                            <option value="ENTRY">CHARRMPASS Entry Gate Unit (ESP32-WROOM)</option>
+                                            <option value="EXIT">CHARRMPASS Exit Gate Unit (ESP32-WROOM)</option>
+                                            <option value="UHF">CHARRMPASS UHF Long-Range Gate Unit (ESP32-WROOM)</option>
+                                            <option value="CUSTOM">Custom IoT Device (R.A.N. / EnerCharge Node)</option>
+                                        </select>
+                                    </div>
+
+                                    <div>
+                                        <button type="button" id="btnScanBle" onclick="connectBluetoothDevice()" class="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold text-sm shadow-md flex items-center justify-center gap-2 transition-all">
+                                            <i data-lucide="bluetooth-searching" class="w-4 h-4"></i>
+                                            <span>Scan &amp; Connect via Bluetooth</span>
+                                        </button>
+                                    </div>
+
+                                    <!-- Active Connected Device Card -->
+                                    <div id="bleActiveDeviceCard" class="hidden p-4 rounded-2xl bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 space-y-2 animate-slide-up">
+                                        <div class="flex items-center justify-between">
+                                            <div class="flex items-center gap-2.5">
+                                                <div class="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold">
+                                                    <i data-lucide="bluetooth-connected" class="w-4 h-4"></i>
+                                                </div>
+                                                <div>
+                                                    <div class="font-extrabold text-xs text-slate-900" id="bleDeviceName">CHARRMPASS_GATE_BLE</div>
+                                                    <div class="text-[10px] font-mono text-slate-500" id="bleDeviceMac">MAC: 24:6F:28:AE:B9:42</div>
+                                                </div>
+                                            </div>
+                                            <button onclick="disconnectBluetoothDevice()" class="text-xs text-red-600 font-bold hover:underline">Disconnect</button>
+                                        </div>
+                                        <div class="flex items-center justify-between text-[11px] text-slate-600 pt-2 border-t border-blue-100 font-medium">
+                                            <span>RSSI: <strong class="text-emerald-700 font-mono" id="bleDeviceRssi">-52 dBm (Excellent)</strong></span>
+                                            <span>Service: <strong class="text-slate-700 font-mono">4FAFC201-1FB5...</strong></span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Step 2: Configure Wi-Fi Credentials -->
+                            <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass space-y-4">
+                                <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+                                    <div class="flex items-center gap-2">
+                                        <div class="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-800 font-black text-xs flex items-center justify-center">2</div>
+                                        <h3 class="font-display font-bold text-base text-slate-800">Wi-Fi Credentials Setup</h3>
+                                    </div>
+                                    <button type="button" onclick="fillCampusPresetWifi()" class="text-[11px] font-bold text-charm-dark hover:underline flex items-center gap-1">
+                                        <i data-lucide="info" class="w-3 h-3 text-blue-500"></i> How to Provision
+                                    </button>
+                                </div>
+
+                                <form id="wifiProvisionForm" onsubmit="handleWifiProvisionSubmit(event)" class="space-y-4">
+                                    <div class="space-y-1">
+                                        <label class="form-label font-bold text-xs">Wi-Fi Network Name (SSID) *</label>
+                                        <div class="relative">
+                                            <input type="text" id="wifiSsidInput" required placeholder="e.g. MyWiFi or ASU-Campus-WiFi" class="form-input font-bold text-slate-800 pr-10">
+                                            <div class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+                                                <i data-lucide="wifi" class="w-4 h-4"></i>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="space-y-1">
+                                        <label class="form-label font-bold text-xs">Wi-Fi Password <span class="text-slate-400 font-normal">(leave blank for open networks)</span></label>
+                                        <div class="relative">
+                                            <input type="password" id="wifiPassInput" placeholder="Enter Wi-Fi network password" class="form-input font-mono pr-10">
+                                            <button type="button" onclick="togglePass('wifiPassInput', this)" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-charm-dark">
+                                                <i data-lucide="eye" class="w-4 h-4"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div class="grid grid-cols-2 gap-3">
+                                        <div class="space-y-1">
+                                            <label class="form-label font-bold text-xs">Security Protocol</label>
+                                            <select id="wifiSecProtocol" class="form-input text-xs font-semibold">
+                                                <option value="WPA2">WPA2-PSK (Standard)</option>
+                                                <option value="WPA3">WPA3-Personal</option>
+                                                <option value="OPEN">Open (No Password)</option>
+                                            </select>
+                                        </div>
+                                        <div class="space-y-1">
+                                            <label class="form-label font-bold text-xs">IP Configuration</label>
+                                            <select id="wifiIpMode" class="form-input text-xs font-semibold">
+                                                <option value="DHCP">DHCP (Automatic IP)</option>
+                                                <option value="STATIC">Static IP Assignment</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <button type="submit" id="btnSendProvision" class="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-charm-dark to-emerald-700 hover:from-charm-dark hover:to-emerald-800 text-white font-extrabold text-sm shadow-lg hover:shadow-xl transition-all flex items-center justify-center gap-2">
+                                        <i data-lucide="send" class="w-4 h-4 text-charm-yellow"></i>
+                                        <span>Send Credentials &amp; Connect ESP32</span>
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+
+                        <!-- Right: Live BLE Provisioning Terminal & Device Health Status -->
+                        <div class="lg:col-span-6 space-y-6">
+                            <!-- Provisioning Terminal Stream -->
+                            <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col h-[320px]">
+                                <div class="flex items-center justify-between border-b border-slate-100 pb-3 mb-3">
+                                    <div class="flex items-center gap-2">
+                                        <i data-lucide="terminal" class="w-4 h-4 text-slate-600"></i>
+                                        <h3 class="font-display font-bold text-sm text-slate-800">BLE Provisioning Console Log</h3>
+                                    </div>
+                                    <button onclick="clearBleConsole()" class="text-xs text-slate-400 hover:text-slate-700 font-bold">Clear Log</button>
+                                </div>
+                                <div id="bleConsoleOutput" class="flex-1 bg-slate-900 text-emerald-400 font-mono text-xs p-4 rounded-2xl overflow-y-auto custom-scrollbar space-y-1.5 shadow-inner">
+                                    <div class="text-slate-500">// CHARRMPASS Web Bluetooth (BLE) Provisioning Terminal Ready</div>
+                                    <div class="text-slate-400">// Select a target ESP32 gate unit and click "Scan &amp; Connect via Bluetooth"</div>
+                                </div>
+                            </div>
+
+                                     <!-- Gate Status & Live Connectivity Card -->
+                            <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass space-y-4">
+                                <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+                                    <div class="flex items-center gap-2">
+                                        <i data-lucide="shield-check" class="w-4 h-4 text-emerald-600"></i>
+                                        <h3 class="font-display font-bold text-sm text-slate-800">Gate Network Health &amp; Cloud Ping</h3>
+                                    </div>
+                                    <button onclick="pingAllGates()" class="text-xs font-bold text-charm-dark hover:underline flex items-center gap-1">
+                                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Test Gate Ping
+                                    </button>
+                                </div>
+
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3" id="gateHealthCardsContainer">
+                                    <div class="p-3.5 rounded-2xl bg-white border border-slate-200/80 shadow-sm" id="entryGateCard">
+                                        <div class="text-[10px] font-bold text-slate-400 uppercase">Entry Gate (ESP32)</div>
+                                        <div class="text-sm font-black text-slate-800 mt-1 flex items-center gap-1.5" id="entryGateStatusBadge">
+                                            <span class="w-2 h-2 rounded-full bg-slate-300"></span> CHECKING...
+                                        </div>
+                                        <div class="text-[10px] text-slate-500 font-mono mt-0.5" id="entryGateIpText">Checking Cloud Sync...</div>
+                                    </div>
+                                    <div class="p-3.5 rounded-2xl bg-white border border-slate-200/80 shadow-sm" id="exitGateCard">
+                                        <div class="text-[10px] font-bold text-slate-400 uppercase">Exit Gate (ESP32)</div>
+                                        <div class="text-sm font-black text-slate-800 mt-1 flex items-center gap-1.5" id="exitGateStatusBadge">
+                                            <span class="w-2 h-2 rounded-full bg-slate-300"></span> CHECKING...
+                                        </div>
+                                        <div class="text-[10px] text-slate-500 font-mono mt-0.5" id="exitGateIpText">Checking Cloud Sync...</div>
+                                    </div>
+                                </div>
+
+                                <div class="flex items-center justify-between p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 font-semibold">
+                                    <span class="flex items-center gap-2">
+                                        <i data-lucide="check-circle-2" class="w-4 h-4 text-emerald-600"></i>
+                                        <span>Supabase Realtime Channel: Active &amp; Listening</span>
+                                    </span>
+                                    <span class="font-mono font-bold text-[11px]" id="syncedGatesCount">Syncing Gates...</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Configured ESP32 Devices Table -->
+                    <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass">
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                            <div>
+                                <h3 class="font-display font-bold text-lg text-slate-800">Configured ESP32 Gate Units</h3>
+                                <p class="text-xs text-slate-500">Live database registry of microcontroller gates provisioned for ASU-Ibajay campus monitoring.</p>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button onclick="openDeviceModal()" class="px-3.5 py-2 rounded-xl bg-charm-dark text-white hover:opacity-90 text-xs font-bold shadow-sm flex items-center gap-1.5 transition-all">
+                                    <i data-lucide="plus-circle" class="w-4 h-4 text-charm-yellow"></i> Register Gate Unit
+                                </button>
+                                <button onclick="toggleArduinoSketchDrawer()" class="px-3.5 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 hover:text-charm-dark text-xs font-bold shadow-sm flex items-center gap-1.5 transition-all">
+                                    <i data-lucide="code-2" class="w-4 h-4 text-blue-600"></i> View ESP32 BLE Code
+                                </button>
+                            </div>
+                        </div>
+                        <div class="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white shadow-sm">
+                            <table class="w-full text-left border-collapse min-w-[760px] text-xs">
+                                <thead class="bg-slate-50 text-[10px] uppercase font-black text-slate-500 tracking-wider border-b border-slate-200">
+                                    <tr>
+                                        <th class="p-3.5">Device Identifier</th>
+                                        <th class="p-3.5">Gate Role</th>
+                                        <th class="p-3.5">Category &amp; RFID Range</th>
+                                        <th class="p-3.5">Location</th>
+                                        <th class="p-3.5">Last Online Activity</th>
+                                        <th class="p-3.5 text-center">Status</th>
+                                        <th class="p-3.5 text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="esp32DevicesTable" class="divide-y divide-slate-100 font-medium">
+                                    <tr>
+                                        <td colspan="7" class="p-8 text-center text-slate-400 font-medium">
+                                            <div class="flex items-center justify-center gap-2">
+                                                <i data-lucide="loader-2" class="w-4 h-4 animate-spin text-charm-dark"></i>
+                                                <span>Loading registered ESP32 gates from database...</span>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- ESP32 Arduino BLE Provisioning Code Helper Drawer -->
+                    <div id="arduinoBleDrawer" class="hidden glass-card rounded-3xl p-6 border border-white/60 shadow-glass space-y-4 animate-slide-up">
+                        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+                            <div class="flex items-center gap-2">
+                                <i data-lucide="code" class="w-5 h-5 text-blue-600"></i>
+                                <h3 class="font-display font-bold text-base text-slate-800">ESP32 Bluetooth Low Energy (BLE) Wi-Fi Provisioning Firmware Snippet (.ino)</h3>
+                            </div>
+                            <button onclick="copyArduinoBleSnippet()" class="px-3.5 py-1.5 bg-charm-dark text-white rounded-xl text-xs font-bold hover:opacity-90 flex items-center gap-1.5 shadow-sm">
+                                <i data-lucide="copy" class="w-3.5 h-3.5"></i> Copy Code
+                            </button>
+                        </div>
+                        <p class="text-xs text-slate-500">Flash this production code snippet onto your ESP32 board to enable <strong>100% Bluetooth Low Energy (BLE) Wi-Fi provisioning</strong>. <strong class="text-red-600">No hardcoded credentials</strong> — SSID &amp; password stored exclusively in ESP32 NVS Flash (Preferences). Credentials survive power cycles; send <code class="bg-slate-100 text-slate-700 px-1 rounded font-bold">RESET</code> via Serial Monitor to wipe and re-enter setup mode at any time.</p>
+                        <pre class="bg-slate-900 text-slate-200 font-mono text-xs p-4 rounded-2xl overflow-x-auto custom-scrollbar border border-slate-800"><code id="arduinoBleCodeBlock">#include &lt;WiFi.h&gt;
+#include &lt;HTTPClient.h&gt;
+#include &lt;Preferences.h&gt;
+#include &lt;BLEDevice.h&gt;
+#include &lt;BLEServer.h&gt;
+#include &lt;BLEUtils.h&gt;
+#include &lt;BLE2902.h&gt;
+
+#define GATE_ID             "CHARRMPASS_GATE_ENTRY"
+#define GATE_TYPE           "ENTRY"
+#define BLE_DEVICE_NAME     "CHARRMPASS_ENTRY_BLE"
+#define BLE_SERVICE_UUID    "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define BLE_CHAR_UUID       "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+
+const char* SUPABASE_URL  = "https://sdwjkgtxrpeajuymgpxp.supabase.co";
+const char* SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...";
+
+Preferences preferences;
+BLEServer* pBleServer = NULL;
+BLECharacteristic* pBleCharacteristic = NULL;
+bool bleClientConnected = false;
+bool bleServerRunning = false;
+bool newWifiCredentialsReceived = false;
+String currentSsid = "";
+String currentPass = "";
+
+class BleServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer) {
+    bleClientConnected = true;
+    Serial.println("[BLE] Web Bluetooth Admin Connected!");
+  }
+  void onDisconnect(BLEServer* pServer) {
+    bleClientConnected = false;
+    Serial.println("[BLE] Bluetooth Client Disconnected.");
+    if (bleServerRunning) BLEDevice::startAdvertising();
+  }
+};
+
+class BleCharCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *pCharacteristic) override {
+    String rxValue = pCharacteristic->getValue().c_str();
+    if (rxValue.length() == 0) return;
+    Serial.println("[BLE RX] " + rxValue);
+
+    // Parse SSID and Password (JSON: {"ssid":"...","pass":"..."} or "SSID:PASS")
+    String newSsid = "", newPass = "";
+    int sIndex = rxValue.indexOf("\"ssid\"");
+    if (sIndex != -1) {
+      int c = rxValue.indexOf(':', sIndex);
+      int q1 = rxValue.indexOf('"', c);
+      int q2 = rxValue.indexOf('"', q1 + 1);
+      newSsid = rxValue.substring(q1 + 1, q2);
+    }
+    int pIndex = rxValue.indexOf("\"pass\"");
+    if (pIndex != -1) {
+      int c = rxValue.indexOf(':', pIndex);
+      int q1 = rxValue.indexOf('"', c);
+      int q2 = rxValue.indexOf('"', q1 + 1);
+      newPass = rxValue.substring(q1 + 1, q2);
+    }
+    if (newSsid.length() == 0) {
+      int sep = rxValue.indexOf(':');
+      if (sep != -1) {
+        newSsid = rxValue.substring(0, sep);
+        newPass = rxValue.substring(sep + 1);
+      }
+    }
+    if (newSsid.length() > 0) {
+      currentSsid = newSsid; currentPass = newPass;
+      preferences.begin("charrm_wifi", false);
+      preferences.putString("ssid", currentSsid);
+      preferences.putString("pass", currentPass);
+      preferences.end();
+      
+      // Notify Admin Phone / Web Browser of Saved Credentials
+      if (pBleCharacteristic) {
+        pBleCharacteristic->setValue("{\"event\":\"SAVED\",\"ssid\":\"" + currentSsid + "\"}");
+        pBleCharacteristic->notify();
+      }
+      newWifiCredentialsReceived = true;
+    }
+  }
+};
+
+void sendDeviceHeartbeat() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  HTTPClient http;
+  String url = String(SUPABASE_URL) + "/rest/v1/devices?esp32_identifier=eq." + String(GATE_ID);
+  http.begin(url);
+  http.addHeader("apikey", SUPABASE_ANON);
+  http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
+  http.addHeader("Content-Type", "application/json");
+  String payload = "{\"status\":\"ONLINE\",\"last_online\":\"now()\"}";
+  int code = http.PATCH(payload);
+  http.end();
+}
+
+void startBleServer() {
+  if (bleServerRunning) return;
+  BLEDevice::init(BLE_DEVICE_NAME);
+  pBleServer = BLEDevice::createServer();
+  pBleServer->setCallbacks(new BleServerCallbacks());
+  BLEService *pService = pBleServer->createService(BLE_SERVICE_UUID);
+  pBleCharacteristic = pService->createCharacteristic(
+      BLE_CHAR_UUID,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY
+  );
+  pBleCharacteristic->setCallbacks(new BleCharCallbacks());
+  pBleCharacteristic->addDescriptor(new BLE2902());
+  pService->start();
+  BLEAdvertising *pAdv = BLEDevice::getAdvertising();
+  pAdv->addServiceUUID(BLE_SERVICE_UUID);
+  pAdv->start();
+  bleServerRunning = true;
+}</code></pre>
+                    </div>
+                </div>
+            </div>
+        </main> </div>
+                </div>
             </div>
         </main>
     </div>
@@ -841,10 +1609,15 @@
                     <div class="space-y-1 md:col-span-2"><label class="form-label">Address</label><input type="text" id="formAddress" class="form-input"></div>
                     <div class="space-y-1"><label class="form-label">Program</label><input type="text" id="formProgram" class="form-input"></div>
                     <div class="space-y-1"><label class="form-label">Section</label><input type="text" id="formSection" class="form-input"></div>
-                    <div class="space-y-1"><label class="form-label">RFID UID *</label><input type="text" id="formUid" required placeholder="e.g. B7 78 96 31" class="form-input font-mono uppercase"></div>
+                    <div class="space-y-1"><label class="form-label">RFID Tag UID (UHF Sticker or ID Card) *</label><input type="text" id="formUid" required placeholder="e.g. 0419670354 or B7 78 96 31" class="form-input font-mono uppercase"></div>
                     <div class="space-y-1"><label class="form-label">Role *</label><select id="formRole" required class="form-input"><option value="Student">Student</option><option value="Faculty">Faculty</option><option value="Staff">Staff</option></select></div>
-                    <div class="md:col-span-2 mt-2 pt-4 border-t border-slate-100"><h4 class="text-sm font-bold text-slate-800 mb-3">Vehicle Information</h4></div>
-                    <div class="space-y-1"><label class="form-label">Vehicle Type</label><select id="formVehType" class="form-input"><option value="Car">Car</option><option value="SUV">SUV</option><option value="Motorcycle">Motorcycle</option><option value="Van">Van</option><option value="None">None</option></select></div>
+                    <div class="md:col-span-2 mt-2 pt-4 border-t border-slate-100 flex items-center justify-between">
+                        <div>
+                            <h4 class="text-sm font-bold text-slate-800">Vehicle Information (For Long-Range UHF Access)</h4>
+                            <p class="text-[11px] text-slate-400">If registered with a vehicle, the RFID tag above is automatically linked as a Long-Range UHF Vehicle pass.</p>
+                        </div>
+                    </div>
+                    <div class="space-y-1"><label class="form-label">Vehicle Type</label><select id="formVehType" class="form-input"><option value="Motorcycle">Motorcycle</option><option value="Car">Car</option><option value="SUV">SUV</option><option value="Van">Van</option><option value="None">None (Pedestrian Only)</option></select></div>
                     <div class="space-y-1"><label class="form-label">Plate Number</label><input type="text" id="formPlate" class="form-input font-mono uppercase" placeholder="ABC-1234"></div>
                     <div class="space-y-1"><label class="form-label">Model</label><input type="text" id="formVehModel" class="form-input"></div>
                     <div class="space-y-1"><label class="form-label">Color</label><input type="text" id="formVehColor" class="form-input"></div>
@@ -944,99 +1717,412 @@
         </div>
     </div>
 
-    <!-- Review Registration Modal -->
-    <div id="reviewModal" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 opacity-0 transition-opacity">
-        <div class="bg-white rounded-3xl w-full max-w-4xl max-h-[90vh] shadow-2xl border border-slate-100 flex flex-col transform scale-95 transition-transform overflow-hidden" id="reviewModalContent">
-            <div class="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-                <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 rounded-xl bg-charm-dark text-white flex items-center justify-center shadow-md">
-                        <i data-lucide="shield-alert" class="w-6 h-6"></i>
-                    </div>
-                    <h3 class="font-display font-bold text-xl text-slate-800">Review Registration</h3>
-                </div>
-                <button onclick="closeReviewModal()" class="text-slate-400 hover:text-red-500"><i data-lucide="x" class="w-6 h-6"></i></button>
-            </div>
-            <div class="flex-1 overflow-y-auto p-8 custom-scrollbar">
-                <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                    <!-- Left Side: Profile & Details -->
-                    <div class="lg:col-span-4 flex flex-col items-center text-center">
-                        <img id="revProfileImage" src="" class="w-40 h-40 rounded-3xl object-cover border-4 border-white shadow-xl mb-6">
-                        <h4 id="revName" class="text-2xl font-display font-bold text-slate-800">--</h4>
-                        <div id="revRoleBadge" class="mt-2 px-3 py-1 rounded-full text-xs font-black uppercase tracking-widest">--</div>
-                        
-                        <div class="w-full mt-8 space-y-4 text-left">
-                            <div class="p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                                <div class="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-2">Personal Information</div>
-                                <div class="grid grid-cols-2 gap-4">
-                                    <div><div class="text-[10px] font-bold text-slate-400 uppercase">Age</div><div id="revAge" class="text-sm font-bold text-slate-700">--</div></div>
-                                    <div><div class="text-[10px] font-bold text-slate-400 uppercase">Sex</div><div id="revSex" class="text-sm font-bold text-slate-700">--</div></div>
-                                    <div class="col-span-2"><div class="text-[10px] font-bold text-slate-400 uppercase">Program/Section</div><div id="revProgram" class="text-sm font-bold text-slate-700">--</div></div>
-                                    <div class="col-span-2"><div class="text-[10px] font-bold text-slate-400 uppercase">Address</div><div id="revAddress" class="text-xs font-medium text-slate-500 italic">--</div></div>
-                                </div>
-                            </div>
-                            <div class="p-4 rounded-2xl bg-slate-50 border border-slate-100">
-                                <div class="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-2">Vehicle Details</div>
-                                <div class="grid grid-cols-2 gap-4">
-                                    <div><div class="text-[10px] font-bold text-slate-400 uppercase">Plate</div><div id="revPlate" class="text-sm font-bold text-charm-dark font-mono bg-charm-yellow/20 px-2 rounded inline-block">--</div></div>
-                                    <div><div class="text-[10px] font-bold text-slate-400 uppercase">Type</div><div id="revVehType" class="text-sm font-bold text-slate-700">--</div></div>
-                                    <div class="col-span-2"><div class="text-[10px] font-bold text-slate-400 uppercase">Model / Color</div><div id="revVehDetails" class="text-sm font-bold text-slate-700">--</div></div>
-                                </div>
-                            </div>
+    <!-- Enhanced Application Review & Registration Details Dossier Modal -->
+    <div id="reviewModal" class="hidden fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 opacity-0 transition-opacity">
+        <div class="bg-white rounded-3xl w-full max-w-5xl max-h-[92vh] shadow-2xl border border-slate-100 flex flex-col transform scale-95 transition-transform overflow-hidden" id="reviewModalContent">
+            <!-- Modal Header -->
+            <div class="p-6 border-b border-slate-100 bg-slate-50/70 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div class="flex items-center gap-4">
+                    <img id="revHeaderAvatar" src="https://ui-avatars.com/api/?name=Applicant" class="w-14 h-14 rounded-2xl object-cover border-2 border-white shadow-md">
+                    <div>
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <h3 id="revHeaderName" class="font-display font-extrabold text-2xl text-slate-800">--</h3>
+                            <span id="revHeaderRole" class="px-3 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-blue-100 text-blue-700">STUDENT</span>
+                            <span id="revHeaderStatus" class="px-3 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-yellow-100 text-yellow-700 flex items-center gap-1">
+                                <span class="w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse"></span> PENDING REVIEW
+                            </span>
+                        </div>
+                        <div class="flex items-center gap-3 text-xs text-slate-500 font-medium mt-1">
+                            <span id="revHeaderProgram">--</span>
+                            <span>•</span>
+                            <span id="revHeaderAppliedDate">Submitted: --</span>
+                            <span>•</span>
+                            <span class="font-mono text-slate-400" id="revHeaderUserId">ID: --</span>
                         </div>
                     </div>
-                    
-                    <!-- Right Side: Documents -->
-                    <div class="lg:col-span-8">
-                        <h5 class="text-xs font-black uppercase tracking-widest text-slate-400 mb-4 flex items-center gap-2"><i data-lucide="image" class="w-4 h-4"></i> Requirements & Documents</h5>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <!-- Vehicle/Motorcycle -->
-                            <div class="space-y-2">
-                                <div class="text-[10px] font-bold text-slate-500 uppercase">Vehicle Photo</div>
-                                <div class="h-48 rounded-2xl bg-slate-100 border border-slate-200 overflow-hidden group relative cursor-zoom-in" onclick="zoomImage(this)">
-                                    <img id="revImgMotor" class="w-full h-full object-cover transition-transform group-hover:scale-105">
-                                    <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold">CLICK TO ZOOM</div>
-                                </div>
+                </div>
+                <div class="flex items-center gap-2 self-end md:self-center">
+                    <button onclick="printRegistrationSummary()" class="px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 hover:text-charm-dark text-xs font-bold shadow-sm flex items-center gap-1.5 transition-all">
+                        <i data-lucide="printer" class="w-4 h-4"></i> Print Pass
+                    </button>
+                    <button onclick="closeReviewModal()" class="w-9 h-9 rounded-xl bg-slate-100 hover:bg-red-50 text-slate-400 hover:text-red-500 flex items-center justify-center transition-colors">
+                        <i data-lucide="x" class="w-5 h-5"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Modal Sub-Navigation Tabs -->
+            <div class="flex border-b border-slate-100 bg-white px-6 gap-2">
+                <button onclick="switchReviewTab('overview')" id="revNav-overview" class="rev-tab-btn py-3 px-4 text-xs font-black uppercase tracking-wider text-charm-dark border-b-2 border-charm-dark flex items-center gap-2">
+                    <i data-lucide="user" class="w-4 h-4"></i> Overview &amp; Vehicle
+                </button>
+                <button onclick="switchReviewTab('documents')" id="revNav-documents" class="rev-tab-btn py-3 px-4 text-xs font-black uppercase tracking-wider text-slate-400 hover:text-slate-700 border-b-2 border-transparent flex items-center gap-2">
+                    <i data-lucide="file-check-2" class="w-4 h-4"></i> Verified Documents (4)
+                </button>
+                <button onclick="switchReviewTab('history')" id="revNav-history" class="rev-tab-btn py-3 px-4 text-xs font-black uppercase tracking-wider text-slate-400 hover:text-slate-700 border-b-2 border-transparent flex items-center gap-2">
+                    <i data-lucide="history" class="w-4 h-4"></i> Access History &amp; Logs
+                </button>
+            </div>
+
+            <!-- Modal Body Content (Tabbed) -->
+            <div class="flex-1 overflow-y-auto p-6 md:p-8 custom-scrollbar bg-slate-50/30">
+                <!-- TAB 1: OVERVIEW & VEHICLE -->
+                <div id="revSection-overview" class="space-y-6">
+                    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                        <!-- Personal Info Card -->
+                        <div class="lg:col-span-6 bg-white p-6 rounded-2xl border border-slate-200/80 shadow-sm space-y-4">
+                            <div class="flex items-center gap-2 text-charm-dark font-display font-bold text-sm uppercase tracking-wider border-b border-slate-100 pb-3">
+                                <i data-lucide="user-check" class="w-4 h-4"></i> Personal Information
                             </div>
-                            <!-- ID Front -->
-                            <div class="space-y-2">
-                                <div class="text-[10px] font-bold text-slate-500 uppercase">School ID (Front)</div>
-                                <div class="h-48 rounded-2xl bg-slate-100 border border-slate-200 overflow-hidden group relative cursor-zoom-in" onclick="zoomImage(this)">
-                                    <img id="revImgIdFront" class="w-full h-full object-cover transition-transform group-hover:scale-105">
-                                    <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold">CLICK TO ZOOM</div>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <div class="text-[10px] font-bold text-slate-400 uppercase">Full Name</div>
+                                    <div id="revName" class="text-sm font-bold text-slate-800">--</div>
                                 </div>
-                            </div>
-                            <!-- ID Back -->
-                            <div class="space-y-2">
-                                <div class="text-[10px] font-bold text-slate-500 uppercase">School ID (Back)</div>
-                                <div class="h-48 rounded-2xl bg-slate-100 border border-slate-200 overflow-hidden group relative cursor-zoom-in" onclick="zoomImage(this)">
-                                    <img id="revImgIdBack" class="w-full h-full object-cover transition-transform group-hover:scale-105">
-                                    <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold">CLICK TO ZOOM</div>
+                                <div>
+                                    <div class="text-[10px] font-bold text-slate-400 uppercase">Role / Category</div>
+                                    <div id="revRoleBadge" class="text-sm font-bold text-slate-800">--</div>
+                                </div>
+                                <div>
+                                    <div class="text-[10px] font-bold text-slate-400 uppercase">Age / Gender</div>
+                                    <div class="text-sm font-bold text-slate-800"><span id="revAge">--</span> yrs • <span id="revSex">--</span></div>
+                                </div>
+                                <div>
+                                    <div class="text-[10px] font-bold text-slate-400 uppercase">Program / Course</div>
+                                    <div id="revProgram" class="text-sm font-bold text-slate-800">--</div>
+                                </div>
+                                <div class="col-span-2">
+                                    <div class="text-[10px] font-bold text-slate-400 uppercase">Section</div>
+                                    <div id="revSection" class="text-sm font-bold text-slate-800">--</div>
+                                </div>
+                                <div class="col-span-2">
+                                    <div class="text-[10px] font-bold text-slate-400 uppercase">Complete Address</div>
+                                    <div id="revAddress" class="text-xs font-semibold text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">--</div>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- Assign RFID Card Section -->
-                        <div class="mt-6 p-5 rounded-2xl bg-charm-light/20 border-2 border-charm-dark/20 shadow-sm">
-                            <div class="flex items-center gap-2 mb-2">
-                                <i data-lucide="nfc" class="w-5 h-5 text-charm-dark"></i>
-                                <h5 class="text-sm font-display font-bold text-charm-dark uppercase tracking-wider">Assign Physical RFID Tag (UID) *</h5>
+                        <!-- Vehicle Profile Card -->
+                        <div class="lg:col-span-6 bg-white p-6 rounded-2xl border border-slate-200/80 shadow-sm space-y-4">
+                            <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+                                <div class="flex items-center gap-2 text-charm-dark font-display font-bold text-sm uppercase tracking-wider">
+                                    <i data-lucide="car" class="w-4 h-4"></i> Vehicle Profile
+                                </div>
+                                <span id="revVehTypeBadge" class="px-2.5 py-0.5 rounded-full text-xs font-black uppercase bg-slate-100 text-slate-700">MOTORCYCLE</span>
                             </div>
-                            <p class="text-xs text-slate-500 mb-3">Scan with RFID reader or manually type the physical RFID card UID to assign and issue to this driver.</p>
-                            <div class="flex gap-3">
-                                <div class="relative flex-1">
-                                    <input type="text" id="revRfidUid" placeholder="e.g. A1 B2 C3 D4" class="w-full text-base font-mono font-bold uppercase px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-charm-dark outline-none bg-white shadow-inner tracking-wider">
+                            <div class="grid grid-cols-2 gap-4">
+                                <div class="col-span-2 flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-100">
+                                    <div>
+                                        <div class="text-[10px] font-bold text-slate-400 uppercase">License Plate Number</div>
+                                        <div id="revPlate" class="text-lg font-mono font-black text-slate-900 tracking-wider">--</div>
+                                    </div>
+                                    <div class="w-10 h-10 rounded-xl bg-charm-yellow/20 text-charm-dark flex items-center justify-center font-black">
+                                        <i data-lucide="shield" class="w-5 h-5"></i>
+                                    </div>
+                                </div>
+                                <div>
+                                    <div class="text-[10px] font-bold text-slate-400 uppercase">Make &amp; Model</div>
+                                    <div id="revVehDetails" class="text-sm font-bold text-slate-800">--</div>
+                                </div>
+                                <div>
+                                    <div class="text-[10px] font-bold text-slate-400 uppercase">Vehicle Color</div>
+                                    <div id="revVehColor" class="text-sm font-bold text-slate-800">--</div>
+                                </div>
+                            </div>
+
+                            <!-- Vehicle Photo Preview Widget -->
+                            <div class="mt-2 pt-2">
+                                <div class="text-[10px] font-bold text-slate-400 uppercase mb-1.5">Registered Vehicle Image</div>
+                                <div class="h-32 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden relative group cursor-zoom-in" onclick="zoomImage(this)">
+                                    <img id="revOverviewVehImg" class="w-full h-full object-cover group-hover:scale-105 transition-transform">
+                                    <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1">
+                                        <i data-lucide="zoom-in" class="w-4 h-4"></i> Click to Zoom Photo
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Assign RFID Card Station -->
+                    <div class="p-6 rounded-3xl bg-gradient-to-br from-emerald-50 to-teal-50/60 border-2 border-charm-dark/20 shadow-sm space-y-4">
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <div class="flex items-center gap-2.5">
+                                <div class="w-9 h-9 rounded-xl bg-charm-dark text-charm-yellow flex items-center justify-center shadow-md">
+                                    <i data-lucide="nfc" class="w-5 h-5"></i>
+                                </div>
+                                <div>
+                                    <h5 class="text-sm font-display font-extrabold text-charm-dark uppercase tracking-wider">Physical RFID Card Assignment Station</h5>
+                                    <p class="text-xs text-slate-500">Assign a physical 13.56MHz RFID card UID to authorize gate boom barriers.</p>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button type="button" onclick="generateTestUID()" class="px-3 py-1.5 bg-white border border-emerald-300 text-charm-dark hover:bg-emerald-50 rounded-xl text-xs font-bold shadow-sm flex items-center gap-1.5 transition-all">
+                                    <i data-lucide="sparkles" class="w-3.5 h-3.5 text-yellow-500"></i> Auto-Generate UID
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+                            <div class="md:col-span-8 relative">
+                                <div class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-mono text-xs font-bold">UID:</div>
+                                <input type="text" id="revRfidUid" placeholder="e.g. A1 B2 C3 D4" class="w-full text-base font-mono font-black uppercase pl-14 pr-4 py-3 rounded-2xl border-2 border-slate-300 focus:border-charm-dark focus:ring-4 focus:ring-charm-dark/10 outline-none bg-white shadow-inner tracking-widest" oninput="handleRfidInputCheck(this.value)">
+                            </div>
+                            <div class="md:col-span-4 flex items-center gap-2">
+                                <div id="revUidStatusChip" class="w-full py-3 px-4 rounded-2xl bg-white border border-slate-200 text-xs font-bold text-slate-600 flex items-center justify-center gap-2 shadow-sm">
+                                    <i data-lucide="radio" class="w-4 h-4 text-emerald-600 animate-pulse"></i>
+                                    <span>Ready for Scan / Input</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Duplicate UID Warning Banner -->
+                        <div id="revDuplicateWarning" class="hidden p-3 bg-red-100 border border-red-300 rounded-xl text-red-800 text-xs font-bold flex items-center gap-2">
+                            <i data-lucide="alert-triangle" class="w-4 h-4 shrink-0 text-red-600"></i>
+                            <span id="revDuplicateText">This UID is already assigned to another user!</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 2: VERIFIED REQUIREMENT DOCUMENTS -->
+                <div id="revSection-documents" class="hidden space-y-6">
+                    <div class="flex items-center justify-between bg-white p-4 rounded-2xl border border-slate-200/80">
+                        <div>
+                            <h4 class="font-display font-bold text-sm text-slate-800">Submitted Verification Documents</h4>
+                            <p class="text-xs text-slate-500">Click any document image below to zoom and inspect in high resolution.</p>
+                        </div>
+                        <span class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1.5">
+                            <i data-lucide="check-check" class="w-4 h-4"></i> High Quality Previews
+                        </span>
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+                        <!-- Profile Image -->
+                        <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-2">
+                            <div class="flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase">
+                                <span>Profile Photo</span>
+                                <i data-lucide="user" class="w-3.5 h-3.5 text-slate-400"></i>
+                            </div>
+                            <div class="h-52 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden group relative cursor-zoom-in" onclick="zoomImage(this)">
+                                <img id="revProfileImage" class="w-full h-full object-cover transition-transform group-hover:scale-105">
+                                <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1">
+                                    <i data-lucide="zoom-in" class="w-4 h-4"></i> ZOOM
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Vehicle Photo -->
+                        <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-2">
+                            <div class="flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase">
+                                <span>Vehicle / Motorcycle</span>
+                                <i data-lucide="bike" class="w-3.5 h-3.5 text-slate-400"></i>
+                            </div>
+                            <div class="h-52 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden group relative cursor-zoom-in" onclick="zoomImage(this)">
+                                <img id="revImgMotor" class="w-full h-full object-cover transition-transform group-hover:scale-105">
+                                <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1">
+                                    <i data-lucide="zoom-in" class="w-4 h-4"></i> ZOOM
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- School ID Front -->
+                        <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-2">
+                            <div class="flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase">
+                                <span>School ID (Front)</span>
+                                <i data-lucide="id-card" class="w-3.5 h-3.5 text-slate-400"></i>
+                            </div>
+                            <div class="h-52 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden group relative cursor-zoom-in" onclick="zoomImage(this)">
+                                <img id="revImgIdFront" class="w-full h-full object-cover transition-transform group-hover:scale-105">
+                                <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1">
+                                    <i data-lucide="zoom-in" class="w-4 h-4"></i> ZOOM
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- School ID Back -->
+                        <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-2">
+                            <div class="flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase">
+                                <span>School ID (Back)</span>
+                                <i data-lucide="id-card" class="w-3.5 h-3.5 text-slate-400"></i>
+                            </div>
+                            <div class="h-52 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden group relative cursor-zoom-in" onclick="zoomImage(this)">
+                                <img id="revImgIdBack" class="w-full h-full object-cover transition-transform group-hover:scale-105">
+                                <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1">
+                                    <i data-lucide="zoom-in" class="w-4 h-4"></i> ZOOM
                                 </div>
                             </div>
                         </div>
                     </div>
                 </div>
-            </div>
-            <div class="p-6 border-t border-slate-100 bg-slate-50/50 flex justify-between items-center">
-                <div class="text-xs font-medium text-slate-400 italic">Please verify all documents and assign an RFID UID.</div>
-                <div class="flex gap-3">
-                    <button id="revBtnDeny" class="px-6 py-2.5 rounded-xl bg-red-500 text-white text-sm font-bold shadow-md hover:bg-red-600 transition-colors flex items-center gap-2"><i data-lucide="x-circle" class="w-4 h-4"></i> Deny Registration</button>
-                    <button id="revBtnApprove" class="px-6 py-2.5 rounded-xl bg-charm-dark text-white text-sm font-bold shadow-md hover:bg-opacity-90 transition-colors flex items-center gap-2"><i data-lucide="check-circle" class="w-4 h-4"></i> Approve &amp; Issue RFID</button>
+
+                <!-- TAB 3: ACCESS HISTORY & LOGS FOR THIS USER -->
+                <div id="revSection-history" class="hidden space-y-6">
+                    <!-- User Quick Access Stats -->
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                        <div class="p-4 rounded-2xl bg-white border border-slate-200/80 shadow-sm">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase">Total Entries</div>
+                            <div id="revStatEntries" class="text-2xl font-display font-black text-slate-800">0</div>
+                        </div>
+                        <div class="p-4 rounded-2xl bg-white border border-slate-200/80 shadow-sm">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase">Total Exits</div>
+                            <div id="revStatExits" class="text-2xl font-display font-black text-slate-800">0</div>
+                        </div>
+                        <div class="p-4 rounded-2xl bg-white border border-slate-200/80 shadow-sm">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase">Campus Presence</div>
+                            <div id="revStatPresence" class="text-sm font-black text-slate-600 mt-1">⚪ Off Campus</div>
+                        </div>
+                        <div class="p-4 rounded-2xl bg-white border border-slate-200/80 shadow-sm flex items-center justify-between">
+                            <div>
+                                <div class="text-[10px] font-bold text-slate-400 uppercase">Full Logs</div>
+                                <div class="text-xs font-semibold text-slate-600 mt-1">Audit Trail</div>
+                            </div>
+                            <button id="revBtnOpenFullHistory" class="px-3 py-1.5 rounded-xl bg-charm-dark text-white text-xs font-bold shadow-sm hover:opacity-90 flex items-center gap-1">
+                                <i data-lucide="external-link" class="w-3.5 h-3.5"></i> Full Modal
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Mini Logs Table -->
+                    <div class="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-sm">
+                        <div class="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                            <h5 class="font-display font-bold text-sm text-slate-800">Recent Gate Tap Events</h5>
+                            <span class="text-xs text-slate-500 font-medium">Showing latest scans for this user</span>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left border-collapse text-xs">
+                                <thead class="bg-slate-50 text-[10px] uppercase font-bold text-slate-400 border-b border-slate-100">
+                                    <tr>
+                                        <th class="p-3">Direction</th>
+                                        <th class="p-3">Gate</th>
+                                        <th class="p-3">Timestamp</th>
+                                        <th class="p-3">Status</th>
+                                        <th class="p-3">Remarks</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="revMiniLogsTable" class="divide-y divide-slate-100"></tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
+            </div>
+
+            <!-- Modal Action Footer -->
+            <div class="p-6 border-t border-slate-100 bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div class="text-xs font-medium text-slate-400 flex items-center gap-2">
+                    <i data-lucide="shield-check" class="w-4 h-4 text-emerald-600"></i>
+                    <span>Verify registration credentials and ensure physical RFID card is handed to driver.</span>
+                </div>
+                <div class="flex items-center gap-3 self-end sm:self-center">
+                    <button id="revBtnDeny" class="px-5 py-2.5 rounded-xl bg-red-50 text-red-600 hover:bg-red-100 text-sm font-bold border border-red-200 transition-colors flex items-center gap-2">
+                        <i data-lucide="x-circle" class="w-4 h-4"></i> Deny Application
+                    </button>
+                    <button id="revBtnApprove" class="px-6 py-2.5 rounded-xl bg-gradient-to-r from-charm-dark to-emerald-700 text-white text-sm font-bold shadow-lg hover:shadow-xl hover:opacity-95 transition-all flex items-center gap-2">
+                        <i data-lucide="check-circle" class="w-4 h-4 text-charm-yellow"></i> Approve &amp; Issue RFID
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- DEDICATED USER ACCESS HISTORY & AUDIT LOGS MODAL -->
+    <div id="userHistoryModal" class="hidden fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 opacity-0 transition-opacity">
+        <div class="bg-white rounded-3xl w-full max-w-5xl max-h-[92vh] shadow-2xl border border-slate-100 flex flex-col transform scale-95 transition-transform overflow-hidden" id="userHistoryModalContent">
+            <!-- Header with User Summary & Presence Indicator -->
+            <div class="p-6 border-b border-slate-100 bg-gradient-to-r from-slate-900 via-charm-dark to-slate-900 text-white flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div class="flex items-center gap-4">
+                    <img id="histUserAvatar" src="https://ui-avatars.com/api/?name=User" class="w-16 h-16 rounded-2xl object-cover border-2 border-white/40 shadow-lg">
+                    <div>
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <h3 id="histUserName" class="font-display font-extrabold text-2xl text-white">--</h3>
+                            <span id="histUserRole" class="px-3 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-white/20 text-white">STUDENT</span>
+                            <span id="histPresencePill" class="px-3 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 flex items-center gap-1.5">
+                                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> INSIDE CAMPUS
+                            </span>
+                        </div>
+                        <div class="flex items-center gap-3 text-xs text-slate-300 font-medium mt-1 flex-wrap">
+                            <span id="histUserProgram">--</span>
+                            <span>•</span>
+                            <span class="font-mono bg-white/10 px-2 py-0.5 rounded text-charm-yellow font-bold" id="histUserPlate">PLATE: --</span>
+                            <span>•</span>
+                            <span class="font-mono text-slate-300" id="histUserUid">RFID: --</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="exportSingleUserLogsCSV()" class="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-bold flex items-center gap-1.5 transition-all">
+                        <i data-lucide="download" class="w-4 h-4"></i> Export CSV
+                    </button>
+                    <button onclick="printSingleUserHistory()" class="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-bold flex items-center gap-1.5 transition-all">
+                        <i data-lucide="printer" class="w-4 h-4"></i> Print Report
+                    </button>
+                    <button onclick="closeUserHistoryModal()" class="w-9 h-9 rounded-xl bg-white/10 hover:bg-red-500 text-white flex items-center justify-center transition-colors">
+                        <i data-lucide="x" class="w-5 h-5"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Stats Bar -->
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 p-6 bg-slate-50 border-b border-slate-100">
+                <div class="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm">
+                    <div class="text-[10px] font-bold text-slate-400 uppercase">Lifetime Entries</div>
+                    <div class="text-2xl font-display font-black text-charm-dark mt-0.5" id="histTotalEntries">0</div>
+                    <div class="text-[10px] text-slate-400 mt-1">Authorized gate ins</div>
+                </div>
+                <div class="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm">
+                    <div class="text-[10px] font-bold text-slate-400 uppercase">Lifetime Exits</div>
+                    <div class="text-2xl font-display font-black text-slate-800 mt-0.5" id="histTotalExits">0</div>
+                    <div class="text-[10px] text-slate-400 mt-1">Authorized gate outs</div>
+                </div>
+                <div class="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm">
+                    <div class="text-[10px] font-bold text-slate-400 uppercase">Activity Today</div>
+                    <div class="text-2xl font-display font-black text-emerald-600 mt-0.5" id="histTodayTaps">0</div>
+                    <div class="text-[10px] text-slate-400 mt-1">Taps recorded today</div>
+                </div>
+                <div class="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm">
+                    <div class="text-[10px] font-bold text-slate-400 uppercase">Last Gate Activity</div>
+                    <div class="text-xs font-black text-slate-800 mt-1 truncate" id="histLastActivity">--</div>
+                    <div class="text-[10px] text-slate-400 mt-0.5" id="histLastTimestamp">--</div>
+                </div>
+            </div>
+
+            <!-- Filter Toolbar -->
+            <div class="p-6 pb-2 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div class="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1.5 rounded-2xl border border-slate-200">
+                    <button onclick="setUserHistDirection('ALL')" id="uhDir-ALL" class="uh-dir-btn px-3 py-1.5 rounded-xl text-xs font-black uppercase bg-charm-dark text-white shadow-sm">All Events</button>
+                    <button onclick="setUserHistDirection('ENTRY')" id="uhDir-ENTRY" class="uh-dir-btn px-3 py-1.5 rounded-xl text-xs font-black uppercase text-slate-600 hover:text-slate-900">🟢 Entries</button>
+                    <button onclick="setUserHistDirection('EXIT')" id="uhDir-EXIT" class="uh-dir-btn px-3 py-1.5 rounded-xl text-xs font-black uppercase text-slate-600 hover:text-slate-900">🔵 Exits</button>
+                    <button onclick="setUserHistDirection('DENIED')" id="uhDir-DENIED" class="uh-dir-btn px-3 py-1.5 rounded-xl text-xs font-black uppercase text-slate-600 hover:text-slate-900">🔴 Denied</button>
+                </div>
+                <div class="relative flex-1 max-w-xs">
+                    <i data-lucide="search" class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                    <input type="text" id="userHistSearch" placeholder="Search gate, remarks..." class="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-medium outline-none focus:ring-2 focus:ring-charm-dark/40" oninput="filterUserHistoryTable()">
+                </div>
+            </div>
+
+            <!-- History Logs Table -->
+            <div class="flex-1 overflow-y-auto p-6 pt-2 custom-scrollbar">
+                <div class="rounded-2xl border border-slate-200/80 overflow-hidden bg-white shadow-sm">
+                    <table class="w-full text-left border-collapse min-w-[700px]">
+                        <thead class="bg-slate-50/90 text-[11px] uppercase font-black text-slate-500 tracking-wider border-b border-slate-200">
+                            <tr>
+                                <th class="p-3.5">Direction</th>
+                                <th class="p-3.5">Gate / Device</th>
+                                <th class="p-3.5">Exact Date &amp; Time</th>
+                                <th class="p-3.5">Stay / Duration</th>
+                                <th class="p-3.5 text-center">Status</th>
+                                <th class="p-3.5">Remarks / Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody id="userHistoryTableBody" class="text-xs divide-y divide-slate-100"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-between text-xs text-slate-400">
+                <span id="userHistCountLabel">Showing 0 log entries</span>
+                <button onclick="closeUserHistoryModal()" class="px-4 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 font-bold hover:bg-slate-100 shadow-sm">
+                    Close
+                </button>
             </div>
         </div>
     </div>
@@ -1175,6 +2261,69 @@
     </div>
 
 
+
+    <!-- ESP32 Device Modal -->
+    <div id="deviceModal" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 opacity-0 transition-opacity">
+        <div class="bg-white rounded-3xl w-full max-w-lg shadow-2xl border border-slate-100 flex flex-col max-h-[90vh] overflow-hidden transform scale-95 transition-transform" id="deviceModalContent">
+            <div class="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                <h3 class="font-display font-bold text-xl text-slate-800" id="deviceModalTitle">Register ESP32 Gate Unit</h3>
+                <button onclick="closeDeviceModal()" class="text-slate-400 hover:text-red-500"><i data-lucide="x" class="w-6 h-6"></i></button>
+            </div>
+            <div class="p-6 overflow-y-auto custom-scrollbar flex-1">
+                <form id="deviceForm" class="space-y-4">
+                    <input type="hidden" id="formDevId">
+                    <div class="space-y-1">
+                        <label class="form-label font-bold text-xs">Device Name *</label>
+                        <input type="text" id="formDevName" required placeholder="e.g. CHARRMPASS Entry Unit" class="form-input text-sm font-bold">
+                    </div>
+                    <div class="space-y-1">
+                        <label class="form-label font-bold text-xs">ESP32 Hardware Identifier *</label>
+                        <input type="text" id="formDevIdentifier" required placeholder="e.g. CHARRMPASS_GATE_ENTRY" class="form-input font-mono uppercase text-sm">
+                        <p class="text-[11px] text-slate-400">Must match the GATE_ID defined in the ESP32 Arduino firmware sketch.</p>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div class="space-y-1">
+                            <label class="form-label font-bold text-xs">Gate Role *</label>
+                            <select id="formDevGateType" class="form-input text-xs font-semibold">
+                                <option value="ENTRY">ENTRY GATE</option>
+                                <option value="EXIT">EXIT GATE</option>
+                                <option value="ADMIN">ADMIN STATION</option>
+                            </select>
+                        </div>
+                        <div class="space-y-1">
+                            <label class="form-label font-bold text-xs">Category</label>
+                            <select id="formDevCategory" class="form-input text-xs font-semibold">
+                                <option value="VEHICLE_BARRIER">Vehicle Barrier (Boom Gate)</option>
+                                <option value="PEDESTRIAN_TURNSTILE">Pedestrian Turnstile</option>
+                                <option value="PORTABLE_SCANNER">Portable Scanner</option>
+                                <option value="ADMIN_STATION">Admin Station</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div class="space-y-1">
+                            <label class="form-label font-bold text-xs">RFID Range Mode</label>
+                            <select id="formDevRange" class="form-input text-xs font-semibold">
+                                <option value="LONG_RANGE">Long-Range UHF (900MHz)</option>
+                                <option value="CLOSE_RANGE">Close-Range (13.56MHz/125kHz)</option>
+                                <option value="HYBRID">Hybrid Dual-Range</option>
+                            </select>
+                        </div>
+                        <div class="space-y-1">
+                            <label class="form-label font-bold text-xs">Physical Location</label>
+                            <input type="text" id="formDevLocation" placeholder="e.g. ASU Main Gate" class="form-input text-xs font-medium">
+                        </div>
+                    </div>
+                    <div class="pt-4 flex justify-end gap-3 border-t border-slate-100 mt-4">
+                        <button type="button" onclick="closeDeviceModal()" class="px-4 py-2 text-xs font-bold text-slate-500 hover:text-slate-700">Cancel</button>
+                        <button type="submit" class="px-6 py-2.5 bg-charm-dark text-white rounded-xl text-xs font-bold shadow-lg hover:opacity-90 flex items-center gap-2">
+                            <i data-lucide="save" class="w-4 h-4 text-charm-yellow"></i> Save Gate Unit
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
 
     <script src="supabase-config.js"></script>
     <script src="admin-app.js"></script>

@@ -89,6 +89,18 @@ function validateCurrentStep() {
         }
     }
     if (currentStep === 3) {
+        const vehType = document.getElementById('regVehType').value;
+        if (!vehType) {
+            document.getElementById('regVehType').focus();
+            showToast('Please select your Transit / Vehicle Mode.', 'warning');
+            return false;
+        }
+        if (vehType === 'None') {
+            if (!document.getElementById('regVehModel').value.trim()) document.getElementById('regVehModel').value = 'Walking / Pedestrian';
+            if (!document.getElementById('regPlate').value.trim()) document.getElementById('regPlate').value = 'PEDESTRIAN';
+            if (!document.getElementById('regVehColor').value.trim()) document.getElementById('regVehColor').value = 'None';
+            return true;
+        }
         const fields = ['regVehType', 'regVehModel', 'regPlate', 'regVehColor'];
         for (const id of fields) {
             const el = document.getElementById(id);
@@ -325,6 +337,16 @@ document.getElementById('registrationForm').addEventListener('submit', async (e)
     lucide.createIcons();
 
     try {
+        const vehTypeVal = document.getElementById('regVehType').value;
+        const isPed = vehTypeVal === 'None';
+        const defaultTransitMode = isPed ? 'PEDESTRIAN' : 'VEHICLE';
+        const rfidType = isPed ? 'CLOSE_RANGE' : 'LONG_RANGE';
+        const userType = isPed ? 'PEDESTRIAN' : 'VEHICLE';
+
+        const vehModelVal = isPed ? 'Walking / Pedestrian' : document.getElementById('regVehModel').value.trim();
+        const plateVal = isPed ? ('PEDESTRIAN-' + Math.floor(1000 + Math.random()*9000)) : document.getElementById('regPlate').value.toUpperCase().trim();
+        const vehColorVal = isPed ? 'None' : document.getElementById('regVehColor').value.trim();
+
         if (isConnected) {
             // ── STEP 1: Insert into USERS ─────────────────────────────────────
             const { data: newUser, error: userErr } = await supabaseClient
@@ -337,6 +359,7 @@ document.getElementById('registrationForm').addEventListener('submit', async (e)
                     role:                  document.getElementById('regRole').value,
                     program:               document.getElementById('regProgram').value.trim() || null,
                     section:               document.getElementById('regSection').value.trim() || null,
+                    default_transit_mode:  defaultTransitMode,
                     profile_image:         photoData.profile  || null,
                     id_front_image:        photoData.idFront  || null,
                     id_back_image:         photoData.idBack   || null,
@@ -353,10 +376,10 @@ document.getElementById('registrationForm').addEventListener('submit', async (e)
                 .from('vehicles')
                 .insert([{
                     user_id:          userId,
-                    vehicle_type:     document.getElementById('regVehType').value,
-                    vehicle_model:    document.getElementById('regVehModel').value.trim(),
-                    plate_number:     document.getElementById('regPlate').value.toUpperCase().trim(),
-                    vehicle_color:    document.getElementById('regVehColor').value.trim(),
+                    vehicle_type:     vehTypeVal,
+                    vehicle_model:    vehModelVal,
+                    plate_number:     plateVal,
+                    vehicle_color:    vehColorVal,
                     motorcycle_image: photoData.motorcycle || null,
                 }])
                 .select()
@@ -376,6 +399,8 @@ document.getElementById('registrationForm').addEventListener('submit', async (e)
                     rfid_uid:             'UNASSIGNED_' + Date.now(), // placeholder; admin replaces
                     vehicle_id:           vehicleId,
                     user_id:              userId,
+                    rfid_type:            rfidType,
+                    user_type:            userType,
                     authorization_status: 'PENDING',
                 }]);
             if (cardErr) throw new Error('RFID card insert failed: ' + cardErr.message);
@@ -396,10 +421,13 @@ document.getElementById('registrationForm').addEventListener('submit', async (e)
                 role:                  document.getElementById('regRole').value,
                 program:               document.getElementById('regProgram').value.trim() || null,
                 section:               document.getElementById('regSection').value.trim() || null,
-                vehicle_type:          document.getElementById('regVehType').value,
-                vehicle_model:         document.getElementById('regVehModel').value.trim(),
-                plate_number:          document.getElementById('regPlate').value.toUpperCase().trim(),
-                vehicle_color:         document.getElementById('regVehColor').value.trim(),
+                default_transit_mode:  defaultTransitMode,
+                user_type:             userType,
+                rfid_type:             rfidType,
+                vehicle_type:          vehTypeVal,
+                vehicle_model:         vehModelVal,
+                plate_number:          plateVal,
+                vehicle_color:         vehColorVal,
                 profile_image:         photoData.profile  || null,
                 authorization_status:  'PENDING',
             };
