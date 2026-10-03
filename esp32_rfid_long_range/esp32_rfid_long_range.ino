@@ -58,19 +58,23 @@
 
 // Hardware Pin Configuration — Boland UHF Reader (Wiegand)
 #define ENABLE_WIEGAND       true
-#define WIEGAND_D0_PIN       32   // Data 0 (Move from G35 to G32 for internal pull-up!)
-#define WIEGAND_D1_PIN       33   // White wire: Data 1 (Internal pull-up)
+#define WIEGAND_D0_PIN       32   // Primary Data 0 (Purple wire with internal pull-up)
+#define WIEGAND_D0_PIN_ALT   35   // Secondary Data 0 (In case Purple wire is connected to GPIO 35)
+#define WIEGAND_D1_PIN       33   // Data 1 (White wire with internal pull-up)
 
 // Interrupt-safe Wiegand pulse buffer with microsecond noise filtering
 volatile uint64_t wiegandRawBits = 0;
 volatile int wiegandBitCount = 0;
 volatile uint32_t wiegandLastPulseUs = 0;
+volatile uint32_t wiegandTotalPulses = 0;
 
 void IRAM_ATTR isrWiegandD0() {
   uint32_t now = micros();
-  // Filter out electrical spikes/ringing faster than physical Wiegand pulses (250us)
-  if (now - wiegandLastPulseUs < 250) return;
+  // Filter only ultra-high frequency spikes (< 20 microseconds).
+  // DO NOT use 250us because Boland UHF reader pulse interval is ~100us!
+  if (now - wiegandLastPulseUs < 20) return;
   wiegandLastPulseUs = now;
+  wiegandTotalPulses++;
   if (wiegandBitCount < 64) {
     wiegandRawBits <<= 1;
     wiegandBitCount++;
@@ -83,8 +87,9 @@ void IRAM_ATTR isrWiegandD0() {
 
 void IRAM_ATTR isrWiegandD1() {
   uint32_t now = micros();
-  if (now - wiegandLastPulseUs < 250) return;
+  if (now - wiegandLastPulseUs < 20) return;
   wiegandLastPulseUs = now;
+  wiegandTotalPulses++;
   if (wiegandBitCount < 64) {
     wiegandRawBits = (wiegandRawBits << 1) | 1ULL;
     wiegandBitCount++;
@@ -1160,61 +1165,70 @@ bool checkWiegandReader(String &outUid, String &outAltUid) {
   wiegandBitCount = 0;
   interrupts();
 
-  if (bits < 4) return false; // Ignore spurious noise
+  if (bits < 4) {
+    Serial.printf("[WIEGAND NOISE] Ignored %d spurious pulse(s)\n", bits);
+    return false;
+  }
 
   Serial.println("\n========================================");
-  Serial.println("[WIEGAND PULSE DETECTED] Total bits: " + String(bits));
+  Serial.printf("[WIEGAND PULSE DETECTED] Total bits: %d | Raw Hex: 0x%llX\n", bits, (unsigned long long)raw);
 
   uint32_t cardNumber = 0;
   uint32_t facilityCode = 0;
   char hexFormatted[32];
+  char decPadded[16];
   hexFormatted[0] = '\0';
+  decPadded[0] = '\0';
 
   if (bits == 26) {
     // WG26 format: 1 even parity + 8 facility + 16 card number + 1 odd parity
     facilityCode = (raw >> 17) & 0xFF;
     cardNumber   = (raw >> 1) & 0xFFFF;
-    sprintf(hexFormatted, "%02X %02X %02X",
+    snprintf(hexFormatted, sizeof(hexFormatted), "%02X %02X %02X",
             (uint8_t)(facilityCode),
             (uint8_t)(cardNumber >> 8),
             (uint8_t)(cardNumber & 0xFF));
-    Serial.println("  Standard: WG26 (26-bit)");
-    Serial.println("  Facility: " + String(facilityCode));
-    Serial.println("  Card ID (Dec): " + String(cardNumber));
+    snprintf(decPadded, sizeof(decPadded), "%010lu", (unsigned long)cardNumber);
+    Serial.println("  Standard:      WG26 (26-bit)");
+    Serial.println("  Facility:      " + String(facilityCode));
+    Serial.println("  Card ID (Dec): " + String(cardNumber) + " (Padded: " + String(decPadded) + ")");
     Serial.println("  Hex UID:       " + String(hexFormatted));
 
     outUid = String(cardNumber);
-    outAltUid = String(hexFormatted);
+    outAltUid = String(decPadded);
 
   } else if (bits == 34) {
     // WG34 format: 1 even parity + 32 card number + 1 odd parity
     cardNumber = (raw >> 1) & 0xFFFFFFFF;
-    sprintf(hexFormatted, "%02X %02X %02X %02X",
+    snprintf(hexFormatted, sizeof(hexFormatted), "%02X %02X %02X %02X",
             (uint8_t)(cardNumber >> 24),
             (uint8_t)(cardNumber >> 16),
             (uint8_t)(cardNumber >> 8),
             (uint8_t)(cardNumber & 0xFF));
-    Serial.println("  Standard: WG34 (34-bit)");
-    Serial.println("  Card ID (Dec): " + String(cardNumber));
+    snprintf(decPadded, sizeof(decPadded), "%010lu", (unsigned long)cardNumber);
+    Serial.println("  Standard:      WG34 (34-bit)");
+    Serial.println("  Card ID (Dec): " + String(cardNumber) + " (10-Digit: " + String(decPadded) + ")");
     Serial.println("  Hex UID:       " + String(hexFormatted));
 
-    outUid = String(cardNumber);
-    outAltUid = String(hexFormatted);
+    // Support both 10-digit zero-padded (e.g. 0419670354) and regular decimal
+    outUid = String(decPadded);
+    outAltUid = String(cardNumber);
 
   } else {
     // Custom / other bit counts (e.g. 28, 32, 36)
     cardNumber = (uint32_t)(raw & 0xFFFFFFFF);
-    sprintf(hexFormatted, "%02X %02X %02X %02X",
+    snprintf(hexFormatted, sizeof(hexFormatted), "%02X %02X %02X %02X",
             (uint8_t)(cardNumber >> 24),
             (uint8_t)(cardNumber >> 16),
             (uint8_t)(cardNumber >> 8),
             (uint8_t)(cardNumber & 0xFF));
-    Serial.println("  Standard: " + String(bits) + "-bit Wiegand");
-    Serial.println("  Card ID (Dec): " + String(cardNumber));
+    snprintf(decPadded, sizeof(decPadded), "%010lu", (unsigned long)cardNumber);
+    Serial.printf("  Standard:      %d-bit Wiegand\n", bits);
+    Serial.println("  Card ID (Dec): " + String(cardNumber) + " (Padded: " + String(decPadded) + ")");
     Serial.println("  Hex UID:       " + String(hexFormatted));
 
-    outUid = String(cardNumber);
-    outAltUid = String(hexFormatted);
+    outUid = String(decPadded);
+    outAltUid = String(cardNumber);
   }
 
   Serial.println("========================================");
@@ -1247,13 +1261,15 @@ void setup() {
   lcdMsg("CHARRMPASS v4.5", "BOOTING GATE...");
   delay(1000);
 
-  // Wiegand UHF Reader Interrupt Init on GPIO 32 (D0) and GPIO 33 (D1)
+  // Wiegand UHF Reader Interrupt Init on GPIO 32 (D0 primary), GPIO 35 (D0 alt), and GPIO 33 (D1)
   #if ENABLE_WIEGAND
     pinMode(WIEGAND_D0_PIN, INPUT_PULLUP);
+    pinMode(WIEGAND_D0_PIN_ALT, INPUT);
     pinMode(WIEGAND_D1_PIN, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(WIEGAND_D0_PIN), isrWiegandD0, FALLING);
+    attachInterrupt(digitalPinToInterrupt(WIEGAND_D0_PIN_ALT), isrWiegandD0, FALLING);
     attachInterrupt(digitalPinToInterrupt(WIEGAND_D1_PIN), isrWiegandD1, FALLING);
-    Serial.println("[WIEGAND] Boland UHF Reader initialized on GPIO 32 (D0) and GPIO 33 (D1) with pull-ups.");
+    Serial.println("[WIEGAND] Boland UHF Reader initialized on GPIO 32/35 (D0) and GPIO 33 (D1).");
   #endif
 
   // SPI Backup Reader Init
@@ -1435,6 +1451,20 @@ void loop() {
       handleScannedTag(uid);
     }
   #endif
+
+  // 6. Live Wiegand Hardware Diagnostics (Printed every 6 seconds)
+  static unsigned long lastWiegandDiag = 0;
+  if (millis() - lastWiegandDiag >= 6000) {
+    lastWiegandDiag = millis();
+    int d0_32 = digitalRead(WIEGAND_D0_PIN);
+    int d0_35 = digitalRead(WIEGAND_D0_PIN_ALT);
+    int d1_33 = digitalRead(WIEGAND_D1_PIN);
+    Serial.printf("[WIEGAND HARDWARE MONITOR] Wire Levels: G32(D0)=%s | G35(D0_alt)=%s | G33(D1)=%s | Total Pulses Detected=%u\n",
+                  d0_32 ? "HIGH" : "LOW (CHECK PULLUP)",
+                  d0_35 ? "HIGH" : "LOW (CHECK PULLUP)",
+                  d1_33 ? "HIGH" : "LOW (CHECK PULLUP)",
+                  wiegandTotalPulses);
+  }
 
   delayMicroseconds(200); // High-frequency polling (zero lag)
 }
