@@ -55,35 +55,37 @@
 
                 <!-- Page Title -->
                 <div class="text-center mb-8">
-                    <h2 class="font-display font-extrabold text-3xl md:text-4xl text-slate-800 tracking-tight">Vehicle Registration</h2>
-                    <p class="text-slate-500 font-medium mt-2">Fill in the form below to register for campus parking access</p>
+                    <h2 id="pageTitle" class="font-display font-extrabold text-3xl md:text-4xl text-slate-800 tracking-tight">Register</h2>
+                    <p id="pageSubtitle" class="text-slate-500 font-medium mt-2">Choose how you want to register</p>
                 </div>
 
-                <!-- Stepper -->
-                <div class="flex items-center justify-center gap-2 mb-8 flex-wrap" id="formStepper">
-                    <div class="stepper-step active" data-step="1">
-                        <span class="step-number">1</span>
-                        <span class="hidden sm:inline">Personal Info</span>
-                    </div>
-                    <div class="w-8 h-px bg-slate-300"></div>
-                    <div class="stepper-step" data-step="2">
-                        <span class="step-number">2</span>
-                        <span class="hidden sm:inline">Documents</span>
-                    </div>
-                    <div class="w-8 h-px bg-slate-300"></div>
-                    <div class="stepper-step" data-step="3">
-                        <span class="step-number">3</span>
-                        <span class="hidden sm:inline">Vehicle Details</span>
-                    </div>
-                    <div class="w-8 h-px bg-slate-300"></div>
-                    <div class="stepper-step" data-step="4">
-                        <span class="step-number">4</span>
-                        <span class="hidden sm:inline">Review</span>
-                    </div>
+                <!-- MODE CHOICE -->
+                <div id="modeChoice" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <button type="button" onclick="selectMode('pedestrian')" id="chooseCardPedestrian"
+                        class="form-section shadow-glass text-left hover:-translate-y-1 hover:shadow-xl transition-all border-2 border-transparent hover:border-charm-dark focus:outline-none">
+                        <div class="w-14 h-14 rounded-2xl bg-charm-dark flex items-center justify-center mb-4">
+                            <i data-lucide="footprints" class="w-7 h-7 text-charm-yellow"></i>
+                        </div>
+                        <h3 class="font-display font-extrabold text-xl text-slate-800">I'm a Person</h3>
+                        <p class="text-sm text-slate-500 mt-1 mb-4">Register yourself first. You'll receive your <b>CPASS ID</b>, which every vehicle you register will use.</p>
+                        <span class="text-xs font-bold text-charm-dark flex items-center gap-1">Start here <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i></span>
+                    </button>
+                    <button type="button" onclick="selectMode('vehicle')" id="chooseCardVehicle"
+                        class="form-section shadow-glass text-left hover:-translate-y-1 hover:shadow-xl transition-all border-2 border-transparent hover:border-charm-dark focus:outline-none">
+                        <div class="w-14 h-14 rounded-2xl bg-charm-yellow flex items-center justify-center mb-4">
+                            <i data-lucide="car" class="w-7 h-7 text-charm-dark"></i>
+                        </div>
+                        <h3 class="font-display font-extrabold text-xl text-slate-800">I have a Vehicle</h3>
+                        <p class="text-sm text-slate-500 mt-1 mb-4">Already have a CPASS ID? Link your car, motorcycle or other vehicle to it.</p>
+                        <span class="text-xs font-bold text-charm-dark flex items-center gap-1">Requires an approved CPASS ID <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i></span>
+                    </button>
                 </div>
+
+                <!-- Stepper (built by JS for the chosen mode) -->
+                <div class="flex items-center justify-center gap-2 mb-8 flex-wrap hidden" id="formStepper"></div>
 
                 <!-- Form Container -->
-                <form id="registrationForm" enctype="multipart/form-data">
+                <form id="registrationForm" class="hidden" enctype="multipart/form-data">
 
                     <!-- STEP 1: Personal Info -->
                     <div class="form-step" data-step="1">
@@ -115,12 +117,21 @@
                                 </div>
                                 <div>
                                     <label class="form-label">Role / Category *</label>
-                                    <select id="regRole" class="form-input" required>
+                                    <select id="regRole" class="form-input" required onchange="toggleStudentId()">
                                         <option value="">Select...</option>
                                         <option value="Student">Student</option>
                                         <option value="Faculty">Faculty</option>
                                         <option value="Staff">Utility / Staff</option>
                                     </select>
+                                </div>
+                                <div id="fieldStudentId" class="hidden">
+                                    <label class="form-label">Student ID * <span class="text-[10px] font-semibold text-charm-dark normal-case">(becomes your CPASS ID)</span></label>
+                                    <input type="text" id="regStudentId" class="form-input uppercase" placeholder="e.g. 2021-0123" maxlength="20">
+                                </div>
+                                <div id="fieldCpassNote" class="hidden md:col-span-2">
+                                    <div class="flex items-center gap-2 p-3 rounded-xl bg-charm-light/20 border border-charm-light/50 text-xs font-semibold text-charm-dark">
+                                        <i data-lucide="badge-check" class="w-4 h-4"></i> Your CPASS ID (e.g. CP07) will be generated for you after you submit.
+                                    </div>
                                 </div>
                                 <div>
                                     <label class="form-label">Program / Department</label>
@@ -189,36 +200,77 @@
                         </div>
                     </div>
 
-                    <!-- STEP 3: Transit & Vehicle Details -->
+                    <!-- STEP 5: Vehicle owner lookup (vehicle mode only) -->
+                    <div class="form-step hidden" data-step="5">
+                        <div class="form-section shadow-glass">
+                            <h3 class="font-display font-bold text-xl text-slate-800 mb-2 flex items-center gap-2">
+                                <i data-lucide="badge-check" class="w-5 h-5 text-charm-dark"></i> Verify Your CPASS ID
+                            </h3>
+                            <p class="text-sm text-slate-500 mb-6">Enter the CPASS ID you received when you registered as a person (Students: your Student ID).</p>
+                            <div class="flex gap-3 flex-wrap">
+                                <input type="text" id="lookupCpassId" class="form-input uppercase flex-1 min-w-[200px]" placeholder="e.g. CP07 or 2021-0123" maxlength="20">
+                                <button type="button" id="btnLookupCpass" onclick="lookupCpass()" class="px-6 py-3 rounded-xl bg-charm-dark text-white text-sm font-bold hover:bg-opacity-90 transition-colors shadow-md flex items-center gap-2">
+                                    <i data-lucide="search" class="w-4 h-4"></i> Verify
+                                </button>
+                            </div>
+                            <div id="lookupResult" class="mt-5"></div>
+                            <p class="text-xs text-slate-400 mt-4">No CPASS ID yet? <a href="register.html?mode=pedestrian" class="font-bold text-charm-dark underline">Register as a person first</a>.</p>
+                        </div>
+                    </div>
+
+                    <!-- STEP 3: Vehicle Details -->
                     <div class="form-step hidden" data-step="3">
                         <div class="form-section shadow-glass">
                             <h3 class="font-display font-bold text-xl text-slate-800 mb-6 flex items-center gap-2">
-                                <i data-lucide="car" class="w-5 h-5 text-charm-dark"></i> Transit &amp; Vehicle Information
+                                <i data-lucide="car" class="w-5 h-5 text-charm-dark"></i> Vehicle Information
                             </h3>
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
                                 <div>
-                                    <label class="form-label">Transit / Vehicle Mode *</label>
-                                    <select id="regVehType" class="form-input" required onchange="toggleMotorcyclePhoto()">
-                                        <option value="">Select Transit Mode...</option>
-                                        <option value="None">🚶 None (Walking Pedestrian - Close-Range RFID)</option>
-                                        <option value="Car">🚗 Car (Long-Range UHF Tag)</option>
-                                        <option value="SUV">🚙 SUV (Long-Range UHF Tag)</option>
-                                        <option value="Motorcycle">🏍️ Motorcycle (Long-Range UHF Tag)</option>
-                                        <option value="Van">🚐 Van (Long-Range UHF Tag)</option>
-                                        <option value="Truck">🚚 Truck (Long-Range UHF Tag)</option>
+                                    <label class="form-label">Vehicle Type *</label>
+                                    <select id="regVehType" class="form-input" onchange="toggleMotorcyclePhoto()">
+                                        <option value="">Select Vehicle Type...</option>
+                                        <option value="Car">🚗 Car</option>
+                                        <option value="SUV">🚙 SUV</option>
+                                        <option value="Motorcycle">🏍️ Motorcycle</option>
+                                        <option value="Van">🚐 Van</option>
+                                        <option value="Truck">🚚 Truck</option>
                                     </select>
                                 </div>
                                 <div id="fieldVehModel">
                                     <label class="form-label">Vehicle Model *</label>
-                                    <input type="text" id="regVehModel" class="form-input" required placeholder="e.g. Honda Civic (or Walking)">
+                                    <input type="text" id="regVehModel" class="form-input" placeholder="e.g. Honda Civic">
                                 </div>
                                 <div id="fieldPlate">
-                                    <label class="form-label">Plate / Identifier *</label>
-                                    <input type="text" id="regPlate" class="form-input uppercase" required placeholder="ABC-1234 (or PEDESTRIAN)">
+                                    <label class="form-label">Plate Number *</label>
+                                    <input type="text" id="regPlate" class="form-input uppercase" placeholder="ABC-1234">
                                 </div>
                                 <div id="fieldVehColor">
                                     <label class="form-label">Vehicle Color *</label>
-                                    <input type="text" id="regVehColor" class="form-input" required placeholder="e.g. Black, White (or N/A)">
+                                    <input type="text" id="regVehColor" class="form-input" placeholder="e.g. Black, White">
+                                </div>
+                            </div>
+
+                            <!-- OR/CR + Driver's License (optional) -->
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+                                <div>
+                                    <label class="form-label mb-3">OR/CR - Vehicle Registration (Optional)</label>
+                                    <div class="photo-capture" id="orCrCapture" onclick="document.getElementById('orCrInput').click()">
+                                        <div id="orCrPreview" class="flex flex-col items-center gap-2">
+                                            <i data-lucide="file-text" class="w-10 h-10 text-slate-300"></i>
+                                            <span class="text-sm font-semibold text-slate-400">Click to upload OR/CR</span>
+                                        </div>
+                                        <input type="file" id="orCrInput" accept="image/*" class="hidden" onchange="handleFileUpload(this, 'orCr')">
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="form-label mb-3">Driver's License (Optional)</label>
+                                    <div class="photo-capture" id="licenseCapture" onclick="document.getElementById('licenseInput').click()">
+                                        <div id="licensePreview" class="flex flex-col items-center gap-2">
+                                            <i data-lucide="id-card" class="w-10 h-10 text-slate-300"></i>
+                                            <span class="text-sm font-semibold text-slate-400">Click to upload license</span>
+                                        </div>
+                                        <input type="file" id="licenseInput" accept="image/*" class="hidden" onchange="handleFileUpload(this, 'license')">
+                                    </div>
                                 </div>
                             </div>
 
@@ -279,10 +331,26 @@
                         <i data-lucide="check-circle" class="w-12 h-12 text-green-600"></i>
                     </div>
                     <h2 class="font-display font-extrabold text-3xl text-slate-800 mb-3">Registration Submitted!</h2>
-                    <p class="text-slate-500 font-medium max-w-md mx-auto mb-8">Your registration has been submitted successfully. An administrator will review and approve your application. You will receive a notification once approved.</p>
-                    <a href="index.html" class="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-charm-dark text-white font-bold text-sm hover:bg-opacity-90 transition-colors shadow-md">
-                        <i data-lucide="home" class="w-4 h-4"></i> Back to Home
-                    </a>
+                    <p id="successText" class="text-slate-500 font-medium max-w-md mx-auto mb-6">Your registration has been submitted successfully. An administrator will review and approve your application.</p>
+
+                    <!-- CPASS ID card (pedestrian mode) -->
+                    <div id="cpassCard" class="hidden max-w-sm mx-auto mb-8 rounded-3xl bg-charm-dark text-white p-6 shadow-glass">
+                        <div class="text-[11px] font-bold uppercase tracking-widest text-charm-light">Your CPASS ID</div>
+                        <div id="cpassValue" class="font-display font-extrabold text-5xl tracking-wider text-charm-yellow my-3">--</div>
+                        <p class="text-xs text-emerald-100/80 mb-4">Keep this ID. You will need it to register your vehicle.</p>
+                        <button type="button" onclick="copyCpassId()" id="btnCopyCpass" class="px-4 py-2 rounded-xl bg-white/15 hover:bg-white/25 text-xs font-bold flex items-center gap-2 mx-auto transition-colors">
+                            <i data-lucide="copy" class="w-3.5 h-3.5"></i> Copy ID
+                        </button>
+                    </div>
+
+                    <div class="flex items-center justify-center gap-3 flex-wrap">
+                        <a id="btnRegisterVehicleNext" href="register.html?mode=vehicle" class="hidden inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-charm-yellow text-charm-dark font-bold text-sm hover:bg-yellow-400 transition-colors shadow-md">
+                            <i data-lucide="car" class="w-4 h-4"></i> Register a Vehicle
+                        </a>
+                        <a href="index.html" class="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-charm-dark text-white font-bold text-sm hover:bg-opacity-90 transition-colors shadow-md">
+                            <i data-lucide="home" class="w-4 h-4"></i> Back to Home
+                        </a>
+                    </div>
                 </div>
             </div>
         </div>

@@ -940,6 +940,13 @@ window.approveUser = async function(id) {
             if (error) throw error;
         }
 
+        // Mark the person's account APPROVED so their CPASS ID can be used to register vehicles
+        const { error: apprErr } = await supabaseClient
+            .from('users')
+            .update({ approval_status: 'APPROVED' })
+            .eq('id', id);
+        if (apprErr) console.warn('approval_status not updated (run migration_cpass_id.sql):', apprErr.message);
+
         closeReviewModal();
         showToast(`Approved! ${rfidType === 'CLOSE_RANGE' ? 'Close-Range Card' : 'Long-Range Tag'} ${assignedUid} issued to ${u.full_name}.`, 'success');
         await loadData();
@@ -957,6 +964,11 @@ window.denyRegistration = async function(id) {
             .update({ authorization_status: 'DENIED', updated_at: new Date().toISOString() })
             .eq('user_id', id);
         if (error) throw error;
+        const { error: rejErr } = await supabaseClient
+            .from('users')
+            .update({ approval_status: 'REJECTED' })
+            .eq('id', id);
+        if (rejErr) console.warn('approval_status not updated (run migration_cpass_id.sql):', rejErr.message);
         closeReviewModal();
         showToast('Registration denied.', 'success');
         await loadData();
