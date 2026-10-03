@@ -1611,7 +1611,8 @@ void startBleServer() {
                     <div class="space-y-1"><label class="form-label">Program</label><input type="text" id="formProgram" class="form-input"></div>
                     <div class="space-y-1"><label class="form-label">Section</label><input type="text" id="formSection" class="form-input"></div>
                     <div class="space-y-1"><label class="form-label">RFID Tag UID (UHF Sticker or ID Card) *</label><input type="text" id="formUid" required placeholder="e.g. 0419670354 or B7 78 96 31" class="form-input font-mono uppercase"></div>
-                    <div class="space-y-1"><label class="form-label">Role *</label><select id="formRole" required class="form-input"><option value="Student">Student</option><option value="Faculty">Faculty</option><option value="Staff">Staff</option></select></div>
+                    <div class="space-y-1"><label class="form-label">Role *</label><select id="formRole" required class="form-input" onchange="toggleFormRoleDetail()"><option value="Student">Student</option><option value="Faculty">Faculty</option><option value="Staff">Staff</option><option value="Others">Others (Vendor / Visitor)</option></select></div>
+                    <div class="space-y-1 hidden" id="boxFormRoleDetail"><label class="form-label">Specify Role / Detail *</label><input type="text" id="formRoleDetail" placeholder="e.g. Canteen Vendor, Contractor" class="form-input"></div>
                     <div class="md:col-span-2 mt-2 pt-4 border-t border-slate-100 flex items-center justify-between">
                         <div>
                             <h4 class="text-sm font-bold text-slate-800">Vehicle Information (For Long-Range UHF Access)</h4>

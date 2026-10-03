@@ -857,6 +857,7 @@ window.openUserModal = function(id = null) {
             el('formSection').value = u.section || '';
             el('formUid').value = u.rfid_uid || '';
             el('formRole').value = u.role || 'Student';
+            if (el('formRoleDetail')) el('formRoleDetail').value = u.role_detail || '';
             el('formVehType').value = u.vehicle_type || 'None';
             el('formPlate').value = u.plate_number || '';
             el('formVehModel').value = u.vehicle_model || '';
@@ -864,7 +865,10 @@ window.openUserModal = function(id = null) {
             el('prevProfile').src = u.profile_image || 'https://ui-avatars.com/api/?name=' + u.full_name;
             el('prevMotor').src = u.motorcycle_image || 'https://images.unsplash.com/photo-1558981403-c5f91cbba527?auto=format&fit=crop&q=80&w=200';
         }
+    } else {
+        if (el('formRoleDetail')) el('formRoleDetail').value = '';
     }
+    toggleFormRoleDetail();
 
     modal.classList.remove('hidden');
     setTimeout(() => {
@@ -872,6 +876,18 @@ window.openUserModal = function(id = null) {
         el('userModalContent').classList.remove('scale-95');
     }, 10);
     lucide.createIcons();
+};
+
+window.toggleFormRoleDetail = function() {
+    const role = el('formRole')?.value;
+    const box = el('boxFormRoleDetail');
+    if (box) {
+        if (role === 'Others') {
+            box.classList.remove('hidden');
+        } else {
+            box.classList.add('hidden');
+        }
+    }
 };
 
 window.closeUserModal = function() {
@@ -911,6 +927,7 @@ el('userForm')?.addEventListener('submit', async (e) => {
         program: el('formProgram').value.trim() || null,
         section: el('formSection').value.trim() || null,
         role: el('formRole').value,
+        role_detail: el('formRole').value === 'Others' ? (el('formRoleDetail')?.value.trim() || 'Vendor') : null,
         default_transit_mode: (el('formVehType').value !== 'None' && el('formPlate').value.trim() !== '') ? 'VEHICLE' : 'PEDESTRIAN',
         updated_at: new Date().toISOString()
     };
