@@ -185,7 +185,7 @@ void markTagInCooldown(const String &uid) {
 // HIGH-SPEED IN-MEMORY RAM WHITELIST CACHE
 // Enables < 0.1ms tag matching with ZERO network delay
 // =====================================================
-struct RamCard {
+typedef struct {
   String uid;
   String name;
   String plate;
@@ -195,33 +195,34 @@ struct RamCard {
   String userId;
   bool authorized;
   String lastDirection; // Auto-toggles: ENTRY -> EXIT -> ENTRY
-};
+} RamCard;
+
 #define MAX_RAM_CARDS 128
 RamCard ramCards[MAX_RAM_CARDS];
 int ramCardCount = 0;
 unsigned long lastWhitelistSync = 0;
 const unsigned long WHITELIST_SYNC_INTERVAL = 300000; // Auto-sync RAM every 5 minutes
 
-RamCard* findCardInRam(const String &uid) {
+int findCardInRam(const String &uid) {
   for (int i = 0; i < ramCardCount; i++) {
     if (ramCards[i].uid.equalsIgnoreCase(uid)) {
-      return &ramCards[i];
+      return i;
     }
   }
-  return NULL;
+  return -1;
 }
 
 void addCardToRam(String uid, String name, String plate, String role, String userType, String vId, String uId, bool auth, String dir = "EXIT") {
-  RamCard* existing = findCardInRam(uid);
-  if (existing) {
-    existing->name = name;
-    existing->plate = plate;
-    existing->role = role;
-    existing->userType = userType;
-    existing->vehicleId = vId;
-    existing->userId = uId;
-    existing->authorized = auth;
-    if (dir.length() > 0) existing->lastDirection = dir;
+  int idx = findCardInRam(uid);
+  if (idx != -1) {
+    ramCards[idx].name = name;
+    ramCards[idx].plate = plate;
+    ramCards[idx].role = role;
+    ramCards[idx].userType = userType;
+    ramCards[idx].vehicleId = vId;
+    ramCards[idx].userId = uId;
+    ramCards[idx].authorized = auth;
+    if (dir.length() > 0) ramCards[idx].lastDirection = dir;
     return;
   }
   if (ramCardCount < MAX_RAM_CARDS) {
@@ -1033,8 +1034,8 @@ void handleScannedTag(String uid, String altUid = "") {
   if (altUid.length() > 0) markTagInCooldown(altUid);
 
   // 1. FAST IN-MEMORY RAM LOOKUP (0.05 ms)
-  RamCard* card = findCardInRam(uid);
-  if (!card && altUid.length() > 0) card = findCardInRam(altUid);
+  int cardIdx = findCardInRam(uid);
+  if (cardIdx == -1 && altUid.length() > 0) cardIdx = findCardInRam(altUid);
 
   bool authorized = false;
   String finalUid = uid;
@@ -1046,20 +1047,20 @@ void handleScannedTag(String uid, String altUid = "") {
   String uId = "";
   String direction = "ENTRY";
 
-  if (card != NULL) {
+  if (cardIdx != -1) {
     // RAM CACHE HIT! Instant authorization
-    authorized = card->authorized;
-    finalUid = card->uid;
-    name = card->name;
-    plate = card->plate;
-    role = card->role;
-    uType = card->userType;
-    vId = card->vehicleId;
-    uId = card->userId;
+    authorized = ramCards[cardIdx].authorized;
+    finalUid = ramCards[cardIdx].uid;
+    name = ramCards[cardIdx].name;
+    plate = ramCards[cardIdx].plate;
+    role = ramCards[cardIdx].role;
+    uType = ramCards[cardIdx].userType;
+    vId = ramCards[cardIdx].vehicleId;
+    uId = ramCards[cardIdx].userId;
 
     // Fast direction toggle: ENTRY -> EXIT -> ENTRY
-    direction = (card->lastDirection == "ENTRY") ? "EXIT" : "ENTRY";
-    card->lastDirection = direction;
+    direction = (ramCards[cardIdx].lastDirection == "ENTRY") ? "EXIT" : "ENTRY";
+    ramCards[cardIdx].lastDirection = direction;
 
   } else {
     // RAM CACHE MISS: Query Online (or Offline SD) and cache result
