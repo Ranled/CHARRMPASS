@@ -269,15 +269,42 @@ async function loadData() {
 const renderAll = renderAdmin;
 window.renderAll = renderAdmin;
 
-// Helper: Check if a specific user is currently on campus
+// Helper: Check if a specific user is currently on campus (Strict state & log evaluation)
 function isUserOnCampus(u) {
     if (!u) return false;
-    const userLogs = adminState.logs.filter(l => 
-        (l.user_id && l.user_id === u.id) || 
-        (u.rfid_uid && l.rfid_uid === u.rfid_uid) ||
-        (u.plate_number && (l.vehicles?.plate_number === u.plate_number || l.remarks?.includes(u.plate_number)))
-    ).filter(l => l.status === 'AUTHORIZED');
-    
+    const uId = u.id;
+    const uCpass = (u.cpass_id || '').toUpperCase().trim();
+    const uStudentId = (u.student_id || '').toUpperCase().trim();
+    const uUid = (u.rfid_uid || '').toUpperCase().trim();
+    const uPlates = [
+        (u.plate_number || '').toUpperCase().trim(),
+        ...((u.vehicles || []).map(v => (v.plate_number || '').toUpperCase().trim()))
+    ].filter(p => p && p !== 'PEDESTRIAN' && p !== 'NONE');
+    const uCards = [
+        uUid,
+        ...((u.rfid_cards || []).map(c => (c.rfid_uid || '').toUpperCase().trim()))
+    ].filter(c => c && !c.startsWith('UNASSIGNED_'));
+
+    const userLogs = (adminState.logs || []).filter(l => {
+        if (l.status !== 'AUTHORIZED') return false;
+        if (uId && (l.user_id === uId || l.users?.id === uId)) return true;
+        if (uCpass && (l.users?.cpass_id?.toUpperCase() === uCpass || l.users?.student_id?.toUpperCase() === uCpass)) return true;
+        if (uStudentId && (l.users?.student_id?.toUpperCase() === uStudentId || l.users?.cpass_id?.toUpperCase() === uStudentId)) return true;
+        
+        const logUid = (l.rfid_uid || '').toUpperCase().trim();
+        if (logUid && uCards.includes(logUid)) return true;
+
+        const logPlate = (l.vehicles?.plate_number || '').toUpperCase().trim();
+        if (logPlate && uPlates.includes(logPlate)) return true;
+
+        if (l.remarks) {
+            const rem = l.remarks.toUpperCase();
+            if (uPlates.some(p => rem.includes(p))) return true;
+            if (uCards.some(c => rem.includes(c))) return true;
+        }
+        return false;
+    });
+
     if (userLogs.length === 0) return false;
     // Sort descending by timestamp
     userLogs.sort((a,b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
@@ -340,11 +367,11 @@ function renderAdmin() {
     if(el('adminStatInsideSub'))  el('adminStatInsideSub').textContent  = `🚶 ${activePed} Ped • 🚗 ${activeVeh} Veh`;
     if(el('pendingBadgeCount'))   el('pendingBadgeCount').textContent   = adminState.pendingUsers.length;
 
-    // Filter counts for tabs
+    // Filter counts for tabs - true synchronized state
     const countAll = adminState.users.length;
-    const countPending = adminState.pendingUsers.length;
-    const countAuth = adminState.users.filter(u => u.authorization_status === 'AUTHORIZED').length;
-    const countDenied = adminState.users.filter(u => u.authorization_status === 'DENIED').length;
+    const countPending = adminState.users.filter(u => u.authorization_status === 'PENDING' || u.approval_status === 'PENDING' || (!u.authorization_status && !u.approval_status)).length;
+    const countAuth = adminState.users.filter(u => u.authorization_status === 'AUTHORIZED' || u.approval_status === 'APPROVED').length;
+    const countDenied = adminState.users.filter(u => u.authorization_status === 'DENIED' || u.approval_status === 'REJECTED').length;
 
     if(el('userCount-ALL')) el('userCount-ALL').textContent = countAll;
     if(el('userCount-PENDING')) el('userCount-PENDING').textContent = countPending;
@@ -453,7 +480,7 @@ function renderAdmin() {
 
         // Status Filter Pill
         if (statusFilter === 'PENDING') {
-            filtered = filtered.filter(u => u.authorization_status === 'PENDING' || !u.authorization_status);
+            filtered = filtered.filter(u => u.authorization_status === 'PENDING' || u.approval_status === 'PENDING' || (!u.authorization_status && !u.approval_status));
         } else if (statusFilter === 'AUTHORIZED') {
             filtered = filtered.filter(u => u.authorization_status === 'AUTHORIZED' || u.approval_status === 'APPROVED');
         } else if (statusFilter === 'DENIED') {
@@ -482,20 +509,35 @@ function renderAdmin() {
             filtered = filtered.filter(u => (u.section || '').toUpperCase() === secFilter.toUpperCase());
         }
 
-        // Search Filter (Supports Full Name, CPASS ID, Student ID, Role Detail, Plate, UID)
+        // Advanced Multi-token Smart Search Filter
         if (search) {
-            filtered = filtered.filter(u => 
-                (u.full_name||'').toLowerCase().includes(search) || 
-                (u.cpass_id||'').toLowerCase().includes(search) ||
-                (u.student_id||'').toLowerCase().includes(search) ||
-                (u.role_detail||'').toLowerCase().includes(search) ||
-                (u.rfid_uid||'').toLowerCase().includes(search) || 
-                (u.rfid_cards||[]).some(c => (c.rfid_uid||'').toLowerCase().includes(search)) ||
-                (u.vehicles||[]).some(v => (v.plate_number||'').toLowerCase().includes(search) || (v.vehicle_model||'').toLowerCase().includes(search)) ||
-                (u.plate_number||'').toLowerCase().includes(search) ||
-                (u.program||'').toLowerCase().includes(search) ||
-                (u.section||'').toLowerCase().includes(search)
-            );
+            const tokens = search.split(/\s+/).filter(Boolean);
+            filtered = filtered.filter(u => {
+                const uPlates = [u.plate_number, ...((u.vehicles||[]).map(v => v.plate_number))].filter(Boolean).join(' ');
+                const uModels = (u.vehicles||[]).map(v => `${v.vehicle_type||''} ${v.vehicle_model||''} ${v.vehicle_color||''}`).join(' ');
+                const uUids = [u.rfid_uid, ...((u.rfid_cards||[]).map(c => c.rfid_uid))].filter(Boolean).join(' ');
+                
+                const composite = [
+                    u.full_name || '',
+                    u.cpass_id || '',
+                    u.student_id || '',
+                    u.role || '',
+                    u.role_detail || '',
+                    u.program || '',
+                    u.section || '',
+                    `${u.program || ''} ${u.section || ''}`,
+                    u.address || '',
+                    u.default_transit_mode || '',
+                    u.user_type || '',
+                    uPlates,
+                    uPlates.replace(/[-\s]/g, ''),
+                    uModels,
+                    uUids,
+                    uUids.replace(/\s/g, '')
+                ].join(' ').toLowerCase();
+
+                return tokens.every(token => composite.includes(token));
+            });
         }
 
         // Campus Presence Filter
