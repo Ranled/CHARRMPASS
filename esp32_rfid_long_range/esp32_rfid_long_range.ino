@@ -118,6 +118,7 @@ void IRAM_ATTR isrWiegandD1() {
 #define GREEN_LED            4
 #define RED_LED              2
 #define BUZZER_PIN           15
+#define BOOT_BUTTON_PIN      0    // ESP32 onboard BOOT button (Hold 3s to reset Wi-Fi & start BLE)
 
 // =====================================================
 // 2. SUPABASE CLOUD REST API
@@ -1384,6 +1385,7 @@ void setup() {
   pinMode(GREEN_LED, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(RELAY_PIN, OUTPUT);
+  pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP); // Onboard BOOT button (Hold 3s to reset Wi-Fi)
 
   digitalWrite(RED_LED, HIGH);
   digitalWrite(GREEN_LED, LOW);
@@ -1449,6 +1451,36 @@ void setup() {
 // 12. MAIN LOOP (HIGH-SPEED MULTI-TAG EVENT LOOP)
 // =====================================================
 void loop() {
+  // ── ONBOARD BOOT BUTTON (GPIO 0): Hold for 3s to force Wi-Fi reset & enter BLE Setup Mode ──
+  static unsigned long bootButtonPressStart = 0;
+  if (digitalRead(BOOT_BUTTON_PIN) == LOW) {
+    if (bootButtonPressStart == 0) {
+      bootButtonPressStart = millis();
+    } else if (millis() - bootButtonPressStart >= 3000) {
+      Serial.println("\n🔘 [HARDWARE BUTTON] BOOT button held for 3s -> Forcing Wi-Fi Reset & BLE Setup Mode!");
+      lcdMsg("WIFI RESET", "BLE SETUP MODE");
+      beep(150, 2);
+      preferences.begin("charrm_wifi", false);
+      preferences.remove("ssid");
+      preferences.remove("pass");
+      preferences.end();
+      if (sdCardReady && SD.exists(WIFI_CONFIG_FILE)) {
+        SD.remove(WIFI_CONFIG_FILE);
+        Serial.println("[RESET] SD Wi-Fi backup removed.");
+      }
+      currentSsid = "";
+      currentPass = "";
+      WiFi.disconnect(true);
+      wifiConnected = false;
+      startBleServer();
+      showReady();
+      bootButtonPressStart = 0;
+      while (digitalRead(BOOT_BUTTON_PIN) == LOW) { delay(10); } // Wait for button release
+    }
+  } else {
+    bootButtonPressStart = 0;
+  }
+
   // If new Wi-Fi credentials were sent from Web Bluetooth, connect now!
   if (newWifiCredentialsReceived) {
     newWifiCredentialsReceived = false;
