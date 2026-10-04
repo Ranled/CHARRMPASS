@@ -472,6 +472,16 @@ function renderAdmin() {
             filtered = filtered.filter(u => u.role === role);
         }
 
+        // Program & Section Filters
+        const progFilter = el('programFilter')?.value || '';
+        const secFilter = el('sectionFilter')?.value || '';
+        if (progFilter) {
+            filtered = filtered.filter(u => (u.program || '').toUpperCase() === progFilter.toUpperCase());
+        }
+        if (secFilter) {
+            filtered = filtered.filter(u => (u.section || '').toUpperCase() === secFilter.toUpperCase());
+        }
+
         // Search Filter (Supports Full Name, CPASS ID, Student ID, Role Detail, Plate, UID)
         if (search) {
             filtered = filtered.filter(u => 
@@ -4367,5 +4377,757 @@ el('deviceForm')?.addEventListener('submit', async (e) => {
     }
 });
 
+// ============================================================
+// ACADEMIC PROGRAMS, SECTIONS & BULK UPLOAD SUBSYSTEM
+// ============================================================
+
+window.academicState = {
+    programs: [
+        { code: 'BSIT', name: 'Bachelor of Science in Information Technology', department: 'College of Computing' },
+        { code: 'BSCS', name: 'Bachelor of Science in Computer Science', department: 'College of Computing' },
+        { code: 'BSA',  name: 'Bachelor of Science in Agriculture', department: 'College of Agriculture' },
+        { code: 'BSHM', name: 'Bachelor of Science in Hospitality Management', department: 'College of Hospitality & Tourism' },
+        { code: 'BSED', name: 'Bachelor of Secondary Education', department: 'College of Education' },
+        { code: 'BSCRIM', name: 'Bachelor of Science in Criminology', department: 'College of Criminology' },
+        { code: 'ENGINEERING', name: 'College of Engineering & Architecture', department: 'Engineering' },
+        { code: 'ADMIN', name: 'Administrative & Support Staff', department: 'Administration' }
+    ],
+    sections: [
+        { program: 'BSIT', year: 1, section: '1A' }, { program: 'BSIT', year: 1, section: '1B' },
+        { program: 'BSIT', year: 2, section: '2A' }, { program: 'BSIT', year: 2, section: '2B' },
+        { program: 'BSIT', year: 3, section: '3A' }, { program: 'BSIT', year: 3, section: '3B' },
+        { program: 'BSIT', year: 4, section: '4A' }, { program: 'BSIT', year: 4, section: '4B' },
+        { program: 'BSCS', year: 1, section: '1A' }, { program: 'BSCS', year: 2, section: '2A' },
+        { program: 'BSCS', year: 3, section: '3A' }, { program: 'BSCS', year: 4, section: '4A' },
+        { program: 'BSA',  year: 1, section: '1A' }, { program: 'BSA',  year: 2, section: '2A' },
+        { program: 'BSA',  year: 3, section: '3A' }, { program: 'BSA',  year: 4, section: '4A' },
+        { program: 'BSHM', year: 1, section: '1A' }, { program: 'BSHM', year: 2, section: '2A' },
+        { program: 'BSHM', year: 3, section: '3A' }, { program: 'BSHM', year: 4, section: '4A' },
+        { program: 'BSED', year: 1, section: '1A' }, { program: 'BSED', year: 2, section: '2A' },
+        { program: 'BSED', year: 3, section: '3A' }, { program: 'BSED', year: 4, section: '4A' },
+        { program: 'BSCRIM', year: 1, section: '1A' }, { program: 'BSCRIM', year: 2, section: '2A' },
+        { program: 'BSCRIM', year: 3, section: '3A' }, { program: 'BSCRIM', year: 4, section: '4A' }
+    ]
+};
+
+window.bulkUploadState = {
+    activeTab: 'students',
+    parsedRecords: [],
+    fileType: 'students',
+    fileName: '',
+    isUploading: false
+};
+
+// 1. Initialize Academic Programs and Sections
+function loadAcademicData() {
+    try {
+        const savedProgs = localStorage.getItem('charrmpass_academic_programs');
+        if (savedProgs) academicState.programs = JSON.parse(savedProgs);
+        const savedSecs = localStorage.getItem('charrmpass_academic_sections');
+        if (savedSecs) academicState.sections = JSON.parse(savedSecs);
+    } catch(e) {
+        console.warn('Could not load academic presets from storage', e);
+    }
+    renderAcademicDataUI();
+}
+
+function saveAcademicDataToStorage() {
+    try {
+        localStorage.setItem('charrmpass_academic_programs', JSON.stringify(academicState.programs));
+        localStorage.setItem('charrmpass_academic_sections', JSON.stringify(academicState.sections));
+    } catch(e) {}
+}
+
+function renderAcademicDataUI() {
+    // Populate Main Filter Dropdowns
+    const progFilter = el('programFilter');
+    if (progFilter) {
+        const currentVal = progFilter.value;
+        let html = '<option value="">All Programs</option>';
+        academicState.programs.forEach(p => {
+            html += `<option value="${p.code}" ${currentVal === p.code ? 'selected' : ''}>${p.code} - ${p.name}</option>`;
+        });
+        progFilter.innerHTML = html;
+    }
+
+    const secFilter = el('sectionFilter');
+    if (secFilter) {
+        const currentVal = secFilter.value;
+        const uniqueSections = Array.from(new Set(academicState.sections.map(s => s.section))).sort();
+        let html = '<option value="">All Sections</option>';
+        uniqueSections.forEach(s => {
+            html += `<option value="${s}" ${currentVal === s ? 'selected' : ''}>Section ${s}</option>`;
+        });
+        secFilter.innerHTML = html;
+    }
+
+    // Populate Bulk Modal Student Program select
+    const bulkProg = el('bulkStudentProgram');
+    if (bulkProg) {
+        let html = '';
+        academicState.programs.forEach(p => {
+            html += `<option value="${p.code}">${p.code} - ${p.name}</option>`;
+        });
+        bulkProg.innerHTML = html;
+    }
+
+    // Populate Bulk Modal New Section Program select
+    const newSecProg = el('newSecProgram');
+    if (newSecProg) {
+        let html = '';
+        academicState.programs.forEach(p => {
+            html += `<option value="${p.code}">${p.code} (${p.department || 'General'})</option>`;
+        });
+        newSecProg.innerHTML = html;
+    }
+
+    // Populate Faculty Department select
+    const bulkDept = el('bulkFacultyDept');
+    if (bulkDept) {
+        const uniqueDepts = Array.from(new Set(academicState.programs.map(p => p.department).filter(Boolean)));
+        let html = '';
+        uniqueDepts.forEach(d => {
+            html += `<option value="${d}">${d}</option>`;
+        });
+        bulkDept.innerHTML = html;
+    }
+
+    updateBulkSectionOptions();
+    renderAcademicBadgesList();
+}
+
+function updateBulkSectionOptions() {
+    const prog = el('bulkStudentProgram')?.value || 'BSIT';
+    const year = parseInt(el('bulkStudentYear')?.value || '3', 10);
+    const secSelect = el('bulkStudentSection');
+    if (!secSelect) return;
+
+    const matching = academicState.sections.filter(s => s.program === prog && s.year === year);
+    if (matching.length > 0) {
+        secSelect.innerHTML = matching.map(s => `<option value="${s.section}">Section ${s.section}</option>`).join('');
+    } else {
+        secSelect.innerHTML = `
+            <option value="${year}A">Section ${year}A</option>
+            <option value="${year}B">Section ${year}B</option>
+        `;
+    }
+}
+
+function renderAcademicBadgesList() {
+    const container = el('academicProgramsBadgesList');
+    if (!container) return;
+
+    container.innerHTML = academicState.programs.map(p => {
+        const progSections = academicState.sections.filter(s => s.program === p.code);
+        return `
+            <div class="p-4 rounded-2xl bg-white border border-slate-200/80 shadow-sm flex flex-col justify-between gap-3">
+                <div>
+                    <div class="flex items-center justify-between">
+                        <span class="font-display font-black text-sm text-charm-dark">${p.code}</span>
+                        <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">${p.department || 'General'}</span>
+                    </div>
+                    <p class="text-xs font-semibold text-slate-700 mt-1 line-clamp-1">${p.name}</p>
+                </div>
+                <div>
+                    <div class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Configured Sections (${progSections.length}):</div>
+                    <div class="flex flex-wrap gap-1">
+                        ${progSections.length ? progSections.map(s => `
+                            <span class="px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-bold flex items-center gap-1">
+                                ${s.section}
+                                <button onclick="deleteAcademicSection('${p.code}', ${s.year}, '${s.section}')" class="text-emerald-500 hover:text-red-500 font-black">×</button>
+                            </span>
+                        `).join('') : '<span class="text-[11px] text-slate-400 italic">No sections configured yet</span>'}
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+window.saveNewAcademicProgram = function() {
+    const code = (el('newProgCode')?.value || '').trim().toUpperCase();
+    const name = (el('newProgName')?.value || '').trim();
+    const dept = (el('newProgDept')?.value || '').trim() || 'General';
+
+    if (!code || !name) {
+        showToast('Please provide both Program Code and Program Name', 'warning');
+        return;
+    }
+
+    if (academicState.programs.some(p => p.code === code)) {
+        showToast(`Program code "${code}" already exists!`, 'warning');
+        return;
+    }
+
+    academicState.programs.push({ code, name, department: dept });
+    // Add default 1A, 2A, 3A, 4A sections
+    [1, 2, 3, 4].forEach(y => {
+        academicState.sections.push({ program: code, year: y, section: `${y}A` });
+    });
+
+    saveAcademicDataToStorage();
+    renderAcademicDataUI();
+    if (el('newProgCode')) el('newProgCode').value = '';
+    if (el('newProgName')) el('newProgName').value = '';
+    if (el('newProgDept')) el('newProgDept').value = '';
+    showToast(`Program "${code}" created successfully!`, 'success');
+};
+
+window.saveNewAcademicSection = function() {
+    const prog = (el('newSecProgram')?.value || '').trim().toUpperCase();
+    const year = parseInt(el('newSecYear')?.value || '1', 10);
+    const sec = (el('newSecName')?.value || '').trim().toUpperCase();
+
+    if (!prog || !sec) {
+        showToast('Please select a program and enter section name', 'warning');
+        return;
+    }
+
+    if (academicState.sections.some(s => s.program === prog && s.year === year && s.section === sec)) {
+        showToast(`Section "${sec}" already exists for ${prog} Year ${year}`, 'warning');
+        return;
+    }
+
+    academicState.sections.push({ program: prog, year, section: sec });
+    saveAcademicDataToStorage();
+    renderAcademicDataUI();
+    if (el('newSecName')) el('newSecName').value = '';
+    showToast(`Added Section ${sec} to ${prog}!`, 'success');
+};
+
+window.deleteAcademicSection = function(prog, year, sec) {
+    academicState.sections = academicState.sections.filter(s => !(s.program === prog && s.year === year && s.section === sec));
+    saveAcademicDataToStorage();
+    renderAcademicDataUI();
+    showToast(`Removed section ${sec} from ${prog}`, 'info');
+};
+
+// 2. Bulk Upload Modal Operations
+window.openBulkUploadModal = function() {
+    const modal = el('bulkUploadModal');
+    if (!modal) return;
+    renderAcademicDataUI();
+    resetBulkUploadForm();
+    modal.classList.remove('hidden');
+    setTimeout(() => {
+        modal.classList.remove('opacity-0');
+        el('bulkUploadModalContent')?.classList.remove('scale-95');
+    }, 10);
+    if (window.lucide && typeof lucide.createIcons === 'function') {
+        lucide.createIcons();
+    }
+};
+
+window.closeBulkUploadModal = function() {
+    const modal = el('bulkUploadModal');
+    if (!modal) return;
+    modal.classList.add('opacity-0');
+    el('bulkUploadModalContent')?.classList.add('scale-95');
+    setTimeout(() => {
+        modal.classList.add('hidden');
+        resetBulkUploadForm();
+    }, 250);
+};
+
+window.switchBulkTab = function(tabName) {
+    bulkUploadState.activeTab = tabName;
+    bulkUploadState.fileType = tabName === 'faculty' ? 'faculty' : 'students';
+    
+    // Update button styles
+    ['students', 'faculty', 'programs'].forEach(t => {
+        const btn = el(`bulkTabBtn-${t}`);
+        const content = el(`bulkTabContent-${t}`);
+        if (btn) {
+            if (t === tabName) {
+                btn.className = 'bulk-tab-btn px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all bg-charm-dark text-white shadow-sm flex items-center gap-2';
+            } else {
+                btn.className = 'bulk-tab-btn px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all text-slate-600 hover:bg-slate-100 flex items-center gap-2';
+            }
+        }
+        if (content) {
+            content.classList.toggle('hidden', t !== tabName);
+        }
+    });
+
+    if (window.lucide && typeof lucide.createIcons === 'function') {
+        lucide.createIcons();
+    }
+};
+
+window.toggleBulkStudentScope = function() {
+    const mode = el('bulkStudentMode')?.value || 'SCOPED';
+    const scopeFields = el('bulkStudentScopeFields');
+    if (scopeFields) {
+        scopeFields.classList.toggle('hidden', mode === 'MULTI');
+    }
+};
+
+// 3. Template Generation & Download (.CSV)
+window.downloadCSVTemplate = function(type) {
+    let csvContent = '';
+    let filename = '';
+
+    if (type === 'students') {
+        const mode = el('bulkStudentMode')?.value || 'SCOPED';
+        if (mode === 'SCOPED') {
+            const prog = el('bulkStudentProgram')?.value || 'BSIT';
+            const sec = el('bulkStudentSection')?.value || '3A';
+            filename = `CHARRMPASS_Students_${prog}_${sec}_Template.csv`;
+            csvContent = "Student ID,Full Name,Sex,Age,Address,Transit Mode,Vehicle Type,Plate Number\n" +
+                         "2022-00101,\"Dela Cruz, Juan M.\",Male,21,\"Ibajay, Aklan\",VEHICLE,Motorcycle,ABC-1234\n" +
+                         "2022-00102,\"Santos, Maria Clara\",Female,20,\"Kalibo, Aklan\",PEDESTRIAN,None,\n" +
+                         "2022-00103,\"Reyes, Carlos P.\",Male,21,\"Tangalan, Aklan\",PEDESTRIAN,None,\n" +
+                         "2022-00104,\"Lopez, Ana Beatriz\",Female,22,\"Numancia, Aklan\",VEHICLE,Car,XYZ-5678\n";
+        } else {
+            filename = `CHARRMPASS_Master_Students_Template.csv`;
+            csvContent = "Student ID,Full Name,Program,Section,Sex,Age,Address,Transit Mode,Vehicle Type,Plate Number\n" +
+                         "2022-00101,\"Dela Cruz, Juan M.\",BSIT,3A,Male,21,\"Ibajay, Aklan\",VEHICLE,Motorcycle,ABC-1234\n" +
+                         "2022-00102,\"Santos, Maria Clara\",BSCS,2B,Female,20,\"Kalibo, Aklan\",PEDESTRIAN,None,\n" +
+                         "2022-00103,\"Reyes, Carlos P.\",BSA,1A,Male,19,\"Tangalan, Aklan\",PEDESTRIAN,None,\n";
+        }
+    } else {
+        filename = `CHARRMPASS_Faculty_Staff_Template.csv`;
+        csvContent = "Employee ID,Full Name,Role,Department,Sex,Age,Transit Mode,Vehicle Type,Plate Number\n" +
+                     "EMP-2018-01,\"Dr. Alan M. Turing\",Faculty,\"College of Computing\",Male,42,VEHICLE,SUV,ABC-789\n" +
+                     "EMP-2020-04,\"Grace Hopper\",Faculty,\"College of Engineering\",Female,38,VEHICLE,Car,XYZ-456\n" +
+                     "STAFF-009,\"Juanita Cruz\",Staff,\"Administration\",Female,30,PEDESTRIAN,None,\n" +
+                     "VENDOR-02,\"Pedro Penduko\",Others,\"Canteen Services\",Male,45,VEHICLE,Motorcycle,JKL-321\n";
+    }
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast(`Downloaded template: ${filename}`, 'info');
+};
+
+// 4. File Drag & Drop Handlers
+window.handleDragOver = function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.classList.add('border-emerald-500', 'bg-emerald-50/40');
+};
+
+window.handleDragLeave = function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.classList.remove('border-emerald-500', 'bg-emerald-50/40');
+};
+
+window.handleDrop = function(e, type) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.classList.remove('border-emerald-500', 'bg-emerald-50/40');
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        processUploadedCSVFile(e.dataTransfer.files[0], type);
+    }
+};
+
+window.handleFileSelected = function(e, type) {
+    if (e.target.files && e.target.files.length > 0) {
+        processUploadedCSVFile(e.target.files[0], type);
+    }
+};
+
+// 5. Robust CSV Parsing & Normalization Engine
+function processUploadedCSVFile(file, type) {
+    if (!file) return;
+    bulkUploadState.fileType = type;
+    bulkUploadState.fileName = file.name;
+
+    const reader = new FileReader();
+    reader.onload = function(evt) {
+        const text = evt.target.result;
+        parseCSVTextAndPreview(text, type, file.name);
+    };
+    reader.readAsText(file);
+}
+
+function parseCSVTextAndPreview(csvText, type, fileName) {
+    let rows = [];
+
+    // Use PapaParse if available, otherwise pure JS fallback
+    if (window.Papa && typeof Papa.parse === 'function') {
+        const results = Papa.parse(csvText, { header: true, skipEmptyLines: true });
+        rows = results.data;
+    } else {
+        rows = fallbackPureJsCSVParse(csvText);
+    }
+
+    if (!rows || rows.length === 0) {
+        showToast('The uploaded CSV file contains no readable data rows.', 'error');
+        return;
+    }
+
+    // Context & Defaults from Scope Form
+    const studentMode = el('bulkStudentMode')?.value || 'SCOPED';
+    const scopedProg = el('bulkStudentProgram')?.value || 'BSIT';
+    const scopedSec = el('bulkStudentSection')?.value || '3A';
+    const defaultStudentTransit = el('bulkStudentTransit')?.value || 'PEDESTRIAN';
+    const defaultStudentStatus = el('bulkStudentStatus')?.value || 'APPROVED';
+
+    const facultyDept = el('bulkFacultyDept')?.value || 'College of Computing';
+    const defaultFacultyRole = el('bulkFacultyRole')?.value || 'Faculty';
+    const defaultFacultyStatus = el('bulkFacultyStatus')?.value || 'APPROVED';
+
+    const existingUsers = adminState.users || [];
+    const normalizedList = [];
+
+    rows.forEach((row, index) => {
+        // Map header permutations to standard keys
+        const mapped = {};
+        for (let key in row) {
+            if (!row.hasOwnProperty(key)) continue;
+            const val = (row[key] || '').toString().trim();
+            const cleanKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+            
+            if (['studentid', 'idnumber', 'id', 'cpassid', 'cpass', 'employeeid'].includes(cleanKey)) {
+                mapped.id_number = val;
+            } else if (['fullname', 'name', 'studentname', 'person', 'employeename'].includes(cleanKey)) {
+                mapped.full_name = val;
+            } else if (['sex', 'gender'].includes(cleanKey)) {
+                mapped.sex = val.toUpperCase().startsWith('F') ? 'Female' : 'Male';
+            } else if (['age'].includes(cleanKey)) {
+                mapped.age = parseInt(val, 10) || null;
+            } else if (['address'].includes(cleanKey)) {
+                mapped.address = val;
+            } else if (['program', 'course', 'department', 'dept'].includes(cleanKey)) {
+                mapped.program = val.toUpperCase();
+            } else if (['section', 'sec', 'yearandsection'].includes(cleanKey)) {
+                mapped.section = val.toUpperCase();
+            } else if (['role'].includes(cleanKey)) {
+                mapped.role = val;
+            } else if (['transitmode', 'mode', 'transittype', 'transit'].includes(cleanKey)) {
+                mapped.default_transit_mode = val.toUpperCase().includes('VEH') ? 'VEHICLE' : 'PEDESTRIAN';
+            } else if (['platenumber', 'plate', 'plateno'].includes(cleanKey)) {
+                mapped.plate_number = val.toUpperCase();
+            } else if (['vehicletype', 'vehicletype', 'type'].includes(cleanKey)) {
+                mapped.vehicle_type = val;
+            } else if (['vehiclemodel', 'model'].includes(cleanKey)) {
+                mapped.vehicle_model = val;
+            } else if (['rfiduid', 'uid', 'rfid'].includes(cleanKey)) {
+                mapped.rfid_uid = val.toUpperCase();
+            }
+        }
+
+        if (!mapped.full_name && !mapped.id_number) return; // skip completely empty rows
+
+        // Set role & hierarchy based on type & scope
+        let role = mapped.role || (type === 'students' ? 'Student' : defaultFacultyRole);
+        let program = mapped.program;
+        let section = mapped.section;
+
+        if (type === 'students') {
+            if (studentMode === 'SCOPED') {
+                program = scopedProg;
+                section = scopedSec;
+            } else {
+                program = program || scopedProg;
+                section = section || scopedSec;
+            }
+        } else {
+            program = program || facultyDept;
+            section = section || '--';
+        }
+
+        const transitMode = mapped.default_transit_mode || 
+                            (mapped.plate_number ? 'VEHICLE' : (type === 'students' ? defaultStudentTransit : 'VEHICLE'));
+        const approvalStatus = type === 'students' ? defaultStudentStatus : defaultFacultyStatus;
+
+        // Duplicate Check
+        const isDuplicate = existingUsers.some(u => 
+            (mapped.id_number && (u.student_id === mapped.id_number || u.cpass_id === mapped.id_number)) ||
+            (mapped.full_name && u.full_name.toLowerCase() === mapped.full_name.toLowerCase())
+        );
+
+        normalizedList.push({
+            rowNumber: index + 1,
+            student_id: mapped.id_number || '',
+            cpass_id: mapped.id_number || '',
+            full_name: mapped.full_name || '',
+            role: role,
+            program: program,
+            section: section,
+            sex: mapped.sex || 'Male',
+            age: mapped.age || null,
+            address: mapped.address || '',
+            default_transit_mode: transitMode,
+            vehicle_type: mapped.vehicle_type || (transitMode === 'VEHICLE' ? 'Motorcycle' : 'None'),
+            vehicle_model: mapped.vehicle_model || '',
+            plate_number: mapped.plate_number || (transitMode === 'VEHICLE' ? 'PENDING-PLATE' : ''),
+            rfid_uid: mapped.rfid_uid || '',
+            approval_status: approvalStatus,
+            isDuplicate: isDuplicate,
+            isValid: Boolean(mapped.full_name && mapped.full_name.length > 2)
+        });
+    });
+
+    bulkUploadState.parsedRecords = normalizedList;
+    renderBulkPreviewUI(fileName);
+}
+
+function fallbackPureJsCSVParse(text) {
+    const lines = text.split(/\r\n|\n/).map(l => l.trim()).filter(Boolean);
+    if (!lines.length) return [];
+    
+    // Parse header
+    const headers = lines[0].split(',').map(h => h.replace(/^["']|["']$/g, '').trim());
+    const data = [];
+
+    for (let i = 1; i < lines.length; i++) {
+        // Regex to handle quoted commas correctly
+        const rowValues = [];
+        let match;
+        const re = /(?:\"([^\"]*(?:\"\"[^\"]*)*)\")|([^,]+)/g;
+        let line = lines[i];
+        
+        let colIdx = 0;
+        const obj = {};
+        const simpleCols = line.split(',');
+        headers.forEach((h, idx) => {
+            obj[h] = simpleCols[idx] ? simpleCols[idx].replace(/^["']|["']$/g, '').trim() : '';
+        });
+        data.push(obj);
+    }
+    return data;
+}
+
+// 6. Preview Table & UI Renderer
+function renderBulkPreviewUI(fileName) {
+    const previewContainer = el('bulkPreviewContainer');
+    const tableBody = el('bulkPreviewTableBody');
+    const btnExecute = el('btnExecuteBulkImport');
+    const btnExecuteText = el('btnExecuteBulkImportText');
+    const badgeTotal = el('bulkBadgeTotal');
+    const badgeValid = el('bulkBadgeValid');
+    const badgeWarn = el('bulkBadgeWarn');
+    const previewFileName = el('bulkPreviewFileName');
+
+    if (!previewContainer || !tableBody) return;
+
+    previewContainer.classList.remove('hidden');
+    if (previewFileName) previewFileName.textContent = `${fileName} (${bulkUploadState.parsedRecords.length} records ready)`;
+
+    const total = bulkUploadState.parsedRecords.length;
+    const validCount = bulkUploadState.parsedRecords.filter(r => r.isValid).length;
+    const duplicateCount = bulkUploadState.parsedRecords.filter(r => r.isDuplicate).length;
+
+    if (badgeTotal) badgeTotal.textContent = `${total} Total Rows`;
+    if (badgeValid) badgeValid.textContent = `${validCount} Valid`;
+    if (badgeWarn) {
+        if (duplicateCount > 0) {
+            badgeWarn.textContent = `${duplicateCount} Existing / Update`;
+            badgeWarn.classList.remove('hidden');
+        } else {
+            badgeWarn.classList.add('hidden');
+        }
+    }
+
+    tableBody.innerHTML = bulkUploadState.parsedRecords.map(r => `
+        <tr class="hover:bg-slate-50 border-b border-slate-100 ${!r.isValid ? 'bg-red-50/50' : ''}">
+            <td class="p-2.5 text-center font-mono font-bold text-slate-400">${r.rowNumber}</td>
+            <td class="p-2.5 font-mono font-bold text-slate-800">${r.student_id || '<span class="text-slate-400 italic">Auto CPASS</span>'}</td>
+            <td class="p-2.5 font-bold text-slate-800 flex items-center gap-1.5">
+                ${r.full_name || '<span class="text-red-500 font-bold">Missing Name!</span>'}
+                ${r.isDuplicate ? '<span class="text-[9px] px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-800 font-bold">Exists</span>' : ''}
+            </td>
+            <td class="p-2.5"><span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700">${r.role}</span></td>
+            <td class="p-2.5 font-semibold text-slate-700">${r.program} <span class="text-slate-400">• ${r.section}</span></td>
+            <td class="p-2.5 font-mono text-xs">
+                ${r.default_transit_mode === 'VEHICLE' 
+                    ? `<span class="text-emerald-700 font-bold">🚗 ${r.plate_number || 'Vehicle'}</span>` 
+                    : '<span class="text-slate-500">🚶 Pedestrian</span>'}
+            </td>
+            <td class="p-2.5 text-center">
+                ${r.isValid 
+                    ? `<span class="px-2 py-0.5 rounded-full text-[10px] font-black ${r.approval_status === 'APPROVED' ? 'bg-emerald-100 text-emerald-800' : 'bg-yellow-100 text-yellow-800'}">${r.approval_status}</span>`
+                    : '<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-red-100 text-red-800">Invalid</span>'}
+            </td>
+        </tr>
+    `).join('');
+
+    if (btnExecute) {
+        btnExecute.disabled = validCount === 0;
+        if (btnExecuteText) {
+            btnExecuteText.textContent = `Import ${validCount} ${bulkUploadState.fileType === 'students' ? 'Students' : 'Members'} to CHARRMPASS`;
+        }
+    }
+}
+
+window.resetBulkUploadForm = function() {
+    bulkUploadState.parsedRecords = [];
+    bulkUploadState.fileName = '';
+    const previewContainer = el('bulkPreviewContainer');
+    if (previewContainer) previewContainer.classList.add('hidden');
+    const studentFileInput = el('bulkStudentFileInput');
+    if (studentFileInput) studentFileInput.value = '';
+    const facultyFileInput = el('bulkFacultyFileInput');
+    if (facultyFileInput) facultyFileInput.value = '';
+    const btnExecute = el('btnExecuteBulkImport');
+    if (btnExecute) btnExecute.disabled = true;
+    const progressContainer = el('bulkProgressBarContainer');
+    if (progressContainer) progressContainer.classList.add('hidden');
+};
+
+// 7. Batch Import Execution into Supabase & Local State
+window.executeBulkImport = async function() {
+    const validRecords = bulkUploadState.parsedRecords.filter(r => r.isValid);
+    if (!validRecords.length) {
+        showToast('No valid records to import', 'warning');
+        return;
+    }
+
+    const btnExecute = el('btnExecuteBulkImport');
+    const btnText = el('btnExecuteBulkImportText');
+    const progressContainer = el('bulkProgressBarContainer');
+    const progressBarFill = el('bulkProgressBarFill');
+    const progressPercent = el('bulkProgressPercent');
+    const progressLabel = el('bulkProgressLabel');
+
+    if (btnExecute) btnExecute.disabled = true;
+    if (progressContainer) progressContainer.classList.remove('hidden');
+
+    let insertedCount = 0;
+    const total = validRecords.length;
+
+    try {
+        if (isConnected && supabaseClient) {
+            // Check if RPC function bulk_upsert_users exists
+            let useRpc = false;
+            try {
+                const { error: rpcTestError } = await supabaseClient.rpc('bulk_upsert_users', {
+                    users_payload: validRecords.slice(0, 1),
+                    default_status: 'APPROVED',
+                    default_transit: 'PEDESTRIAN'
+                });
+                if (!rpcTestError) useRpc = true;
+            } catch(e) {
+                useRpc = false;
+            }
+
+            if (useRpc) {
+                // Batch in chunks of 50
+                const chunkSize = 50;
+                for (let i = 0; i < validRecords.length; i += chunkSize) {
+                    const chunk = validRecords.slice(i, i + chunkSize);
+                    await supabaseClient.rpc('bulk_upsert_users', {
+                        users_payload: chunk,
+                        default_status: chunk[0].approval_status || 'APPROVED',
+                        default_transit: chunk[0].default_transit_mode || 'PEDESTRIAN'
+                    });
+                    insertedCount += chunk.length;
+                    const pct = Math.min(100, Math.round((insertedCount / total) * 100));
+                    if (progressBarFill) progressBarFill.style.width = `${pct}%`;
+                    if (progressPercent) progressPercent.textContent = `${pct}%`;
+                    if (progressLabel) progressLabel.textContent = `Imported ${insertedCount} of ${total} records...`;
+                }
+            } else {
+                // Direct Supabase Client batch upsert
+                for (let i = 0; i < validRecords.length; i++) {
+                    const r = validRecords[i];
+                    const userPayload = {
+                        full_name: r.full_name,
+                        student_id: r.student_id || null,
+                        cpass_id: r.student_id || (r.cpass_id ? r.cpass_id.toUpperCase() : null),
+                        role: r.role,
+                        program: r.program,
+                        section: r.section,
+                        sex: r.sex,
+                        age: r.age,
+                        address: r.address,
+                        default_transit_mode: r.default_transit_mode,
+                        approval_status: r.approval_status
+                    };
+
+                    const { data: userData, error: userError } = await supabaseClient
+                        .from('users')
+                        .upsert(userPayload, { onConflict: 'cpass_id' })
+                        .select()
+                        .single();
+
+                    if (!userError && userData) {
+                        // Attach Vehicle if present
+                        if (r.plate_number && r.plate_number !== 'PENDING-PLATE' && r.plate_number !== 'NONE') {
+                            await supabaseClient.from('vehicles').upsert({
+                                user_id: userData.id,
+                                plate_number: r.plate_number,
+                                vehicle_type: r.vehicle_type || 'Motorcycle',
+                                vehicle_model: r.vehicle_model || '',
+                                approval_status: r.approval_status
+                            }, { onConflict: 'plate_number' });
+                        }
+                    }
+
+                    insertedCount++;
+                    const pct = Math.min(100, Math.round((insertedCount / total) * 100));
+                    if (progressBarFill) progressBarFill.style.width = `${pct}%`;
+                    if (progressPercent) progressPercent.textContent = `${pct}%`;
+                }
+            }
+
+            showToast(`🎉 Successfully batch-enrolled ${insertedCount} ${bulkUploadState.fileType === 'students' ? 'students' : 'members'}!`, 'success');
+            await loadData();
+            closeBulkUploadModal();
+
+        } else {
+            // Local Offline Simulation mode
+            validRecords.forEach((r, idx) => {
+                const newId = 'LOCAL-' + Date.now() + '-' + idx;
+                const localUser = {
+                    id: newId,
+                    full_name: r.full_name,
+                    cpass_id: r.student_id || ('CP' + String(adminState.users.length + idx).padStart(2, '0')),
+                    student_id: r.student_id || null,
+                    role: r.role,
+                    program: r.program,
+                    section: r.section,
+                    sex: r.sex,
+                    age: r.age,
+                    address: r.address,
+                    default_transit_mode: r.default_transit_mode,
+                    user_type: r.default_transit_mode,
+                    rfid_type: r.default_transit_mode === 'VEHICLE' ? 'LONG_RANGE' : 'CLOSE_RANGE',
+                    rfid_uid: r.rfid_uid || '',
+                    plate_number: r.plate_number || '',
+                    vehicle_type: r.vehicle_type || '',
+                    authorization_status: r.approval_status === 'APPROVED' ? 'AUTHORIZED' : 'PENDING',
+                    approval_status: r.approval_status
+                };
+
+                const existingIdx = adminState.users.findIndex(u => 
+                    (r.student_id && u.student_id === r.student_id) || 
+                    u.full_name.toLowerCase() === r.full_name.toLowerCase()
+                );
+
+                if (existingIdx !== -1) {
+                    adminState.users[existingIdx] = { ...adminState.users[existingIdx], ...localUser };
+                } else {
+                    adminState.users.unshift(localUser);
+                }
+            });
+
+            renderStats();
+            renderUsersTable();
+            renderPendingApprovals();
+            showToast(`Local Batch Import: Added/Updated ${validRecords.length} records.`, 'success');
+            closeBulkUploadModal();
+        }
+    } catch(err) {
+        console.error('Bulk Import Error:', err);
+        showToast('Bulk import error: ' + err.message, 'error');
+    } finally {
+        if (btnExecute) btnExecute.disabled = false;
+        if (btnText) btnText.textContent = 'Import to CHARRMPASS';
+    }
+};
+
+// Initialize on page load
+loadAcademicData();
+
 setupRealtime();
 loadData();
+

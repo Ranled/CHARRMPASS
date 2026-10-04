@@ -21,6 +21,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
     <script>
         // RBAC Session Protection with seamless development fallback
         (function() {
@@ -182,6 +183,9 @@
                             <p class="text-slate-500 font-medium mt-1">Manage registered walking pedestrians (Close-Range) and vehicle drivers (Long-Range UHF).</p>
                         </div>
                         <div class="flex items-center gap-2">
+                            <button onclick="openBulkUploadModal()" class="bg-emerald-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 shadow-md flex items-center gap-2 transition-all">
+                                <i data-lucide="upload-cloud" class="w-4 h-4"></i> Bulk Upload
+                            </button>
                             <button onclick="exportAllUsersCSV()" class="bg-white border border-slate-200 text-slate-700 px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-slate-50 shadow-sm flex items-center gap-2 transition-all">
                                 <i data-lucide="download" class="w-4 h-4"></i> Export Users
                             </button>
@@ -219,6 +223,12 @@
                                 <input type="text" id="userSearch" placeholder="Search by name, plate number, program, or RFID UID..." class="w-full pl-11 pr-4 py-2.5 rounded-xl border border-slate-200 bg-white/80 focus:outline-none focus:ring-2 focus:ring-charm-dark/50 text-sm font-medium shadow-inner" oninput="filterUsers()">
                             </div>
                             <div class="flex flex-wrap gap-2">
+                                <select id="programFilter" class="px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white/80 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-charm-dark/50 shadow-sm" onchange="filterUsers()">
+                                    <option value="">All Programs</option>
+                                </select>
+                                <select id="sectionFilter" class="px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white/80 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-charm-dark/50 shadow-sm" onchange="filterUsers()">
+                                    <option value="">All Sections</option>
+                                </select>
                                 <select id="modeFilter" class="px-4 py-2.5 rounded-xl border border-slate-200 bg-white/80 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-charm-dark/50 shadow-sm" onchange="filterUsers()">
                                     <option value="ALL">All Transit Types</option>
                                     <option value="PEDESTRIAN">🚶 Pedestrians (Close-Range)</option>
@@ -1656,6 +1666,316 @@ void startBleServer() {
             <div class="p-6 border-t border-slate-100 bg-slate-50/50 flex justify-end gap-3">
                 <button onclick="closeUserModal()" class="px-5 py-2.5 rounded-xl text-sm font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-50">Cancel</button>
                 <button onclick="saveUser()" class="px-5 py-2.5 rounded-xl text-sm font-bold text-white bg-charm-dark hover:bg-opacity-90 shadow-md flex items-center gap-2"><i data-lucide="save" class="w-4 h-4"></i> Save User</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- BULK UPLOAD & ACADEMIC MANAGEMENT MODAL    -->
+    <!-- ========================================== -->
+    <div id="bulkUploadModal" class="hidden fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 opacity-0 transition-opacity">
+        <div class="bg-white rounded-3xl w-full max-w-4xl shadow-2xl border border-slate-100 flex flex-col max-h-[92vh] overflow-hidden transform scale-95 transition-transform" id="bulkUploadModalContent">
+            <!-- Modal Header -->
+            <div class="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/70">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-black">
+                        <i data-lucide="upload-cloud" class="w-5 h-5"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-display font-extrabold text-xl text-slate-800">Bulk Upload & Academic Enrollment</h3>
+                        <p class="text-xs text-slate-500 font-medium">Batch enroll students by section/year, register faculty rosters, and configure programs.</p>
+                    </div>
+                </div>
+                <button onclick="closeBulkUploadModal()" class="text-slate-400 hover:text-red-500 p-2 rounded-xl hover:bg-slate-100 transition-all">
+                    <i data-lucide="x" class="w-6 h-6"></i>
+                </button>
+            </div>
+
+            <!-- Tab Navigation -->
+            <div class="flex items-center gap-2 px-6 pt-4 pb-2 border-b border-slate-100 bg-white">
+                <button onclick="switchBulkTab('students')" id="bulkTabBtn-students" class="bulk-tab-btn px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all bg-charm-dark text-white shadow-sm flex items-center gap-2">
+                    <i data-lucide="graduation-cap" class="w-4 h-4"></i>
+                    <span>Students (Section / Year)</span>
+                </button>
+                <button onclick="switchBulkTab('faculty')" id="bulkTabBtn-faculty" class="bulk-tab-btn px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all text-slate-600 hover:bg-slate-100 flex items-center gap-2">
+                    <i data-lucide="briefcase" class="w-4 h-4"></i>
+                    <span>Faculty &amp; Staff</span>
+                </button>
+                <button onclick="switchBulkTab('programs')" id="bulkTabBtn-programs" class="bulk-tab-btn px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all text-slate-600 hover:bg-slate-100 flex items-center gap-2">
+                    <i data-lucide="book-open" class="w-4 h-4"></i>
+                    <span>Programs &amp; Sections Master</span>
+                </button>
+            </div>
+
+            <!-- Modal Body Content -->
+            <div class="p-6 overflow-y-auto custom-scrollbar flex-1 space-y-6">
+
+                <!-- TAB 1: STUDENTS BATCH UPLOAD -->
+                <div id="bulkTabContent-students" class="space-y-5">
+                    <!-- Scope Settings Card -->
+                    <div class="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 space-y-4">
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <h4 class="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-2">
+                                <i data-lucide="sliders" class="w-4 h-4 text-emerald-600"></i> Batch Scope &amp; Target Section
+                            </h4>
+                            <div class="flex items-center gap-2">
+                                <label class="text-xs font-bold text-slate-600">Upload Mode:</label>
+                                <select id="bulkStudentMode" onchange="toggleBulkStudentScope()" class="text-xs font-bold px-3 py-1.5 rounded-lg border border-slate-300 bg-white">
+                                    <option value="SCOPED">Scoped (Single Section/Year)</option>
+                                    <option value="MULTI">Master CSV (Section in File)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div id="bulkStudentScopeFields" class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div class="space-y-1">
+                                <label class="text-[11px] font-bold text-slate-600">Academic Program *</label>
+                                <select id="bulkStudentProgram" onchange="updateBulkSectionOptions()" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white">
+                                    <option value="BSIT">BSIT - Information Technology</option>
+                                    <option value="BSCS">BSCS - Computer Science</option>
+                                    <option value="BSA">BSA - Agriculture</option>
+                                    <option value="BSHM">BSHM - Hospitality Mgt</option>
+                                    <option value="BSED">BSED - Secondary Education</option>
+                                    <option value="BSCRIM">BSCRIM - Criminology</option>
+                                </select>
+                            </div>
+                            <div class="space-y-1">
+                                <label class="text-[11px] font-bold text-slate-600">Year Level *</label>
+                                <select id="bulkStudentYear" onchange="updateBulkSectionOptions()" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white">
+                                    <option value="1">1st Year</option>
+                                    <option value="2">2nd Year</option>
+                                    <option value="3" selected>3rd Year</option>
+                                    <option value="4">4th Year</option>
+                                </select>
+                            </div>
+                            <div class="space-y-1">
+                                <label class="text-[11px] font-bold text-slate-600">Target Section *</label>
+                                <select id="bulkStudentSection" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white">
+                                    <option value="3A">Section 3A</option>
+                                    <option value="3B">Section 3B</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-200/60">
+                            <div class="space-y-1">
+                                <label class="text-[11px] font-bold text-slate-600">Default Transit Mode</label>
+                                <select id="bulkStudentTransit" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white">
+                                    <option value="PEDESTRIAN">🚶 Pedestrian (Walking Close-Range)</option>
+                                    <option value="VEHICLE">🚗 Vehicle (Long-Range UHF)</option>
+                                </select>
+                            </div>
+                            <div class="space-y-1">
+                                <label class="text-[11px] font-bold text-slate-600">Initial Approval Status</label>
+                                <select id="bulkStudentStatus" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white">
+                                    <option value="APPROVED">🟢 APPROVED (Ready for immediate access)</option>
+                                    <option value="PENDING">🟡 PENDING (Requires RFID tag linking)</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Template & File Upload Card -->
+                    <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-4 bg-emerald-50/50 rounded-2xl border border-emerald-100">
+                        <div class="flex items-center gap-3">
+                            <div class="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold">
+                                <i data-lucide="file-spreadsheet" class="w-5 h-5"></i>
+                            </div>
+                            <div>
+                                <h5 class="text-xs font-bold text-emerald-950">Official Student CSV Template</h5>
+                                <p class="text-[11px] text-emerald-700">Pre-formatted columns: Student ID, Full Name, Sex, Age, Address, Plate Number</p>
+                            </div>
+                        </div>
+                        <button onclick="downloadCSVTemplate('students')" class="bg-white border border-emerald-300 text-emerald-800 hover:bg-emerald-100/50 px-4 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all whitespace-nowrap">
+                            <i data-lucide="download" class="w-4 h-4"></i> Download Template (.csv)
+                        </button>
+                    </div>
+
+                    <!-- Drag and Drop Dropzone -->
+                    <div id="studentDropzone" class="border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-3xl p-6 text-center cursor-pointer bg-slate-50/50 hover:bg-emerald-50/20 transition-all group" onclick="el('bulkStudentFileInput').click()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, 'students')">
+                        <input type="file" id="bulkStudentFileInput" accept=".csv, .txt" class="hidden" onchange="handleFileSelected(event, 'students')">
+                        <div class="flex flex-col items-center gap-2">
+                            <div class="w-12 h-12 rounded-2xl bg-white shadow-sm border border-slate-200 flex items-center justify-center text-slate-500 group-hover:text-emerald-600 group-hover:scale-110 transition-all">
+                                <i data-lucide="upload" class="w-6 h-6"></i>
+                            </div>
+                            <p class="text-sm font-bold text-slate-700 mt-1">Click to browse or drag and drop student roster (.csv)</p>
+                            <p class="text-xs text-slate-400">Supports standard CSV files exported from Excel, Google Sheets, or School Registrar</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 2: FACULTY & STAFF UPLOAD -->
+                <div id="bulkTabContent-faculty" class="hidden space-y-5">
+                    <div class="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 space-y-4">
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div class="space-y-1">
+                                <label class="text-[11px] font-bold text-slate-600">Department / College *</label>
+                                <select id="bulkFacultyDept" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white">
+                                    <option value="College of Computing">College of Computing</option>
+                                    <option value="College of Agriculture">College of Agriculture</option>
+                                    <option value="College of Education">College of Education</option>
+                                    <option value="College of Hospitality">College of Hospitality</option>
+                                    <option value="Administration">Administration &amp; Support</option>
+                                </select>
+                            </div>
+                            <div class="space-y-1">
+                                <label class="text-[11px] font-bold text-slate-600">Default Role *</label>
+                                <select id="bulkFacultyRole" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white">
+                                    <option value="Faculty">Faculty (Instructor / Professor)</option>
+                                    <option value="Staff">Staff (Admin / Maintenance)</option>
+                                    <option value="Others">Others (Vendor / Contractor)</option>
+                                </select>
+                            </div>
+                            <div class="space-y-1">
+                                <label class="text-[11px] font-bold text-slate-600">Initial Approval Status</label>
+                                <select id="bulkFacultyStatus" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white">
+                                    <option value="APPROVED">🟢 APPROVED (Active Access)</option>
+                                    <option value="PENDING">🟡 PENDING (Needs RFID Pass)</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-4 bg-emerald-50/50 rounded-2xl border border-emerald-100">
+                        <div class="flex items-center gap-3">
+                            <div class="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold">
+                                <i data-lucide="file-spreadsheet" class="w-5 h-5"></i>
+                            </div>
+                            <div>
+                                <h5 class="text-xs font-bold text-emerald-950">Faculty &amp; Staff CSV Template</h5>
+                                <p class="text-[11px] text-emerald-700">Columns: Employee ID / CPASS, Full Name, Role, Department, Vehicle Type, Plate Number</p>
+                            </div>
+                        </div>
+                        <button onclick="downloadCSVTemplate('faculty')" class="bg-white border border-emerald-300 text-emerald-800 hover:bg-emerald-100/50 px-4 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all whitespace-nowrap">
+                            <i data-lucide="download" class="w-4 h-4"></i> Download Template (.csv)
+                        </button>
+                    </div>
+
+                    <!-- Drag and Drop Dropzone -->
+                    <div id="facultyDropzone" class="border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-3xl p-6 text-center cursor-pointer bg-slate-50/50 hover:bg-emerald-50/20 transition-all group" onclick="el('bulkFacultyFileInput').click()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, 'faculty')">
+                        <input type="file" id="bulkFacultyFileInput" accept=".csv, .txt" class="hidden" onchange="handleFileSelected(event, 'faculty')">
+                        <div class="flex flex-col items-center gap-2">
+                            <div class="w-12 h-12 rounded-2xl bg-white shadow-sm border border-slate-200 flex items-center justify-center text-slate-500 group-hover:text-emerald-600 group-hover:scale-110 transition-all">
+                                <i data-lucide="upload" class="w-6 h-6"></i>
+                            </div>
+                            <p class="text-sm font-bold text-slate-700 mt-1">Click to browse or drag and drop Faculty/Staff roster (.csv)</p>
+                            <p class="text-xs text-slate-400">Auto-assigns CPASS IDs (`CP00`, `CP01`...) if employee ID is left empty</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 3: PROGRAMS & SECTIONS MASTER DATA -->
+                <div id="bulkTabContent-programs" class="hidden space-y-6">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <!-- Add Program Card -->
+                        <div class="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-3">
+                            <h4 class="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-2">
+                                <i data-lucide="plus-circle" class="w-4 h-4 text-emerald-600"></i> Add Academic Program / Course
+                            </h4>
+                            <div class="space-y-2">
+                                <input type="text" id="newProgCode" placeholder="Program Code (e.g. BSIT, BSN, BSCE)" class="w-full text-xs font-bold uppercase px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white">
+                                <input type="text" id="newProgName" placeholder="Full Program Name (e.g. BS in Nursing)" class="w-full text-xs font-semibold px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white">
+                                <input type="text" id="newProgDept" placeholder="Department / College (e.g. College of Nursing)" class="w-full text-xs font-semibold px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white">
+                                <button onclick="saveNewAcademicProgram()" class="w-full bg-charm-dark text-white text-xs font-bold py-2.5 rounded-xl hover:bg-opacity-90 shadow-sm flex items-center justify-center gap-2">
+                                    <i data-lucide="plus" class="w-4 h-4"></i> Add Program
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Add Section Card -->
+                        <div class="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-3">
+                            <h4 class="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-2">
+                                <i data-lucide="layers" class="w-4 h-4 text-emerald-600"></i> Add Year &amp; Section
+                            </h4>
+                            <div class="space-y-2">
+                                <select id="newSecProgram" class="w-full text-xs font-bold px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white"></select>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <select id="newSecYear" class="w-full text-xs font-semibold px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white">
+                                        <option value="1">1st Year</option>
+                                        <option value="2">2nd Year</option>
+                                        <option value="3">3rd Year</option>
+                                        <option value="4">4th Year</option>
+                                    </select>
+                                    <input type="text" id="newSecName" placeholder="Section (e.g. 1A, 3B)" class="w-full text-xs font-bold uppercase px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white">
+                                </div>
+                                <button onclick="saveNewAcademicSection()" class="w-full bg-emerald-600 text-white text-xs font-bold py-2.5 rounded-xl hover:bg-emerald-700 shadow-sm flex items-center justify-center gap-2">
+                                    <i data-lucide="plus" class="w-4 h-4"></i> Add Section
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Active Programs & Sections Badge Grid -->
+                    <div class="space-y-3">
+                        <h4 class="text-xs font-black uppercase tracking-wider text-slate-500">Configured Programs &amp; Active Sections</h4>
+                        <div id="academicProgramsBadgesList" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+                    </div>
+                </div>
+
+                <!-- PREVIEW & VALIDATION SECTION (Visible when file is parsed) -->
+                <div id="bulkPreviewContainer" class="hidden space-y-4 pt-4 border-t border-slate-200">
+                    <!-- Status Header Bar -->
+                    <div class="flex flex-wrap items-center justify-between gap-3 p-4 bg-slate-900 text-white rounded-2xl">
+                        <div class="flex items-center gap-3">
+                            <div class="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center">
+                                <i data-lucide="eye" class="w-4 h-4 text-emerald-400"></i>
+                            </div>
+                            <div>
+                                <h4 class="text-xs font-black uppercase tracking-wider">File Verification &amp; Import Preview</h4>
+                                <p class="text-[11px] text-slate-300" id="bulkPreviewFileName">roster.csv</p>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span id="bulkBadgeTotal" class="px-3 py-1 rounded-full text-xs font-bold bg-white/20 text-white">0 Total</span>
+                            <span id="bulkBadgeValid" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/30 text-emerald-300 border border-emerald-500/40">0 Valid</span>
+                            <span id="bulkBadgeWarn" class="px-3 py-1 rounded-full text-xs font-bold bg-yellow-500/30 text-yellow-300 border border-yellow-500/40 hidden">0 Warnings</span>
+                        </div>
+                    </div>
+
+                    <!-- Scrollable Preview Table -->
+                    <div class="max-h-64 overflow-y-auto rounded-2xl border border-slate-200 shadow-inner bg-slate-50/50">
+                        <table class="w-full text-left border-collapse text-xs">
+                            <thead class="bg-slate-100 text-slate-600 font-bold uppercase tracking-wider text-[10px] sticky top-0 border-b border-slate-200">
+                                <tr>
+                                    <th class="p-2.5 text-center">#</th>
+                                    <th class="p-2.5">ID / CPASS</th>
+                                    <th class="p-2.5">Full Name</th>
+                                    <th class="p-2.5">Role</th>
+                                    <th class="p-2.5">Program &amp; Section</th>
+                                    <th class="p-2.5">Transit / Vehicle</th>
+                                    <th class="p-2.5 text-center">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bulkPreviewTableBody" class="divide-y divide-slate-200/60 bg-white font-medium"></tbody>
+                        </table>
+                    </div>
+
+                    <!-- Animated Progress Bar Container -->
+                    <div id="bulkProgressBarContainer" class="hidden space-y-1.5">
+                        <div class="flex justify-between text-xs font-bold text-slate-700">
+                            <span id="bulkProgressLabel">Uploading records to CHARRMPASS...</span>
+                            <span id="bulkProgressPercent">0%</span>
+                        </div>
+                        <div class="w-full h-3 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
+                            <div id="bulkProgressBarFill" class="h-full bg-emerald-500 transition-all duration-300 rounded-full" style="width: 0%;"></div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- Modal Footer Controls -->
+            <div class="p-6 border-t border-slate-100 bg-slate-50/70 flex flex-wrap items-center justify-between gap-3">
+                <button onclick="resetBulkUploadForm()" id="btnResetBulk" class="text-xs font-bold text-slate-500 hover:text-slate-800 flex items-center gap-1.5 transition-all">
+                    <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> Clear File
+                </button>
+                <div class="flex items-center gap-3">
+                    <button onclick="closeBulkUploadModal()" class="px-5 py-2.5 rounded-xl text-sm font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-50">Cancel</button>
+                    <button id="btnExecuteBulkImport" onclick="executeBulkImport()" disabled class="px-6 py-2.5 rounded-xl text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-md flex items-center gap-2 transition-all">
+                        <i data-lucide="check-circle-2" class="w-4 h-4"></i>
+                        <span id="btnExecuteBulkImportText">Import to CHARRMPASS</span>
+                    </button>
+                </div>
             </div>
         </div>
     </div>
