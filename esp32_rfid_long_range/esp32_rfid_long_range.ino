@@ -450,6 +450,65 @@ class BleCharCallbacks : public BLECharacteristicCallbacks {
 
 void sendDeviceHeartbeat() {
   if (WiFi.status() != WL_CONNECTED) return;
+
+  // 1. Check for Over-The-Air Wi-Fi Reconfiguration Commands from Supabase Admin Dashboard
+  HTTPClient checkHttp;
+  String checkUrl = String(SUPABASE_URL) + "/rest/v1/devices?esp32_identifier=eq." + String(GATE_ID) + "&select=target_ssid,target_pass";
+  checkHttp.begin(checkUrl);
+  checkHttp.addHeader("apikey", SUPABASE_ANON);
+  checkHttp.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
+  
+  int getCode = checkHttp.GET();
+  if (getCode == 200) {
+    String resp = checkHttp.getString();
+    int ssidPos = resp.indexOf("\"target_ssid\":");
+    if (ssidPos != -1) {
+      int startQ = resp.indexOf("\"", ssidPos + 14);
+      int endQ = resp.indexOf("\"", startQ + 1);
+      if (startQ != -1 && endQ != -1 && endQ > startQ + 1) {
+        String newSsid = resp.substring(startQ + 1, endQ);
+        String newPass = "";
+        int passPos = resp.indexOf("\"target_pass\":");
+        if (passPos != -1) {
+          int pStart = resp.indexOf("\"", passPos + 14);
+          int pEnd = resp.indexOf("\"", pStart + 1);
+          if (pStart != -1 && pEnd != -1 && pEnd > pStart + 1) {
+            newPass = resp.substring(pStart + 1, pEnd);
+          }
+        }
+
+        if (newSsid.length() > 0) {
+          Serial.println("\n🌐 [REMOTE CLOUD CMD] Received Wi-Fi Change request for SSID: '" + newSsid + "'");
+          lcdMsg("REMOTE WIFI CMD", newSsid.substring(0, 16));
+          checkHttp.end();
+
+          // Clear target_ssid in Supabase first to prevent loops
+          HTTPClient clearHttp;
+          String clearUrl = String(SUPABASE_URL) + "/rest/v1/devices?esp32_identifier=eq." + String(GATE_ID);
+          clearHttp.begin(clearUrl);
+          clearHttp.addHeader("apikey", SUPABASE_ANON);
+          clearHttp.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
+          clearHttp.addHeader("Content-Type", "application/json");
+          clearHttp.PATCH("{\"target_ssid\":null,\"target_pass\":null}");
+          clearHttp.end();
+
+          // Attempt connection to the new network
+          bool ok = attemptWifiConnection(newSsid, newPass, 15);
+          if (ok) {
+            syncWhitelistToRam();
+          } else {
+            Serial.println("[REMOTE CMD] Failed to connect to new Wi-Fi. Reconnecting to saved network...");
+            attemptWifiConnection(currentSsid, currentPass, 10);
+          }
+          showReady();
+          return;
+        }
+      }
+    }
+  }
+  checkHttp.end();
+
+  // 2. Report Live Online Status, Wi-Fi SSID, and IP Address to Cloud
   HTTPClient http;
   String url = String(SUPABASE_URL) + "/rest/v1/devices?esp32_identifier=eq." + String(GATE_ID);
   http.begin(url);
@@ -457,7 +516,7 @@ void sendDeviceHeartbeat() {
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
   http.addHeader("Content-Type", "application/json");
 
-  String payload = "{\"status\":\"ONLINE\",\"last_online\":\"now()\"}";
+  String payload = "{\"status\":\"ONLINE\",\"last_online\":\"now()\",\"wifi_ssid\":\"" + WiFi.SSID() + "\",\"ip_address\":\"" + WiFi.localIP().toString() + "\"}";
   int code = http.PATCH(payload);
   if (code < 200 || code >= 300) {
     http.end();
@@ -473,7 +532,7 @@ void sendDeviceHeartbeat() {
                          "\",\"device_category\":\"" + String(GATE_CATEGORY) + 
                          "\",\"rfid_range\":\"" + String(RFID_RANGE_MODE) + 
                          "\",\"device_location\":\"Main Gate Barrier\"" + 
-                         ",\"status\":\"ONLINE\",\"last_online\":\"now()\"}";
+                         ",\"status\":\"ONLINE\",\"last_online\":\"now()\",\"wifi_ssid\":\"" + WiFi.SSID() + "\",\"ip_address\":\"" + WiFi.localIP().toString() + "\"}";
     http.POST(fullPayload);
   }
   http.end();

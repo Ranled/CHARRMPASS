@@ -4208,8 +4208,11 @@ window.renderEsp32DevicesTable = function() {
                 </td>
                 <td class="p-3.5 text-center">${d.statusBadge}</td>
                 <td class="p-3.5 text-right">
-                    <div class="flex items-center justify-end gap-1.5">
-                        <button onclick="reprovisionDevice('${d.gate_type || 'ENTRY'}')" class="px-2.5 py-1 bg-slate-100 hover:bg-charm-dark hover:text-white rounded-lg font-bold text-xs transition-colors" title="Pair & Provision Wi-Fi">Provision</button>
+                    <div class="flex items-center justify-end gap-1.5 flex-wrap">
+                        <button onclick="openChangeGateWifiModal('${d.id}', '${(d.device_name || d.esp32_identifier).replace(/'/g, "\\'")}', '${d.esp32_identifier}')" class="px-2.5 py-1 bg-charm-dark text-white hover:bg-charm-mid rounded-lg font-bold text-xs flex items-center gap-1 transition-colors shadow-sm" title="Change Wi-Fi Over-The-Air (1-Click)">
+                            <i data-lucide="wifi" class="w-3.5 h-3.5 text-charm-yellow"></i> Change Wi-Fi
+                        </button>
+                        <button onclick="reprovisionDevice('${d.gate_type || 'ENTRY'}')" class="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-bold text-xs transition-colors" title="Pair & Provision via Bluetooth (Offline)">BLE</button>
                         <button onclick="openDeviceModal('${d.id}')" class="p-1.5 text-slate-400 hover:text-blue-600 rounded-lg transition-colors" title="Edit Gate Unit"><i data-lucide="edit-2" class="w-3.5 h-3.5"></i></button>
                         <button onclick="deleteDevice('${d.id}')" class="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition-colors" title="Delete Gate Unit"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
                     </div>
@@ -4428,6 +4431,135 @@ el('deviceForm')?.addEventListener('submit', async (e) => {
         showToast('Error saving gate unit: ' + err.message, 'error');
     }
 });
+
+// ==============================================
+// 1-CLICK REMOTE OVER-THE-AIR WI-FI RECONFIGURATION
+// ==============================================
+window.openChangeGateWifiModal = function(deviceId = null, deviceName = '', esp32Identifier = '') {
+    const modal = el('changeGateWifiModal');
+    if (!modal) return;
+
+    const devSelect = el('changeWifiDeviceId');
+    const devices = adminState.devices || [];
+
+    if (devSelect) {
+        if (devices.length > 0) {
+            devSelect.innerHTML = devices.map(d => {
+                const isSelected = (deviceId && d.id === deviceId) || (esp32Identifier && d.esp32_identifier === esp32Identifier);
+                const wifiInfo = d.wifi_ssid ? ` • Current Wi-Fi: ${d.wifi_ssid}` : '';
+                return `<option value="${d.id}" data-identifier="${d.esp32_identifier}" data-name="${(d.device_name || d.esp32_identifier).replace(/"/g, '&quot;')}" ${isSelected ? 'selected' : ''}>
+                    ${d.device_name || d.esp32_identifier} (${d.esp32_identifier})${wifiInfo}
+                </option>`;
+            }).join('');
+        } else {
+            devSelect.innerHTML = `<option value="DEFAULT_GATE" data-identifier="CHARRMPASS_GATE_ENTRY" data-name="CHARRMPASS Entry Unit">CHARRMPASS Entry Unit (Default Gate)</option>`;
+        }
+    }
+
+    if (el('changeWifiSsid')) el('changeWifiSsid').value = '';
+    if (el('changeWifiPass')) el('changeWifiPass').value = '';
+
+    modal.classList.remove('hidden');
+    setTimeout(() => {
+        modal.classList.remove('opacity-0');
+        el('changeGateWifiModalContent')?.classList.remove('scale-95');
+    }, 10);
+    lucide.createIcons();
+};
+
+window.closeChangeGateWifiModal = function() {
+    const modal = el('changeGateWifiModal');
+    if (!modal) return;
+    modal.classList.add('opacity-0');
+    el('changeGateWifiModalContent')?.classList.add('scale-95');
+    setTimeout(() => modal.classList.add('hidden'), 300);
+};
+
+window.submitChangeGateWifi = async function(event) {
+    if (event) event.preventDefault();
+
+    const devSelect = el('changeWifiDeviceId');
+    const deviceId = devSelect?.value;
+    const selectedOption = devSelect?.options[devSelect.selectedIndex];
+    const deviceName = selectedOption?.getAttribute('data-name') || 'Gate Unit';
+    const esp32Identifier = selectedOption?.getAttribute('data-identifier') || '';
+
+    const newSsid = el('changeWifiSsid')?.value?.trim();
+    const newPass = el('changeWifiPass')?.value || '';
+
+    if (!newSsid) {
+        showToast('Please enter the new Wi-Fi SSID network name.', 'warning');
+        return;
+    }
+
+    const submitBtn = el('btnSubmitChangeWifi');
+    const originalBtnHtml = submitBtn ? submitBtn.innerHTML : '';
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin text-charm-yellow"></i> Sending Command...`;
+        lucide.createIcons();
+    }
+
+    appendBleLog(`[OTA Wi-Fi] Initiating remote Wi-Fi command for "${deviceName}" (${esp32Identifier})...`, 'system');
+    appendBleLog(`[OTA Wi-Fi] Target SSID: "${newSsid}" (Password: ${newPass ? '••••••••' : 'Open'})`, 'info');
+
+    try {
+        if (isConnected && supabaseClient) {
+            let updateQuery;
+            if (deviceId && deviceId !== 'DEFAULT_GATE') {
+                updateQuery = supabaseClient
+                    .from('devices')
+                    .update({
+                        target_ssid: newSsid,
+                        target_pass: newPass,
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq('id', deviceId);
+            } else if (esp32Identifier) {
+                updateQuery = supabaseClient
+                    .from('devices')
+                    .update({
+                        target_ssid: newSsid,
+                        target_pass: newPass,
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq('esp32_identifier', esp32Identifier);
+            } else {
+                updateQuery = supabaseClient
+                    .from('devices')
+                    .update({
+                        target_ssid: newSsid,
+                        target_pass: newPass,
+                        updated_at: new Date().toISOString()
+                    })
+                    .eq('gate_type', 'ENTRY');
+            }
+
+            const { data, error } = await updateQuery;
+            if (error) throw error;
+
+            appendBleLog(`[OTA Wi-Fi] ✅ Wi-Fi update command delivered to Supabase queue for ${deviceName}! ESP32 will switch within seconds.`, 'success');
+            showToast(`Wi-Fi update command sent to ${deviceName}! It will connect to "${newSsid}" automatically.`, 'success');
+        } else {
+            appendBleLog(`[OTA Wi-Fi] Simulation: Stored target Wi-Fi (${newSsid}) locally for ${deviceName}.`, 'info');
+            showToast(`Wi-Fi update command queued locally for ${deviceName}.`, 'info');
+        }
+
+        closeChangeGateWifiModal();
+        if (window.pingAllGates) setTimeout(() => window.pingAllGates(), 1500);
+
+    } catch (err) {
+        console.error('Error dispatching OTA Wi-Fi update:', err);
+        appendBleLog(`[OTA Wi-Fi] ❌ Failed to dispatch Wi-Fi command: ${err.message}`, 'error');
+        showToast('Failed to send Wi-Fi command: ' + err.message, 'error');
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = originalBtnHtml;
+            lucide.createIcons();
+        }
+    }
+};
 
 // ============================================================
 // ACADEMIC PROGRAMS, SECTIONS & BULK UPLOAD SUBSYSTEM
