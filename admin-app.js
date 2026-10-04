@@ -580,18 +580,28 @@ function renderAdmin() {
                     <span class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${roleBadgeClass}">${roleDisplay}</span>
                     <div class="text-[11px] text-slate-400 mt-1">${u.address ? u.address.substring(0, 18) + (u.address.length > 18 ? '...' : '') : '--'}</div>
                 </td>
-                <td class="p-4">
+                <td class="p-4 whitespace-nowrap">
                     ${(() => {
                         if (hasPed && vehCount > 0) {
                             return `
-                                <div class="space-y-1">
-                                    <span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-100 text-blue-800 border border-blue-200 inline-flex items-center gap-1">🚶 Pedestrian</span>
-                                    <span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1">🚗 ${vehCount} Vehicle(s)</span>
+                                <div class="flex flex-col gap-1.5 items-start">
+                                    <span class="px-2.5 py-1 rounded-xl text-[10px] font-black bg-blue-100 text-blue-800 border border-blue-200 inline-flex items-center gap-1.5 whitespace-nowrap shadow-xs">
+                                        <span>🚶</span> Pedestrian (Close-Range)
+                                    </span>
+                                    <span class="px-2.5 py-1 rounded-xl text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1.5 whitespace-nowrap shadow-xs">
+                                        <span>🚗</span> ${vehCount} Vehicle(s) (Long-Range UHF)
+                                    </span>
                                 </div>`;
                         } else if (hasPed) {
-                            return `<span class="px-2.5 py-1 rounded-full text-[10px] font-black bg-blue-100 text-blue-800 border border-blue-200 inline-flex items-center gap-1">🚶 Pedestrian (Close-Range)</span>`;
+                            return `
+                                <span class="px-2.5 py-1 rounded-xl text-[10px] font-black bg-blue-100 text-blue-800 border border-blue-200 inline-flex items-center gap-1.5 whitespace-nowrap shadow-xs">
+                                    <span>🚶</span> Pedestrian (Close-Range)
+                                </span>`;
                         } else {
-                            return `<span class="px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1">🚗 ${vehCount || 1} Vehicle (Long-Range UHF)</span>`;
+                            return `
+                                <span class="px-2.5 py-1 rounded-xl text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1.5 whitespace-nowrap shadow-xs">
+                                    <span>🚗</span> ${vehCount || 1} Vehicle (Long-Range UHF)
+                                </span>`;
                         }
                     })()}
                 </td>
@@ -639,13 +649,13 @@ function renderAdmin() {
                         `).join('');
                     })()}
                 </td>
-                <td class="p-4 text-center">
+                <td class="p-4 text-center whitespace-nowrap">
                     ${onCampus ? `
-                        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-xs whitespace-nowrap">
                             <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> INSIDE
                         </span>
                     ` : `
-                        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                        <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-black bg-slate-100 text-slate-500 border border-slate-200 whitespace-nowrap">
                             ⚪ OFF-CAMPUS
                         </span>
                     `}
