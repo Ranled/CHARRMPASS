@@ -4673,25 +4673,25 @@ window.downloadCSVTemplate = function(type) {
             const prog = el('bulkStudentProgram')?.value || 'BSIT';
             const sec = el('bulkStudentSection')?.value || '3A';
             filename = `CHARRMPASS_Students_${prog}_${sec}_Template.csv`;
-            csvContent = "Student ID,Full Name,Sex,Age,Address,Transit Mode,Vehicle Type,Plate Number\n" +
-                         "2022-00101,\"Dela Cruz, Juan M.\",Male,21,\"Ibajay, Aklan\",VEHICLE,Motorcycle,ABC-1234\n" +
-                         "2022-00102,\"Santos, Maria Clara\",Female,20,\"Kalibo, Aklan\",PEDESTRIAN,None,\n" +
-                         "2022-00103,\"Reyes, Carlos P.\",Male,21,\"Tangalan, Aklan\",PEDESTRIAN,None,\n" +
-                         "2022-00104,\"Lopez, Ana Beatriz\",Female,22,\"Numancia, Aklan\",VEHICLE,Car,XYZ-5678\n";
+            csvContent = "Student ID,Last Name,First Name,Middle Name,Suffix,Sex,Age,Address,Transit Mode,Vehicle Type,Plate Number\n" +
+                         "2022-00101,Dela Cruz,Juan,Mercado,,Male,21,\"Ibajay, Aklan\",VEHICLE,Motorcycle,ABC-1234\n" +
+                         "2022-00102,Santos,Maria Clara,Reyes,,Female,20,\"Kalibo, Aklan\",PEDESTRIAN,None,\n" +
+                         "2022-00103,Reyes,Carlos,Padilla,Jr.,Male,21,\"Tangalan, Aklan\",PEDESTRIAN,None,\n" +
+                         "2022-00104,Lopez,Ana Beatriz,Villanueva,,Female,22,\"Numancia, Aklan\",VEHICLE,Car,XYZ-5678\n";
         } else {
             filename = `CHARRMPASS_Master_Students_Template.csv`;
-            csvContent = "Student ID,Full Name,Program,Section,Sex,Age,Address,Transit Mode,Vehicle Type,Plate Number\n" +
-                         "2022-00101,\"Dela Cruz, Juan M.\",BSIT,3A,Male,21,\"Ibajay, Aklan\",VEHICLE,Motorcycle,ABC-1234\n" +
-                         "2022-00102,\"Santos, Maria Clara\",BSCS,2B,Female,20,\"Kalibo, Aklan\",PEDESTRIAN,None,\n" +
-                         "2022-00103,\"Reyes, Carlos P.\",BSA,1A,Male,19,\"Tangalan, Aklan\",PEDESTRIAN,None,\n";
+            csvContent = "Student ID,Last Name,First Name,Middle Name,Suffix,Program,Section,Sex,Age,Address,Transit Mode,Vehicle Type,Plate Number\n" +
+                         "2022-00101,Dela Cruz,Juan,Mercado,,BSIT,3A,Male,21,\"Ibajay, Aklan\",VEHICLE,Motorcycle,ABC-1234\n" +
+                         "2022-00102,Santos,Maria Clara,Reyes,,BSCS,2B,Female,20,\"Kalibo, Aklan\",PEDESTRIAN,None,\n" +
+                         "2022-00103,Reyes,Carlos,Padilla,Jr.,BSA,1A,Male,19,\"Tangalan, Aklan\",PEDESTRIAN,None,\n";
         }
     } else {
         filename = `CHARRMPASS_Faculty_Staff_Template.csv`;
-        csvContent = "Employee ID,Full Name,Role,Department,Sex,Age,Transit Mode,Vehicle Type,Plate Number\n" +
-                     "EMP-2018-01,\"Dr. Alan M. Turing\",Faculty,\"College of Computing\",Male,42,VEHICLE,SUV,ABC-789\n" +
-                     "EMP-2020-04,\"Grace Hopper\",Faculty,\"College of Engineering\",Female,38,VEHICLE,Car,XYZ-456\n" +
-                     "STAFF-009,\"Juanita Cruz\",Staff,\"Administration\",Female,30,PEDESTRIAN,None,\n" +
-                     "VENDOR-02,\"Pedro Penduko\",Others,\"Canteen Services\",Male,45,VEHICLE,Motorcycle,JKL-321\n";
+        csvContent = "Employee ID,Last Name,First Name,Middle Name,Suffix,Role,Department,Sex,Age,Address,Transit Mode,Vehicle Type,Plate Number\n" +
+                     "EMP-2018-01,Turing,Alan,Mathison,Dr.,Faculty,\"College of Computing\",Male,42,\"Kalibo, Aklan\",VEHICLE,SUV,ABC-789\n" +
+                     "EMP-2020-04,Hopper,Grace,Brewster,,Faculty,\"College of Engineering\",Female,38,\"Ibajay, Aklan\",VEHICLE,Car,XYZ-456\n" +
+                     "STAFF-009,Cruz,Juanita,Bautista,,Staff,Administration,Female,30,\"Makato, Aklan\",PEDESTRIAN,None,\n" +
+                     "VENDOR-02,Penduko,Pedro,Santos,,Others,\"Canteen Services\",Male,45,\"Numancia, Aklan\",VEHICLE,Motorcycle,JKL-321\n";
     }
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -4787,6 +4787,14 @@ function parseCSVTextAndPreview(csvText, type, fileName) {
             
             if (['studentid', 'idnumber', 'id', 'cpassid', 'cpass', 'employeeid'].includes(cleanKey)) {
                 mapped.id_number = val;
+            } else if (['lastname', 'surname', 'familyname', 'lname', 'last'].includes(cleanKey)) {
+                mapped.last_name = val;
+            } else if (['firstname', 'givenname', 'fname', 'first'].includes(cleanKey)) {
+                mapped.first_name = val;
+            } else if (['middlename', 'middleinitial', 'mi', 'middle', 'mname'].includes(cleanKey)) {
+                mapped.middle_name = val;
+            } else if (['suffix', 'extension', 'ext', 'nameext', 'suffixname'].includes(cleanKey)) {
+                mapped.suffix = val;
             } else if (['fullname', 'name', 'studentname', 'person', 'employeename'].includes(cleanKey)) {
                 mapped.full_name = val;
             } else if (['sex', 'gender'].includes(cleanKey)) {
@@ -4805,7 +4813,7 @@ function parseCSVTextAndPreview(csvText, type, fileName) {
                 mapped.default_transit_mode = val.toUpperCase().includes('VEH') ? 'VEHICLE' : 'PEDESTRIAN';
             } else if (['platenumber', 'plate', 'plateno'].includes(cleanKey)) {
                 mapped.plate_number = val.toUpperCase();
-            } else if (['vehicletype', 'vehicletype', 'type'].includes(cleanKey)) {
+            } else if (['vehicletype', 'type'].includes(cleanKey)) {
                 mapped.vehicle_type = val;
             } else if (['vehiclemodel', 'model'].includes(cleanKey)) {
                 mapped.vehicle_model = val;
@@ -4813,6 +4821,30 @@ function parseCSVTextAndPreview(csvText, type, fileName) {
                 mapped.rfid_uid = val.toUpperCase();
             }
         }
+
+        // Assemble Full Name from parts if separate columns were provided
+        let finalFullName = '';
+        if (mapped.last_name || mapped.first_name) {
+            const last = (mapped.last_name || '').trim();
+            const first = (mapped.first_name || '').trim();
+            const middle = (mapped.middle_name || '').trim();
+            const suffix = (mapped.suffix || '').trim();
+
+            if (last && first) {
+                let middlePart = '';
+                if (middle) {
+                    middlePart = middle.length === 1 ? ` ${middle}.` : ` ${middle}`;
+                }
+                let suffixPart = suffix ? ` ${suffix}` : '';
+                finalFullName = `${last}, ${first}${middlePart}${suffixPart}`.trim();
+            } else {
+                finalFullName = `${last} ${first}`.trim();
+            }
+        } else if (mapped.full_name) {
+            finalFullName = mapped.full_name.trim();
+        }
+
+        mapped.full_name = finalFullName;
 
         if (!mapped.full_name && !mapped.id_number) return; // skip completely empty rows
 
