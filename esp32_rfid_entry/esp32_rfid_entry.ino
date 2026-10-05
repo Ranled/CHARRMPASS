@@ -136,6 +136,10 @@ bool wifiConnected = false;
 unsigned long lastWhitelistSync = 0;
 const unsigned long WHITELIST_SYNC_INTERVAL = 300000; // 5 minutes
 
+// Forward declarations
+bool attemptWifiConnection(String testSsid, String testPass, int timeoutSeconds = 20);
+void syncWhitelistToSD();
+
 // =======================
 // HELPERS — LCD
 // =======================
@@ -830,7 +834,7 @@ void sendDeviceHeartbeat() {
           // Attempt connection to the new network
           bool ok = attemptWifiConnection(newSsid, newPass, 15);
           if (ok) {
-            syncWhitelistToRam();
+            syncWhitelistToSD();
           } else {
             Serial.println("[REMOTE CMD] Failed to connect to new Wi-Fi. Reconnecting to saved network...");
             attemptWifiConnection(currentSsid, currentPass, 10);
@@ -990,7 +994,7 @@ void scanAndPrintNetworks() {
 // =======================
 // WIFI CONNECTION & AUTO RECONNECT
 // =======================
-bool attemptWifiConnection(String testSsid, String testPass, int timeoutSeconds = 20) {
+bool attemptWifiConnection(String testSsid, String testPass, int timeoutSeconds) {
   if (testSsid.length() == 0) return false;
 
   Serial.println("\n===========================================");

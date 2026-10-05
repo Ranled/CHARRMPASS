@@ -568,16 +568,29 @@ function buildReview() {
 // FORM SUBMISSION
 // =====================
 function isDbConnected() {
-    return typeof isConnected !== 'undefined' && isConnected;
+    return (typeof supabaseClient !== 'undefined' && supabaseClient !== null) || (typeof isConnected !== 'undefined' && isConnected);
 }
 
 async function submitPedestrian() {
     const role = document.getElementById('regRole').value;
     const isStudent = role === 'Student';
     const studentId = isStudent ? normalizeCpass(document.getElementById('regStudentId').value) : null;
+    const fullName = document.getElementById('regFullName').value.trim();
+
+    // Try storage upload for images if connected
+    let profileUrl = photoData.profile || null;
+    let idFrontUrl = photoData.idFront || null;
+    let idBackUrl = photoData.idBack || null;
+
+    if (isDbConnected() && typeof uploadImageToStorage === 'function') {
+        const uidSlug = (studentId || fullName).replace(/[^a-zA-Z0-9]/g, '_');
+        if (profileUrl) profileUrl = await uploadImageToStorage(profileUrl, 'avatars', `profile_${uidSlug}`);
+        if (idFrontUrl) idFrontUrl = await uploadImageToStorage(idFrontUrl, 'documents', `id_front_${uidSlug}`);
+        if (idBackUrl) idBackUrl = await uploadImageToStorage(idBackUrl, 'documents', `id_back_${uidSlug}`);
+    }
 
     const base = {
-        full_name:             document.getElementById('regFullName').value.trim(),
+        full_name:             fullName,
         age:                   parseInt(document.getElementById('regAge').value),
         sex:                   document.getElementById('regSex').value,
         address:               document.getElementById('regAddress').value.trim(),
@@ -586,9 +599,9 @@ async function submitPedestrian() {
         program:               document.getElementById('regProgram').value.trim() || null,
         section:               document.getElementById('regSection').value.trim() || null,
         default_transit_mode:  'PEDESTRIAN',
-        profile_image:         photoData.profile  || null,
-        id_front_image:        photoData.idFront  || null,
-        id_back_image:         photoData.idBack   || null,
+        profile_image:         profileUrl,
+        id_front_image:        idFrontUrl,
+        id_back_image:         idBackUrl,
     };
 
     if (isDbConnected()) {
@@ -651,13 +664,25 @@ async function submitPedestrian() {
 async function submitVehicle() {
     if (!verifiedOwner) throw new Error('Please verify your CPASS ID first.');
 
+    const plateNumber = document.getElementById('regPlate').value.toUpperCase().trim();
+    let motoUrl = photoData.motorcycle || null;
+    let orCrUrl = photoData.orCr || null;
+    let licUrl = photoData.license || null;
+
+    if (isDbConnected() && typeof uploadImageToStorage === 'function') {
+        const plateSlug = plateNumber.replace(/[^a-zA-Z0-9]/g, '_');
+        if (motoUrl) motoUrl = await uploadImageToStorage(motoUrl, 'vehicles', `motorcycle_${plateSlug}`);
+        if (orCrUrl) orCrUrl = await uploadImageToStorage(orCrUrl, 'documents', `or_cr_${plateSlug}`);
+        if (licUrl) licUrl = await uploadImageToStorage(licUrl, 'documents', `license_${plateSlug}`);
+    }
+
     const vehicle = {
         vehicle_type:     document.getElementById('regVehType').value,
         vehicle_model:    document.getElementById('regVehModel').value.trim(),
-        plate_number:     document.getElementById('regPlate').value.toUpperCase().trim(),
+        plate_number:     plateNumber,
         vehicle_color:    document.getElementById('regVehColor').value.trim(),
-        motorcycle_image: photoData.motorcycle || null,
-        or_cr_image:      photoData.orCr || null,
+        motorcycle_image: motoUrl,
+        or_cr_image:      orCrUrl,
     };
 
     if (isDbConnected()) {
@@ -669,9 +694,9 @@ async function submitVehicle() {
         if (vehErr) throw new Error(vehErr.message);
 
         // Driver's license is stored on the owner's profile when provided
-        if (photoData.license) {
+        if (licUrl) {
             await supabaseClient.from('users')
-                .update({ drivers_license_image: photoData.license })
+                .update({ drivers_license_image: licUrl })
                 .eq('id', verifiedOwner.id);
         }
 

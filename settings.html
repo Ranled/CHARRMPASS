@@ -15,6 +15,8 @@
         }}}
     </script>
     <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="supabase-config.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script>
         // RBAC Session Protection
@@ -45,9 +47,12 @@
                     <p class="text-[10px] text-slate-500 uppercase tracking-widest font-semibold">System Settings &amp; Configuration</p>
                 </div>
             </div>
-            <button onclick="history.back()" class="flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-charm-dark bg-white/60 px-4 py-2 rounded-xl border border-slate-200 shadow-sm transition-all">
-                <i data-lucide="arrow-left" class="w-4 h-4"></i> Back
-            </button>
+            <div class="flex items-center gap-4">
+                <div id="dbStatusBadge"></div>
+                <button onclick="history.back()" class="flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-charm-dark bg-white/60 px-4 py-2 rounded-xl border border-slate-200 shadow-sm transition-all">
+                    <i data-lucide="arrow-left" class="w-4 h-4"></i> Back
+                </button>
+            </div>
         </header>
 
         <div class="flex-1 p-6 md:p-10 max-w-4xl mx-auto w-full animate-slide-up">
@@ -240,9 +245,7 @@
         </div>
     </div>
 
-    <script src="supabase-config.js"></script>
     <script>
-        initSupabase();
         lucide.createIcons();
 
         function togglePass(id, btn) {
@@ -349,6 +352,7 @@
         }
 
         window.addEventListener('DOMContentLoaded', loadSettings);
+        window.addEventListener('supabase:connected', loadSettings);
     </script>
 </body>
 </html>

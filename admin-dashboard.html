@@ -22,15 +22,20 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script>
-        // RBAC Session Protection with seamless development fallback
+        if (window.jspdf && window.jspdf.jsPDF) {
+            window.jsPDF = window.jspdf.jsPDF;
+        }
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+    <script>
+        // RBAC Session Protection
         (function() {
-            let session = sessionStorage.getItem('charrmpass_session');
+            const session = sessionStorage.getItem('charrmpass_session');
             if (!session) {
-                // Initialize default Admin demo session so direct browser reloads always work seamlessly
-                const defaultAdmin = { username: 'admin', role: 'ADMIN', name: 'Administrator' };
-                sessionStorage.setItem('charrmpass_session', JSON.stringify(defaultAdmin));
-                session = JSON.stringify(defaultAdmin);
+                window.location.href = 'index.html';
+                return;
             }
             try {
                 const s = JSON.parse(session);
@@ -38,7 +43,7 @@
                     window.location.href = 'index.html';
                 }
             } catch(e) {
-                sessionStorage.setItem('charrmpass_session', JSON.stringify({ username: 'admin', role: 'ADMIN' }));
+                window.location.href = 'index.html';
             }
         })();
     </script>
@@ -217,24 +222,42 @@
 
                     <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col flex-1 min-h-[500px]">
                         <!-- Search & Sub-filters Bar -->
-                        <div class="flex flex-col md:flex-row gap-3 mb-6">
-                            <div class="relative flex-1">
-                                <i data-lucide="search" class="w-5 h-5 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"></i>
-                                <input type="text" id="userSearch" placeholder="Search by name, plate number, program, or RFID UID..." class="w-full pl-11 pr-4 py-2.5 rounded-xl border border-slate-200 bg-white/80 focus:outline-none focus:ring-2 focus:ring-charm-dark/50 text-sm font-medium shadow-inner" oninput="filterUsers()">
+                        <div class="flex flex-col gap-3.5 mb-6">
+                            <!-- Primary Search Bar with Integrated Search & Clear Actions -->
+                            <div class="flex flex-col sm:flex-row items-stretch gap-2.5 w-full">
+                                <div class="relative flex-1 min-w-[280px]">
+                                    <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                                        <i data-lucide="search" class="w-4 h-4 text-emerald-700"></i>
+                                    </div>
+                                    <input type="text" id="userSearch" placeholder="Search by name, student ID, plate number, program, or RFID UID..." 
+                                        class="w-full pl-10 pr-10 py-2.5 rounded-xl border border-slate-200 bg-white/90 focus:bg-white focus:outline-none focus:ring-2 focus:ring-charm-dark/50 text-sm font-medium shadow-inner placeholder-slate-400 transition-all" 
+                                        oninput="filterUsers()" onkeydown="if(event.key==='Enter') filterUsers()">
+                                    <button type="button" id="userSearchClearBtn" onclick="clearUserSearch()" 
+                                        class="hidden absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 transition-colors" title="Clear search">
+                                        <i data-lucide="x-circle" class="w-4 h-4"></i>
+                                    </button>
+                                </div>
+                                <button type="button" onclick="filterUsers()" 
+                                    class="px-5 py-2.5 bg-charm-dark hover:bg-emerald-800 text-white rounded-xl text-sm font-bold shadow-sm transition-all flex items-center justify-center gap-2 shrink-0 cursor-pointer">
+                                    <i data-lucide="search" class="w-4 h-4 text-charm-yellow"></i>
+                                    <span>Search</span>
+                                </button>
                             </div>
-                            <div class="flex flex-wrap gap-2">
-                                <select id="programFilter" class="px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white/80 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-charm-dark/50 shadow-sm" onchange="filterUsers()">
+
+                            <!-- Filter Dropdowns Row -->
+                            <div class="flex flex-wrap items-center gap-2 pt-1">
+                                <select id="programFilter" class="px-3.5 py-2 rounded-xl border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-charm-dark/50 shadow-sm hover:border-slate-300 transition-all" onchange="filterUsers()">
                                     <option value="">All Programs</option>
                                 </select>
-                                <select id="sectionFilter" class="px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white/80 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-charm-dark/50 shadow-sm" onchange="filterUsers()">
+                                <select id="sectionFilter" class="px-3.5 py-2 rounded-xl border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-charm-dark/50 shadow-sm hover:border-slate-300 transition-all" onchange="filterUsers()">
                                     <option value="">All Sections</option>
                                 </select>
-                                <select id="modeFilter" class="px-4 py-2.5 rounded-xl border border-slate-200 bg-white/80 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-charm-dark/50 shadow-sm" onchange="filterUsers()">
+                                <select id="modeFilter" class="px-3.5 py-2 rounded-xl border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-charm-dark/50 shadow-sm hover:border-slate-300 transition-all" onchange="filterUsers()">
                                     <option value="ALL">All Transit Types</option>
                                     <option value="PEDESTRIAN">🚶 Pedestrians (Close-Range)</option>
                                     <option value="VEHICLE">🚗 Vehicles (Long-Range)</option>
                                 </select>
-                                <select id="roleFilter" class="px-4 py-2.5 rounded-xl border border-slate-200 bg-white/80 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-charm-dark/50 shadow-sm" onchange="filterUsers()">
+                                <select id="roleFilter" class="px-3.5 py-2 rounded-xl border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-charm-dark/50 shadow-sm hover:border-slate-300 transition-all" onchange="filterUsers()">
                                     <option value="">All Roles</option>
                                     <option value="Student">Student</option>
                                     <option value="Faculty">Faculty</option>
@@ -242,7 +265,7 @@
                                     <option value="Visitor">Visitor</option>
                                     <option value="Others">Others (Vendor/Staff)</option>
                                 </select>
-                                <select id="presenceFilter" class="px-4 py-2.5 rounded-xl border border-slate-200 bg-white/80 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-charm-dark/50 shadow-sm" onchange="filterUsers()">
+                                <select id="presenceFilter" class="px-3.5 py-2 rounded-xl border border-slate-200 bg-white/90 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-charm-dark/50 shadow-sm hover:border-slate-300 transition-all" onchange="filterUsers()">
                                     <option value="ALL">All Campus Presence</option>
                                     <option value="INSIDE">🟢 Currently Inside Campus</option>
                                     <option value="OUTSIDE">⚪ Outside Campus</option>
@@ -250,19 +273,17 @@
                             </div>
                         </div>
 
-                        <!-- Users Data Table -->
+                        <!-- Users Data Table (Full Screen Fit - Zero Horizontal Scroll) -->
                         <div class="flex-1 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/80 shadow-sm">
-                            <table class="w-full text-left border-collapse min-w-[1100px]">
+                            <table class="w-full text-left border-collapse">
                                 <thead class="bg-slate-50/90 sticky top-0 backdrop-blur-md z-10 text-[11px] uppercase text-slate-500 font-black tracking-wider border-b border-slate-200">
                                     <tr>
-                                        <th class="p-4">Person / Driver</th>
-                                        <th class="p-4">Role &amp; Details</th>
-                                        <th class="p-4">Transit &amp; RFID Range</th>
-                                        <th class="p-4">RFID UID Tag</th>
-                                        <th class="p-4">Vehicle / Details</th>
-                                        <th class="p-4 text-center">Campus Presence</th>
-                                        <th class="p-4 text-center">Authorization</th>
-                                        <th class="p-4 text-right">Actions</th>
+                                        <th class="p-3.5">Person / Driver</th>
+                                        <th class="p-3.5">Role &amp; Transit</th>
+                                        <th class="p-3.5">Vehicle &amp; Plate</th>
+                                        <th class="p-3.5">RFID UID Tag</th>
+                                        <th class="p-3.5 text-center">Status &amp; Presence</th>
+                                        <th class="p-3.5 text-right">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody id="usersTable" class="text-sm divide-y divide-slate-100"></tbody>
@@ -347,12 +368,83 @@
     <style>
         .active-range { background: #0E4B3A !important; color: white !important; font-weight: 800 !important; shadow: 0 4px 10px rgba(14,75,58,0.2) !important; }
         .active-granularity { background: #0E4B3A !important; color: white !important; font-weight: 700 !important; }
+
+        /* Strict Portrait Printing Styles */
+        @page {
+            size: A4 portrait;
+            margin: 12mm 10mm 15mm 10mm;
+        }
         @media print {
-            body { background: white !important; color: black !important; }
-            aside, header, #toastContainer, .no-print, button, .analytics-tab, .admin-log-tab { display: none !important; }
-            main { height: auto !important; overflow: visible !important; }
-            .print-only { display: block !important; }
-            #reportDocumentPreview { box-shadow: none !important; border: none !important; margin: 0 !important; padding: 0 !important; width: 100% !important; max-width: 100% !important; }
+            html, body { 
+                background: white !important; 
+                color: black !important; 
+                height: auto !important; 
+                min-height: 100% !important; 
+                overflow: visible !important; 
+                font-size: 11px !important;
+            }
+            /* Hide all navigation, background overlays, sidebars, headers, action buttons */
+            aside, header, footer, #toastContainer, .no-print, button, .analytics-tab, .admin-log-tab, 
+            .app-view:not(#aview-reports), .modal-backdrop, .sidebar-item, #customDatePanel, .fixed, .cinematic-overlay, .bg-video-container { 
+                display: none !important; 
+            }
+            #aview-reports { 
+                display: block !important; 
+                padding: 0 !important; 
+                margin: 0 !important; 
+                background: white !important;
+            }
+            /* Hide quick reports cards and other subpanels in reports view */
+            #aview-reports > div:first-child,
+            #aview-reports > .grid,
+            #reportAuditHistoryTable,
+            .glass-card:has(#reportAuditHistoryTable) { 
+                display: none !important; 
+            }
+            .glass-card:has(#reportDocumentPreview) { 
+                border: none !important; 
+                box-shadow: none !important; 
+                padding: 0 !important; 
+                background: transparent !important; 
+                margin: 0 !important;
+            }
+            main { 
+                height: auto !important; 
+                overflow: visible !important; 
+                padding: 0 !important; 
+                margin: 0 !important; 
+                max-width: 100% !important;
+                background: white !important;
+            }
+            .print-only { 
+                display: block !important; 
+            }
+            #reportDocumentPreview { 
+                box-shadow: none !important; 
+                border: none !important; 
+                margin: 0 auto !important; 
+                padding: 0 !important; 
+                width: 100% !important; 
+                max-width: 100% !important; 
+                background: white !important;
+                color: #000000 !important;
+            }
+            table { 
+                width: 100% !important; 
+                border-collapse: collapse !important; 
+                page-break-inside: auto !important;
+            }
+            tr { 
+                page-break-inside: avoid !important; 
+                page-break-after: auto !important;
+            }
+            thead { 
+                display: table-header-group !important; 
+            }
+            th, td { 
+                padding: 4px 6px !important; 
+                color: black !important;
+            }
         }
     </style>
 
@@ -366,16 +458,22 @@
                             <h2 class="text-3xl font-display font-extrabold text-slate-800 tracking-tight">Analytics</h2>
                             <p class="text-slate-500 font-medium text-sm mt-1">Monitor campus vehicle activity, access patterns, and security events.</p>
                         </div>
-                        <!-- Range Presets Toolbar -->
-                        <div class="flex flex-wrap items-center gap-1.5 bg-slate-100/90 p-1.5 rounded-2xl border border-slate-200/80">
-                            <button onclick="setAnalyticsPreset('today')" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all active-range" id="tab-today">Today</button>
-                            <button onclick="setAnalyticsPreset('yesterday')" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="tab-yesterday">Yesterday</button>
-                            <button onclick="setAnalyticsPreset('7days')" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="tab-7days">Last 7 Days</button>
-                            <button onclick="setAnalyticsPreset('30days')" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="tab-30days">Last 30 Days</button>
-                            <button onclick="setAnalyticsPreset('thisMonth')" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="tab-thisMonth">This Month</button>
-                            <button onclick="setAnalyticsPreset('lastMonth')" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="tab-lastMonth">Last Month</button>
-                            <button onclick="toggleCustomRangePicker()" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900 flex items-center gap-1" id="tab-custom">
-                                <span>Custom</span> <i data-lucide="calendar" class="w-3.5 h-3.5"></i>
+                        <!-- Range Presets Toolbar & Refresh Button -->
+                        <div class="flex flex-wrap items-center gap-2">
+                            <div class="flex flex-wrap items-center gap-1.5 bg-slate-100/90 p-1.5 rounded-2xl border border-slate-200/80">
+                                <button onclick="setAnalyticsPreset('today')" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all active-range" id="tab-today">Today</button>
+                                <button onclick="setAnalyticsPreset('yesterday')" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="tab-yesterday">Yesterday</button>
+                                <button onclick="setAnalyticsPreset('7days')" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="tab-7days">Last 7 Days</button>
+                                <button onclick="setAnalyticsPreset('30days')" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="tab-30days">Last 30 Days</button>
+                                <button onclick="setAnalyticsPreset('thisMonth')" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="tab-thisMonth">This Month</button>
+                                <button onclick="setAnalyticsPreset('lastMonth')" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900" id="tab-lastMonth">Last Month</button>
+                                <button onclick="toggleCustomRangePicker()" class="analytics-tab px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all text-slate-600 hover:text-slate-900 flex items-center gap-1" id="tab-custom">
+                                    <span>Custom</span> <i data-lucide="calendar" class="w-3.5 h-3.5"></i>
+                                </button>
+                            </div>
+                            <button type="button" onclick="refreshAnalyticsData()" id="btnRefreshAnalytics" class="px-4 py-2.5 rounded-2xl bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold transition-all flex items-center gap-2 shadow-sm hover:scale-[1.02] active:scale-[0.98]" title="Refresh Analytics Data">
+                                <i data-lucide="refresh-cw" class="w-3.5 h-3.5 text-emerald-700 transition-transform" id="iconRefreshAnalytics"></i>
+                                <span>Refresh</span>
                             </button>
                         </div>
                     </div>
@@ -809,65 +907,68 @@
                 <!-- ============================================== -->
                 <div id="aview-reports" class="app-view hidden p-6 lg:p-8 flex-col gap-6 animate-slide-up">
                     <!-- Header -->
-                    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white/70 backdrop-blur-md p-6 rounded-3xl border border-white/60 shadow-glass">
-                        <div>
-                            <h2 class="text-3xl font-display font-extrabold text-slate-800 tracking-tight">Official Reports</h2>
-                            <p class="text-slate-500 font-medium text-sm mt-1">Generate, download, and print official CHARRMPASS access records and summaries.</p>
-                        </div>
+                    <div class="bg-white/70 backdrop-blur-md p-6 rounded-3xl border border-white/60 shadow-glass">
+                        <h2 class="text-3xl font-display font-extrabold text-slate-800 tracking-tight">Official Reports</h2>
+                        <p class="text-slate-500 font-medium text-sm mt-1">Generate, download, and print official CHARRMPASS access records and summaries.</p>
+                    </div>
+
+                    <!-- Professional Report Timeframe Selector Bar -->
+                    <div class="glass-card rounded-3xl p-5 border border-white/60 shadow-glass flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white/80 no-print">
                         <div class="flex items-center gap-3">
-                            <button onclick="exportCurrentReportCSV()" class="px-4 py-2.5 rounded-xl bg-white border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-50 transition-all flex items-center gap-2 shadow-sm">
-                                <i data-lucide="download" class="w-4 h-4 text-slate-500"></i> Export CSV
+                            <div class="w-10 h-10 rounded-2xl bg-charm-dark text-white flex items-center justify-center font-bold shadow-md">
+                                <i data-lucide="calendar" class="w-5 h-5 text-charm-yellow"></i>
+                            </div>
+                            <div>
+                                <div class="text-xs font-black uppercase text-slate-800 tracking-wider flex items-center gap-2">
+                                    <span>Report Timeframe</span>
+                                    <span class="px-2 py-0.5 text-[9px] font-extrabold rounded bg-emerald-100 text-emerald-800 uppercase tracking-wider">Active Filter</span>
+                                </div>
+                                <p class="text-[11px] text-slate-400 font-medium">Select a period to instantly update and preview the official report</p>
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-1 p-1 rounded-2xl bg-slate-100/90 border border-slate-200">
+                            <button type="button" onclick="setReportTimeframePreset('today')" id="repBtn-today" class="rep-time-tab px-3.5 py-1.5 rounded-xl font-bold text-xs bg-charm-dark text-white shadow-sm transition-all">
+                                Today
                             </button>
-                            <button onclick="openReportModal()" class="px-5 py-2.5 rounded-xl bg-charm-dark text-white text-xs font-bold hover:bg-opacity-90 transition-all flex items-center gap-2 shadow-md">
-                                <i data-lucide="plus" class="w-4 h-4 text-charm-yellow"></i> Generate Custom Report
+                            <button type="button" onclick="setReportTimeframePreset('yesterday')" id="repBtn-yesterday" class="rep-time-tab px-3.5 py-1.5 rounded-xl font-bold text-xs text-slate-600 hover:text-slate-900 transition-all">
+                                Yesterday
+                            </button>
+                            <button type="button" onclick="setReportTimeframePreset('week')" id="repBtn-week" class="rep-time-tab px-3.5 py-1.5 rounded-xl font-bold text-xs text-slate-600 hover:text-slate-900 transition-all">
+                                Past 7 Days
+                            </button>
+                            <button type="button" onclick="setReportTimeframePreset('month')" id="repBtn-month" class="rep-time-tab px-3.5 py-1.5 rounded-xl font-bold text-xs text-slate-600 hover:text-slate-900 transition-all">
+                                This Month
+                            </button>
+                            <button type="button" onclick="setReportTimeframePreset('lastMonth')" id="repBtn-lastMonth" class="rep-time-tab px-3.5 py-1.5 rounded-xl font-bold text-xs text-slate-600 hover:text-slate-900 transition-all">
+                                Last Month
+                            </button>
+                            <button type="button" onclick="setReportTimeframePreset('all')" id="repBtn-all" class="rep-time-tab px-3.5 py-1.5 rounded-xl font-bold text-xs text-slate-600 hover:text-slate-900 transition-all">
+                                All Records
+                            </button>
+                            <button type="button" onclick="toggleReportCustomDate()" id="repBtn-custom" class="rep-time-tab px-3.5 py-1.5 rounded-xl font-bold text-xs text-slate-600 hover:text-slate-900 transition-all flex items-center gap-1.5">
+                                <i data-lucide="calendar-range" class="w-3.5 h-3.5"></i> Custom Range...
                             </button>
                         </div>
                     </div>
 
-                    <!-- 1-Click Quick Reports Grid -->
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                        <div onclick="generateQuickReport('today')" class="glass-card p-5 rounded-3xl border border-white/60 shadow-glass hover:-translate-y-1 transition-all cursor-pointer group bg-gradient-to-br from-white/90 to-emerald-50/50">
-                            <div class="flex items-center justify-between mb-3">
-                                <div class="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold">
-                                    <i data-lucide="calendar" class="w-5 h-5"></i>
-                                </div>
-                                <span class="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">Quick PDF</span>
-                            </div>
-                            <h4 class="font-bold text-slate-800 text-sm group-hover:text-emerald-800 transition-colors">Today's Activity Report</h4>
-                            <p class="text-xs text-slate-400 mt-0.5">Complete vehicle scan log for today</p>
+                    <!-- Expandable Inline Custom Date Picker -->
+                    <div id="repCustomDateBox" class="hidden glass-card rounded-2xl p-4 border border-emerald-200 bg-emerald-50/70 shadow-sm flex flex-wrap items-center justify-between gap-3 animate-slide-up no-print">
+                        <div class="flex items-center gap-2">
+                            <i data-lucide="filter" class="w-4 h-4 text-emerald-700"></i>
+                            <span class="text-xs font-bold text-emerald-950">Specify Date Range:</span>
                         </div>
-
-                        <div onclick="generateQuickReport('yesterday')" class="glass-card p-5 rounded-3xl border border-white/60 shadow-glass hover:-translate-y-1 transition-all cursor-pointer group bg-gradient-to-br from-white/90 to-blue-50/50">
-                            <div class="flex items-center justify-between mb-3">
-                                <div class="w-10 h-10 rounded-2xl bg-blue-100 text-blue-800 flex items-center justify-center font-bold">
-                                    <i data-lucide="clock" class="w-5 h-5"></i>
-                                </div>
-                                <span class="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded bg-blue-100 text-blue-800">Quick PDF</span>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <div class="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-inner">
+                                <span class="text-[10px] font-bold text-slate-400 uppercase">From:</span>
+                                <input type="date" id="repInlineFrom" class="text-xs font-semibold text-slate-800 outline-none bg-transparent">
                             </div>
-                            <h4 class="font-bold text-slate-800 text-sm group-hover:text-blue-800 transition-colors">Yesterday's Summary</h4>
-                            <p class="text-xs text-slate-400 mt-0.5">Past 24-hour campus traffic review</p>
-                        </div>
-
-                        <div onclick="generateQuickReport('week')" class="glass-card p-5 rounded-3xl border border-white/60 shadow-glass hover:-translate-y-1 transition-all cursor-pointer group bg-gradient-to-br from-white/90 to-purple-50/50">
-                            <div class="flex items-center justify-between mb-3">
-                                <div class="w-10 h-10 rounded-2xl bg-purple-100 text-purple-800 flex items-center justify-center font-bold">
-                                    <i data-lucide="calendar-range" class="w-5 h-5"></i>
-                                </div>
-                                <span class="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded bg-purple-100 text-purple-800">Weekly</span>
+                            <div class="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-inner">
+                                <span class="text-[10px] font-bold text-slate-400 uppercase">To:</span>
+                                <input type="date" id="repInlineTo" class="text-xs font-semibold text-slate-800 outline-none bg-transparent">
                             </div>
-                            <h4 class="font-bold text-slate-800 text-sm group-hover:text-purple-800 transition-colors">Weekly Access Audit</h4>
-                            <p class="text-xs text-slate-400 mt-0.5">Past 7 days traffic &amp; security stats</p>
-                        </div>
-
-                        <div onclick="generateQuickReport('month')" class="glass-card p-5 rounded-3xl border border-white/60 shadow-glass hover:-translate-y-1 transition-all cursor-pointer group bg-gradient-to-br from-white/90 to-amber-50/50">
-                            <div class="flex items-center justify-between mb-3">
-                                <div class="w-10 h-10 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold">
-                                    <i data-lucide="file-spreadsheet" class="w-5 h-5"></i>
-                                </div>
-                                <span class="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded bg-amber-100 text-amber-800">Monthly</span>
-                            </div>
-                            <h4 class="font-bold text-slate-800 text-sm group-hover:text-amber-800 transition-colors">Monthly Comprehensive Report</h4>
-                            <p class="text-xs text-slate-400 mt-0.5">Full administrative records for current month</p>
+                            <button type="button" onclick="applyReportInlineCustomDates()" class="px-4 py-2 bg-charm-dark text-white rounded-xl text-xs font-bold hover:bg-opacity-90 shadow-md flex items-center gap-1.5 transition-all">
+                                <i data-lucide="check" class="w-3.5 h-3.5 text-charm-yellow"></i> Apply Filter
+                            </button>
                         </div>
                     </div>
 
@@ -881,11 +982,14 @@
                                 <p class="text-xs text-slate-400">Ready to print or download with official ASU-Ibajay formatting</p>
                             </div>
                             <div class="flex items-center gap-3">
-                                <button onclick="printOfficialReport()" class="px-4 py-2.5 rounded-xl bg-slate-800 text-white text-xs font-bold hover:bg-black transition-all flex items-center gap-2 shadow-md">
-                                    <i data-lucide="printer" class="w-4 h-4 text-charm-yellow"></i> Print Official Report
+                                <button onclick="downloadOfficialReportPDF()" class="px-4 py-2.5 rounded-xl bg-gradient-to-r from-red-600 to-rose-700 text-white text-xs font-bold hover:from-red-700 hover:to-rose-800 transition-all flex items-center gap-2 shadow-md shadow-red-600/20 hover:scale-[1.02] active:scale-[0.98]">
+                                    <i data-lucide="file-down" class="w-4 h-4 text-white"></i> Download Official PDF
                                 </button>
-                                <button onclick="exportCurrentReportCSV()" class="px-4 py-2.5 rounded-xl bg-emerald-700 text-white text-xs font-bold hover:bg-emerald-800 transition-all flex items-center gap-2 shadow-md">
-                                    <i data-lucide="file-spreadsheet" class="w-4 h-4"></i> Download CSV / Excel
+                                <button onclick="printOfficialReport()" class="px-4 py-2.5 rounded-xl bg-slate-800 text-white text-xs font-bold hover:bg-black transition-all flex items-center gap-2 shadow-md hover:scale-[1.02] active:scale-[0.98]">
+                                    <i data-lucide="printer" class="w-4 h-4 text-charm-yellow"></i> Print Report
+                                </button>
+                                <button onclick="exportCurrentReportCSV()" class="px-4 py-2.5 rounded-xl bg-emerald-700 text-white text-xs font-bold hover:bg-emerald-800 transition-all flex items-center gap-2 shadow-md hover:scale-[1.02] active:scale-[0.98]">
+                                    <i data-lucide="file-spreadsheet" class="w-4 h-4"></i> Download CSV
                                 </button>
                             </div>
                         </div>
@@ -895,10 +999,9 @@
                             <!-- Official Header -->
                             <div class="text-center border-b-2 border-slate-800 pb-5 mb-6">
                                 <div class="flex items-center justify-center gap-4 mb-2">
-                                    <img src="logocharrmpark.png" alt="ASU Logo" class="w-16 h-16 object-contain" onerror="this.style.display='none'">
-                                    <div>
-                                        <h4 class="font-display font-bold text-sm uppercase tracking-widest text-slate-700">Republic of the Philippines</h4>
-                                        <h2 class="font-display font-black text-xl text-[#0E5C4A] uppercase tracking-wide">Aklan State University</h2>
+                                    <img id="repDocLogoImg" src="logocharrmpark.png" alt="ASU Logo" class="w-16 h-16 object-contain" onerror="this.style.display='none'">
+                                    <div class="text-left">
+                                        <h2 class="font-display font-black text-2xl text-[#0E5C4A] uppercase tracking-wide">Aklan State University</h2>
                                         <h5 class="text-xs font-bold text-slate-600 uppercase tracking-wider">Ibajay Campus • Ibajay, Aklan</h5>
                                     </div>
                                 </div>
@@ -910,18 +1013,18 @@
 
                             <!-- Report Metadata Bar -->
                             <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs mb-6 font-medium">
-                                <div><span class="text-slate-400 block font-bold uppercase text-[10px]">Report ID:</span> <span id="repDocId" class="font-mono font-bold text-slate-800">CRP-REP-2026</span></div>
+                                <div><span class="text-slate-400 block font-bold uppercase text-[10px]">Report ID:</span> <span id="repDocId" class="font-mono font-bold text-slate-800">CP-ASU-20261005-001</span></div>
                                 <div><span class="text-slate-400 block font-bold uppercase text-[10px]">Generated On:</span> <span id="repDocGeneratedAt" class="font-bold text-slate-800">--</span></div>
-                                <div><span class="text-slate-400 block font-bold uppercase text-[10px]">Generated By:</span> <span id="repDocGeneratedBy" class="font-bold text-slate-800">Administrator</span></div>
+                                <div><span class="text-slate-400 block font-bold uppercase text-[10px]">Generated By:</span> <span id="repDocGeneratedBy" class="font-bold text-slate-800">CHARRMPASS SYSTEM</span></div>
                                 <div><span class="text-slate-400 block font-bold uppercase text-[10px]">Total Records:</span> <span id="repDocTotalRecords" class="font-bold text-emerald-700">0 Logs</span></div>
                             </div>
 
-                            <!-- Executive Summary Stats Table -->
+                            <!-- Executive Summary & Analytics Overview -->
                             <div class="mb-8">
                                 <h4 class="font-display font-bold text-sm uppercase tracking-wider text-slate-800 mb-3 flex items-center gap-2 border-b border-slate-200 pb-1">
-                                    <i data-lucide="bar-chart-2" class="w-4 h-4 text-emerald-700"></i> Executive Summary Statistics
+                                    <i data-lucide="bar-chart-2" class="w-4 h-4 text-emerald-700"></i> Executive Summary &amp; Analytics
                                 </h4>
-                                <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
+                                <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center mb-4">
                                     <div class="p-3.5 rounded-xl border border-slate-200 bg-slate-50">
                                         <div class="text-[10px] font-bold text-slate-500 uppercase">Total Entries</div>
                                         <div class="text-2xl font-black text-emerald-800" id="repSumEntries">0</div>
@@ -939,9 +1042,51 @@
                                         <div class="text-2xl font-black text-red-700" id="repSumFailed">0</div>
                                     </div>
                                 </div>
+
+                                <!-- Analytical Demographics & Traffic Flow Summary -->
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-medium">
+                                    <div class="p-4 rounded-xl bg-slate-50 border border-slate-200">
+                                        <div class="text-[10px] font-bold uppercase text-slate-500 mb-2 flex items-center gap-1.5">
+                                            <i data-lucide="users" class="w-3.5 h-3.5 text-slate-600"></i> User Categories Scanned
+                                        </div>
+                                        <div class="grid grid-cols-2 gap-2 text-[11px]">
+                                            <div class="flex justify-between p-1.5 rounded bg-white border border-slate-100">
+                                                <span class="text-slate-500">Students:</span>
+                                                <span id="repAnStudent" class="font-bold text-slate-800">0</span>
+                                            </div>
+                                            <div class="flex justify-between p-1.5 rounded bg-white border border-slate-100">
+                                                <span class="text-slate-500">Faculty/Staff:</span>
+                                                <span id="repAnStaff" class="font-bold text-slate-800">0</span>
+                                            </div>
+                                            <div class="flex justify-between p-1.5 rounded bg-white border border-slate-100">
+                                                <span class="text-slate-500">Visitors:</span>
+                                                <span id="repAnVisitor" class="font-bold text-slate-800">0</span>
+                                            </div>
+                                            <div class="flex justify-between p-1.5 rounded bg-white border border-slate-100">
+                                                <span class="text-slate-500">Emergency:</span>
+                                                <span id="repAnEmergency" class="font-bold text-slate-800">0</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="p-4 rounded-xl bg-slate-50 border border-slate-200">
+                                        <div class="text-[10px] font-bold uppercase text-slate-500 mb-2 flex items-center gap-1.5">
+                                            <i data-lucide="shield-check" class="w-3.5 h-3.5 text-emerald-700"></i> Access Flow &amp; Peak Hour
+                                        </div>
+                                        <div class="space-y-2 text-[11px]">
+                                            <div class="flex justify-between p-1.5 rounded bg-white border border-slate-100">
+                                                <span class="text-slate-500">Authorization Rate:</span>
+                                                <span id="repAnAuthRate" class="font-bold text-emerald-800">100%</span>
+                                            </div>
+                                            <div class="flex justify-between p-1.5 rounded bg-white border border-slate-100">
+                                                <span class="text-slate-500">Busiest Activity Window:</span>
+                                                <span id="repAnPeakHour" class="font-bold text-slate-800">--</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
 
-                            <!-- Detailed Logs Table (Masked RFID UIDs) -->
+                            <!-- Detailed Logs Table (Complete RFID UIDs) -->
                             <div class="mb-8">
                                 <h4 class="font-display font-bold text-sm uppercase tracking-wider text-slate-800 mb-3 flex items-center gap-2 border-b border-slate-200 pb-1">
                                     <i data-lucide="list" class="w-4 h-4 text-slate-700"></i> Detailed Access Transactions Log
@@ -972,7 +1117,7 @@
                                 <div>
                                     <p class="text-slate-400 font-bold uppercase text-[10px]">Prepared By:</p>
                                     <div class="mt-8 pt-2 border-t border-slate-400 font-bold text-slate-800" id="repPreparedBy">
-                                        Obsidian Devs / Security Admin
+                                        CHARRMPASS SYSTEM
                                     </div>
                                     <p class="text-slate-400 text-[10px]">CHARRMPASS System Administrator</p>
                                 </div>
@@ -1687,37 +1832,59 @@ void startBleServer() {
     <!-- ========================================== -->
     <!-- BULK UPLOAD & ACADEMIC MANAGEMENT MODAL    -->
     <!-- ========================================== -->
-    <div id="bulkUploadModal" class="hidden fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 opacity-0 transition-opacity">
-        <div class="bg-white rounded-3xl w-full max-w-4xl shadow-2xl border border-slate-100 flex flex-col max-h-[92vh] overflow-hidden transform scale-95 transition-transform" id="bulkUploadModalContent">
+    <div id="bulkUploadModal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 opacity-0 transition-opacity">
+        <div class="bg-white rounded-3xl w-full max-w-5xl shadow-2xl border border-slate-100 flex flex-col max-h-[94vh] overflow-hidden transform scale-95 transition-transform" id="bulkUploadModalContent">
+            
             <!-- Modal Header -->
-            <div class="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/70">
-                <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-black">
-                        <i data-lucide="upload-cloud" class="w-5 h-5"></i>
+            <div class="p-5 sm:p-6 border-b border-slate-100 flex justify-between items-center bg-gradient-to-r from-emerald-50/80 via-white to-slate-50">
+                <div class="flex items-center gap-3.5">
+                    <div class="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-black shadow-md shadow-emerald-600/20">
+                        <i data-lucide="upload-cloud" class="w-6 h-6"></i>
                     </div>
                     <div>
-                        <h3 class="font-display font-extrabold text-xl text-slate-800">Bulk Upload & Academic Enrollment</h3>
-                        <p class="text-xs text-slate-500 font-medium">Batch enroll students by section/year, register faculty rosters, and configure programs.</p>
+                        <div class="flex items-center gap-2">
+                            <h3 class="font-display font-black text-lg sm:text-xl text-slate-800">Quick Bulk Roster Enrollment</h3>
+                            <span class="text-[10px] font-extrabold uppercase px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Easy 3-Step Wizard</span>
+                        </div>
+                        <p class="text-xs text-slate-500 font-medium mt-0.5">Quickly register entire class rosters or faculty departments using Excel or CSV files.</p>
                     </div>
                 </div>
-                <button onclick="closeBulkUploadModal()" class="text-slate-400 hover:text-red-500 p-2 rounded-xl hover:bg-slate-100 transition-all">
-                    <i data-lucide="x" class="w-6 h-6"></i>
+                <button onclick="closeBulkUploadModal()" class="text-slate-400 hover:text-red-500 p-2.5 rounded-2xl hover:bg-slate-100 transition-all" title="Close">
+                    <i data-lucide="x" class="w-5 h-5"></i>
                 </button>
             </div>
 
+            <!-- 3-Step Visual Wizard Progress Tracker -->
+            <div class="bg-slate-50/80 px-6 py-3 border-b border-slate-200/70">
+                <div class="grid grid-cols-3 gap-2 sm:gap-4 max-w-3xl mx-auto">
+                    <div class="flex items-center gap-2 text-xs font-bold text-emerald-800">
+                        <span class="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[11px] font-black shrink-0 shadow-sm">1</span>
+                        <span class="truncate">Download Template</span>
+                    </div>
+                    <div class="flex items-center gap-2 text-xs font-bold text-slate-700">
+                        <span class="w-6 h-6 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-[11px] font-black shrink-0">2</span>
+                        <span class="truncate">Fill or Paste Data</span>
+                    </div>
+                    <div class="flex items-center gap-2 text-xs font-bold text-slate-700">
+                        <span class="w-6 h-6 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-[11px] font-black shrink-0">3</span>
+                        <span class="truncate">Preview &amp; Enroll</span>
+                    </div>
+                </div>
+            </div>
+
             <!-- Tab Navigation -->
-            <div class="flex items-center gap-2 px-6 pt-4 pb-2 border-b border-slate-100 bg-white">
+            <div class="flex items-center gap-2 px-6 pt-3 pb-2 border-b border-slate-100 bg-white">
                 <button onclick="switchBulkTab('students')" id="bulkTabBtn-students" class="bulk-tab-btn px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all bg-charm-dark text-white shadow-sm flex items-center gap-2">
                     <i data-lucide="graduation-cap" class="w-4 h-4"></i>
-                    <span>Students (Section / Year)</span>
+                    <span>Students (Class Roster)</span>
                 </button>
                 <button onclick="switchBulkTab('faculty')" id="bulkTabBtn-faculty" class="bulk-tab-btn px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all text-slate-600 hover:bg-slate-100 flex items-center gap-2">
                     <i data-lucide="briefcase" class="w-4 h-4"></i>
-                    <span>Faculty &amp; Staff</span>
+                    <span>Faculty &amp; Staff Roster</span>
                 </button>
                 <button onclick="switchBulkTab('programs')" id="bulkTabBtn-programs" class="bulk-tab-btn px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all text-slate-600 hover:bg-slate-100 flex items-center gap-2">
                     <i data-lucide="book-open" class="w-4 h-4"></i>
-                    <span>Programs &amp; Sections Master</span>
+                    <span>Programs &amp; Sections</span>
                 </button>
             </div>
 
@@ -1725,18 +1892,42 @@ void startBleServer() {
             <div class="p-6 overflow-y-auto custom-scrollbar flex-1 space-y-6">
 
                 <!-- TAB 1: STUDENTS BATCH UPLOAD -->
-                <div id="bulkTabContent-students" class="space-y-5">
-                    <!-- Scope Settings Card -->
-                    <div class="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 space-y-4">
-                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div id="bulkTabContent-students" class="space-y-6">
+                    
+                    <!-- STEP 1: DOWNLOAD TEMPLATE CARD -->
+                    <div class="p-5 rounded-2xl bg-gradient-to-r from-emerald-500/10 via-emerald-50/50 to-white border border-emerald-200/80 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                        <div class="flex items-start gap-3.5">
+                            <div class="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-black shrink-0 shadow-md shadow-emerald-600/20">
+                                <i data-lucide="file-spreadsheet" class="w-5 h-5"></i>
+                            </div>
+                            <div>
+                                <h4 class="text-sm font-black text-slate-800 flex items-center gap-2">
+                                    Step 1: Get the Student Template File
+                                </h4>
+                                <p class="text-xs text-slate-600 mt-0.5">
+                                    Open this pre-made template in <strong class="text-emerald-950">Microsoft Excel</strong> or <strong class="text-emerald-950">Google Sheets</strong>, copy-paste your class list, and save.
+                                </p>
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-2 shrink-0">
+                            <button onclick="downloadCSVTemplate('students')" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 shadow-sm transition-all">
+                                <i data-lucide="download" class="w-4 h-4"></i>
+                                <span>Download Student Template (.csv)</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- STEP 2: TARGET CLASS SETTINGS & INPUT OPTIONS -->
+                    <div class="bg-slate-50 p-5 rounded-2xl border border-slate-200/80 space-y-4">
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-200/70">
                             <h4 class="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-2">
-                                <i data-lucide="sliders" class="w-4 h-4 text-emerald-600"></i> Batch Scope &amp; Target Section
+                                <i data-lucide="sliders" class="w-4 h-4 text-emerald-600"></i> Step 2: Target Program &amp; Default Settings
                             </h4>
                             <div class="flex items-center gap-2">
-                                <label class="text-xs font-bold text-slate-600">Upload Mode:</label>
-                                <select id="bulkStudentMode" onchange="toggleBulkStudentScope()" class="text-xs font-bold px-3 py-1.5 rounded-lg border border-slate-300 bg-white">
-                                    <option value="SCOPED">Scoped (Single Section/Year)</option>
-                                    <option value="MULTI">Master CSV (Section in File)</option>
+                                <label class="text-[11px] font-bold text-slate-600">File Type Mode:</label>
+                                <select id="bulkStudentMode" onchange="toggleBulkStudentScope()" class="text-xs font-bold px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700">
+                                    <option value="SCOPED">Single Class / Section (Recommended)</option>
+                                    <option value="MULTI">Master List (Programs included in file)</option>
                                 </select>
                             </div>
                         </div>
@@ -1744,14 +1935,7 @@ void startBleServer() {
                         <div id="bulkStudentScopeFields" class="grid grid-cols-1 sm:grid-cols-3 gap-3">
                             <div class="space-y-1">
                                 <label class="text-[11px] font-bold text-slate-600">Academic Program *</label>
-                                <select id="bulkStudentProgram" onchange="updateBulkSectionOptions()" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white">
-                                    <option value="BSIT">BSIT - Information Technology</option>
-                                    <option value="BSCS">BSCS - Computer Science</option>
-                                    <option value="BSA">BSA - Agriculture</option>
-                                    <option value="BSHM">BSHM - Hospitality Mgt</option>
-                                    <option value="BSED">BSED - Secondary Education</option>
-                                    <option value="BSCRIM">BSCRIM - Criminology</option>
-                                </select>
+                                <select id="bulkStudentProgram" onchange="updateBulkSectionOptions()" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white"></select>
                             </div>
                             <div class="space-y-1">
                                 <label class="text-[11px] font-bold text-slate-600">Year Level *</label>
@@ -1773,107 +1957,183 @@ void startBleServer() {
 
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-200/60">
                             <div class="space-y-1">
-                                <label class="text-[11px] font-bold text-slate-600">Default Transit Mode</label>
+                                <label class="text-[11px] font-bold text-slate-600">Default Access / Transit Mode</label>
                                 <select id="bulkStudentTransit" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white">
-                                    <option value="PEDESTRIAN">🚶 Pedestrian (Walking Close-Range)</option>
-                                    <option value="VEHICLE">🚗 Vehicle (Long-Range UHF)</option>
+                                    <option value="PEDESTRIAN">🚶 Pedestrian (Walking Gate Access)</option>
+                                    <option value="VEHICLE">🚗 Vehicle (Vehicle Gate / UHF RFID)</option>
                                 </select>
                             </div>
                             <div class="space-y-1">
                                 <label class="text-[11px] font-bold text-slate-600">Initial Approval Status</label>
                                 <select id="bulkStudentStatus" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white">
-                                    <option value="APPROVED">🟢 APPROVED (Ready for immediate access)</option>
-                                    <option value="PENDING">🟡 PENDING (Requires RFID tag linking)</option>
+                                    <option value="APPROVED">🟢 APPROVED (Ready for immediate gate entry)</option>
+                                    <option value="PENDING">🟡 PENDING (Needs RFID card assigned later)</option>
                                 </select>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Template & File Upload Card -->
-                    <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-4 bg-emerald-50/50 rounded-2xl border border-emerald-100">
-                        <div class="flex items-center gap-3">
-                            <div class="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold">
-                                <i data-lucide="file-spreadsheet" class="w-5 h-5"></i>
-                            </div>
-                            <div>
-                                <h5 class="text-xs font-bold text-emerald-950">Official Student CSV Template</h5>
-                                <p class="text-[11px] text-emerald-700">Easy columns: Student ID, Last Name, First Name, Middle Name, Suffix, Sex, Age, Address, Plate Number</p>
+                    <!-- INPUT METHOD TOGGLE: FILE UPLOAD vs DIRECT PASTE -->
+                    <div class="space-y-3">
+                        <div class="flex items-center justify-between">
+                            <h4 class="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-2">
+                                <i data-lucide="file-up" class="w-4 h-4 text-emerald-600"></i> Choose How to Provide Your Data:
+                            </h4>
+                            <div class="flex items-center bg-slate-200/70 p-1 rounded-xl">
+                                <button type="button" onclick="switchBulkInputMode('students', 'file')" id="bulkInputModeBtn-students-file" class="px-3 py-1 rounded-lg text-xs font-bold bg-white text-slate-800 shadow-sm transition-all flex items-center gap-1.5">
+                                    <i data-lucide="upload" class="w-3.5 h-3.5 text-emerald-600"></i> Upload File
+                                </button>
+                                <button type="button" onclick="switchBulkInputMode('students', 'paste')" id="bulkInputModeBtn-students-paste" class="px-3 py-1 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition-all flex items-center gap-1.5">
+                                    <i data-lucide="clipboard" class="w-3.5 h-3.5"></i> Paste from Excel
+                                </button>
                             </div>
                         </div>
-                        <button onclick="downloadCSVTemplate('students')" class="bg-white border border-emerald-300 text-emerald-800 hover:bg-emerald-100/50 px-4 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all whitespace-nowrap">
-                            <i data-lucide="download" class="w-4 h-4"></i> Download Template (.csv)
-                        </button>
+
+                        <!-- Option A: File Dropzone -->
+                        <div id="studentDropzoneContainer">
+                            <div id="studentDropzone" class="border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-3xl p-7 text-center cursor-pointer bg-slate-50/60 hover:bg-emerald-50/20 transition-all group shadow-sm" onclick="el('bulkStudentFileInput').click()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, 'students')">
+                                <input type="file" id="bulkStudentFileInput" accept=".csv, .txt, .tsv" class="hidden" onchange="handleFileSelected(event, 'students')">
+                                <div class="flex flex-col items-center gap-2">
+                                    <div class="w-14 h-14 rounded-2xl bg-white shadow-sm border border-slate-200 flex items-center justify-center text-slate-500 group-hover:text-emerald-600 group-hover:scale-110 group-hover:border-emerald-300 transition-all">
+                                        <i data-lucide="file-spreadsheet" class="w-7 h-7"></i>
+                                    </div>
+                                    <p class="text-sm font-bold text-slate-700 mt-1">Click to select or drag and drop your Student CSV roster here</p>
+                                    <p class="text-xs text-slate-400 max-w-md">Supports files saved from Microsoft Excel, Google Sheets, or School Registrar systems (.csv or .txt)</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Option B: Direct Copy & Paste from Excel Box -->
+                        <div id="studentPasteContainer" class="hidden space-y-3">
+                            <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-2">
+                                <div class="flex items-center justify-between text-xs text-slate-600">
+                                    <span class="font-bold flex items-center gap-1.5">
+                                        <i data-lucide="clipboard-paste" class="w-4 h-4 text-emerald-600"></i>
+                                        Select rows in your Excel / Google Sheets, copy (<kbd class="px-1.5 py-0.5 bg-white border border-slate-300 rounded text-[10px] font-mono">Ctrl+C</kbd>), and paste below (<kbd class="px-1.5 py-0.5 bg-white border border-slate-300 rounded text-[10px] font-mono">Ctrl+V</kbd>):
+                                    </span>
+                                    <button type="button" onclick="loadSamplePasteData('students')" class="text-emerald-700 hover:text-emerald-800 font-bold underline text-[11px]">Load Sample Data</button>
+                                </div>
+                                <textarea id="bulkStudentPasteArea" rows="5" placeholder="Student ID	Last Name	First Name	Middle Name&#10;2022-00101	Dela Cruz	Juan	Mercado&#10;2022-00102	Santos	Maria Clara	Reyes&#10;2022-00103	Reyes	Carlos	Padilla" class="w-full text-xs font-mono p-3 rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"></textarea>
+                                <button type="button" onclick="processPastedText('students')" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-2.5 rounded-xl shadow-sm flex items-center justify-center gap-2 transition-all">
+                                    <i data-lucide="sparkles" class="w-4 h-4"></i>
+                                    <span>Read and Verify Pasted Data</span>
+                                </button>
+                            </div>
+                        </div>
                     </div>
 
-                    <!-- Drag and Drop Dropzone -->
-                    <div id="studentDropzone" class="border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-3xl p-6 text-center cursor-pointer bg-slate-50/50 hover:bg-emerald-50/20 transition-all group" onclick="el('bulkStudentFileInput').click()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, 'students')">
-                        <input type="file" id="bulkStudentFileInput" accept=".csv, .txt" class="hidden" onchange="handleFileSelected(event, 'students')">
-                        <div class="flex flex-col items-center gap-2">
-                            <div class="w-12 h-12 rounded-2xl bg-white shadow-sm border border-slate-200 flex items-center justify-center text-slate-500 group-hover:text-emerald-600 group-hover:scale-110 transition-all">
-                                <i data-lucide="upload" class="w-6 h-6"></i>
-                            </div>
-                            <p class="text-sm font-bold text-slate-700 mt-1">Click to browse or drag and drop student roster (.csv)</p>
-                            <p class="text-xs text-slate-400">Supports standard CSV files exported from Excel, Google Sheets, or School Registrar</p>
+                    <!-- Non-Tech User Guidance / Helpful Tips Accordion -->
+                    <div class="p-4 rounded-2xl bg-amber-50/60 border border-amber-200/70 text-amber-900 space-y-2">
+                        <div class="flex items-center gap-2 text-xs font-bold text-amber-950">
+                            <i data-lucide="lightbulb" class="w-4 h-4 text-amber-600 shrink-0"></i>
+                            <span>Helpful Tips for Easy Uploading:</span>
                         </div>
+                        <ul class="text-xs space-y-1 text-amber-800/90 list-disc list-inside pl-1 font-medium">
+                            <li><strong>Name flexibility:</strong> You can provide either separate columns (<em>Last Name, First Name</em>) or a single column (<em>Full Name</em>).</li>
+                            <li><strong>Optional fields:</strong> Middle names, vehicle plates, and addresses can be left blank — they can always be added later at the gate.</li>
+                            <li><strong>Safe updates:</strong> If a student is already registered, the system will update their details safely without creating duplicate accounts.</li>
+                        </ul>
                     </div>
+
                 </div>
 
                 <!-- TAB 2: FACULTY & STAFF UPLOAD -->
-                <div id="bulkTabContent-faculty" class="hidden space-y-5">
-                    <div class="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 space-y-4">
+                <div id="bulkTabContent-faculty" class="hidden space-y-6">
+                    
+                    <!-- STEP 1: DOWNLOAD FACULTY TEMPLATE CARD -->
+                    <div class="p-5 rounded-2xl bg-gradient-to-r from-emerald-500/10 via-emerald-50/50 to-white border border-emerald-200/80 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                        <div class="flex items-start gap-3.5">
+                            <div class="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-black shrink-0 shadow-md shadow-emerald-600/20">
+                                <i data-lucide="file-spreadsheet" class="w-5 h-5"></i>
+                            </div>
+                            <div>
+                                <h4 class="text-sm font-black text-slate-800 flex items-center gap-2">
+                                    Step 1: Get the Faculty / Staff Template
+                                </h4>
+                                <p class="text-xs text-slate-600 mt-0.5">
+                                    Download the template, fill with instructor or staff names, and save in Excel.
+                                </p>
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-2 shrink-0">
+                            <button onclick="downloadCSVTemplate('faculty')" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 shadow-sm transition-all">
+                                <i data-lucide="download" class="w-4 h-4"></i>
+                                <span>Download Faculty Template (.csv)</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- STEP 2: FACULTY SETTINGS -->
+                    <div class="bg-slate-50 p-5 rounded-2xl border border-slate-200/80 space-y-4">
                         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
                             <div class="space-y-1">
                                 <label class="text-[11px] font-bold text-slate-600">Department / College *</label>
-                                <select id="bulkFacultyDept" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white">
-                                    <option value="College of Computing">College of Computing</option>
-                                    <option value="College of Agriculture">College of Agriculture</option>
-                                    <option value="College of Education">College of Education</option>
-                                    <option value="College of Hospitality">College of Hospitality</option>
-                                    <option value="Administration">Administration &amp; Support</option>
-                                </select>
+                                <select id="bulkFacultyDept" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white"></select>
                             </div>
                             <div class="space-y-1">
                                 <label class="text-[11px] font-bold text-slate-600">Default Role *</label>
                                 <select id="bulkFacultyRole" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white">
                                     <option value="Faculty">Faculty (Instructor / Professor)</option>
                                     <option value="Staff">Staff (Admin / Maintenance)</option>
-                                    <option value="Others">Others (Vendor / Contractor)</option>
+                                    <option value="Others">Others (Vendor / Visitor)</option>
                                 </select>
                             </div>
                             <div class="space-y-1">
                                 <label class="text-[11px] font-bold text-slate-600">Initial Approval Status</label>
                                 <select id="bulkFacultyStatus" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white">
-                                    <option value="APPROVED">🟢 APPROVED (Active Access)</option>
+                                    <option value="APPROVED">🟢 APPROVED (Active Entry Access)</option>
                                     <option value="PENDING">🟡 PENDING (Needs RFID Pass)</option>
                                 </select>
                             </div>
                         </div>
                     </div>
 
-                    <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-4 bg-emerald-50/50 rounded-2xl border border-emerald-100">
-                        <div class="flex items-center gap-3">
-                            <div class="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold">
-                                <i data-lucide="file-spreadsheet" class="w-5 h-5"></i>
-                            </div>
-                            <div>
-                                <h5 class="text-xs font-bold text-emerald-950">Faculty &amp; Staff CSV Template</h5>
-                                <p class="text-[11px] text-emerald-700">Easy columns: Employee ID, Last Name, First Name, Middle Name, Role, Department, Transit Mode, Plate Number</p>
+                    <!-- INPUT METHOD TOGGLE: FILE UPLOAD vs DIRECT PASTE -->
+                    <div class="space-y-3">
+                        <div class="flex items-center justify-between">
+                            <h4 class="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-2">
+                                <i data-lucide="file-up" class="w-4 h-4 text-emerald-600"></i> Choose How to Provide Faculty Roster:
+                            </h4>
+                            <div class="flex items-center bg-slate-200/70 p-1 rounded-xl">
+                                <button type="button" onclick="switchBulkInputMode('faculty', 'file')" id="bulkInputModeBtn-faculty-file" class="px-3 py-1 rounded-lg text-xs font-bold bg-white text-slate-800 shadow-sm transition-all flex items-center gap-1.5">
+                                    <i data-lucide="upload" class="w-3.5 h-3.5 text-emerald-600"></i> Upload File
+                                </button>
+                                <button type="button" onclick="switchBulkInputMode('faculty', 'paste')" id="bulkInputModeBtn-faculty-paste" class="px-3 py-1 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition-all flex items-center gap-1.5">
+                                    <i data-lucide="clipboard" class="w-3.5 h-3.5"></i> Paste from Excel
+                                </button>
                             </div>
                         </div>
-                        <button onclick="downloadCSVTemplate('faculty')" class="bg-white border border-emerald-300 text-emerald-800 hover:bg-emerald-100/50 px-4 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all whitespace-nowrap">
-                            <i data-lucide="download" class="w-4 h-4"></i> Download Template (.csv)
-                        </button>
-                    </div>
 
-                    <!-- Drag and Drop Dropzone -->
-                    <div id="facultyDropzone" class="border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-3xl p-6 text-center cursor-pointer bg-slate-50/50 hover:bg-emerald-50/20 transition-all group" onclick="el('bulkFacultyFileInput').click()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, 'faculty')">
-                        <input type="file" id="bulkFacultyFileInput" accept=".csv, .txt" class="hidden" onchange="handleFileSelected(event, 'faculty')">
-                        <div class="flex flex-col items-center gap-2">
-                            <div class="w-12 h-12 rounded-2xl bg-white shadow-sm border border-slate-200 flex items-center justify-center text-slate-500 group-hover:text-emerald-600 group-hover:scale-110 transition-all">
-                                <i data-lucide="upload" class="w-6 h-6"></i>
+                        <!-- Option A: File Dropzone -->
+                        <div id="facultyDropzoneContainer">
+                            <div id="facultyDropzone" class="border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-3xl p-7 text-center cursor-pointer bg-slate-50/60 hover:bg-emerald-50/20 transition-all group shadow-sm" onclick="el('bulkFacultyFileInput').click()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, 'faculty')">
+                                <input type="file" id="bulkFacultyFileInput" accept=".csv, .txt, .tsv" class="hidden" onchange="handleFileSelected(event, 'faculty')">
+                                <div class="flex flex-col items-center gap-2">
+                                    <div class="w-14 h-14 rounded-2xl bg-white shadow-sm border border-slate-200 flex items-center justify-center text-slate-500 group-hover:text-emerald-600 group-hover:scale-110 group-hover:border-emerald-300 transition-all">
+                                        <i data-lucide="file-spreadsheet" class="w-7 h-7"></i>
+                                    </div>
+                                    <p class="text-sm font-bold text-slate-700 mt-1">Click to select or drag and drop Faculty/Staff roster (.csv)</p>
+                                    <p class="text-xs text-slate-400">Employee ID is optional — system will auto-assign official CPASS IDs if left blank</p>
+                                </div>
                             </div>
-                            <p class="text-sm font-bold text-slate-700 mt-1">Click to browse or drag and drop Faculty/Staff roster (.csv)</p>
-                            <p class="text-xs text-slate-400">Auto-assigns CPASS IDs (`CP00`, `CP01`...) if employee ID is left empty</p>
+                        </div>
+
+                        <!-- Option B: Direct Copy & Paste from Excel Box -->
+                        <div id="facultyPasteContainer" class="hidden space-y-3">
+                            <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-2">
+                                <div class="flex items-center justify-between text-xs text-slate-600">
+                                    <span class="font-bold flex items-center gap-1.5">
+                                        <i data-lucide="clipboard-paste" class="w-4 h-4 text-emerald-600"></i>
+                                        Paste columns from Excel / Google Sheets:
+                                    </span>
+                                    <button type="button" onclick="loadSamplePasteData('faculty')" class="text-emerald-700 hover:text-emerald-800 font-bold underline text-[11px]">Load Sample Data</button>
+                                </div>
+                                <textarea id="bulkFacultyPasteArea" rows="5" placeholder="Employee ID	Last Name	First Name	Department	Role&#10;EMP-2019-01	Turing	Alan	College of Computing	Faculty&#10;EMP-2021-04	Hopper	Grace	College of Computing	Faculty&#10;STAFF-009	Cruz	Juanita	Administration	Staff" class="w-full text-xs font-mono p-3 rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"></textarea>
+                                <button type="button" onclick="processPastedText('faculty')" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-2.5 rounded-xl shadow-sm flex items-center justify-center gap-2 transition-all">
+                                    <i data-lucide="sparkles" class="w-4 h-4"></i>
+                                    <span>Read and Verify Pasted Data</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1926,38 +2186,54 @@ void startBleServer() {
                     </div>
                 </div>
 
-                <!-- PREVIEW & VALIDATION SECTION (Visible when file is parsed) -->
-                <div id="bulkPreviewContainer" class="hidden space-y-4 pt-4 border-t border-slate-200">
+                <!-- STEP 3: PREVIEW & VALIDATION SECTION (Visible when file/data is parsed) -->
+                <div id="bulkPreviewContainer" class="hidden space-y-4 pt-4 border-t-2 border-dashed border-slate-200">
+                    
                     <!-- Status Header Bar -->
-                    <div class="flex flex-wrap items-center justify-between gap-3 p-4 bg-slate-900 text-white rounded-2xl">
+                    <div class="flex flex-wrap items-center justify-between gap-3 p-4 bg-slate-900 text-white rounded-2xl shadow-lg">
                         <div class="flex items-center gap-3">
-                            <div class="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center">
-                                <i data-lucide="eye" class="w-4 h-4 text-emerald-400"></i>
+                            <div class="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
+                                <i data-lucide="check-check" class="w-5 h-5"></i>
                             </div>
                             <div>
-                                <h4 class="text-xs font-black uppercase tracking-wider">File Verification &amp; Import Preview</h4>
-                                <p class="text-[11px] text-slate-300" id="bulkPreviewFileName">roster.csv</p>
+                                <h4 class="text-xs font-black uppercase tracking-wider">Step 3: Verification &amp; Import Preview</h4>
+                                <p class="text-[11px] text-slate-300 flex items-center gap-1.5" id="bulkPreviewFileName">
+                                    <span>roster.csv</span>
+                                </p>
                             </div>
                         </div>
-                        <div class="flex items-center gap-2">
-                            <span id="bulkBadgeTotal" class="px-3 py-1 rounded-full text-xs font-bold bg-white/20 text-white">0 Total</span>
-                            <span id="bulkBadgeValid" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/30 text-emerald-300 border border-emerald-500/40">0 Valid</span>
-                            <span id="bulkBadgeWarn" class="px-3 py-1 rounded-full text-xs font-bold bg-yellow-500/30 text-yellow-300 border border-yellow-500/40 hidden">0 Warnings</span>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <span id="bulkBadgeTotal" class="px-3 py-1 rounded-full text-xs font-bold bg-white/10 text-white">0 Total</span>
+                            <span id="bulkBadgeValid" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
+                                <i data-lucide="check" class="w-3.5 h-3.5"></i> <span id="bulkBadgeValidText">0 Ready</span>
+                            </span>
+                            <span id="bulkBadgeWarn" class="px-3 py-1 rounded-full text-xs font-bold bg-yellow-500/30 text-yellow-300 border border-yellow-500/40 hidden">0 Existing</span>
+                            <span id="bulkBadgeError" class="px-3 py-1 rounded-full text-xs font-bold bg-red-500/30 text-red-300 border border-red-500/40 hidden">0 Errors</span>
                         </div>
                     </div>
 
+                    <!-- Search Filter & Quick Actions Bar in Preview -->
+                    <div class="flex items-center justify-between gap-3 text-xs">
+                        <div class="relative flex-1 max-w-sm">
+                            <i data-lucide="search" class="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                            <input type="text" id="bulkPreviewSearch" oninput="filterBulkPreviewTable()" placeholder="Quick filter preview rows by name or ID..." class="w-full text-xs pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-emerald-500">
+                        </div>
+                        <p class="text-[11px] text-slate-500 font-medium">Review rows before importing into database</p>
+                    </div>
+
                     <!-- Scrollable Preview Table -->
-                    <div class="max-h-64 overflow-y-auto rounded-2xl border border-slate-200 shadow-inner bg-slate-50/50">
+                    <div class="max-h-64 overflow-y-auto rounded-2xl border border-slate-200 shadow-inner bg-slate-50/50 custom-scrollbar">
                         <table class="w-full text-left border-collapse text-xs">
-                            <thead class="bg-slate-100 text-slate-600 font-bold uppercase tracking-wider text-[10px] sticky top-0 border-b border-slate-200">
+                            <thead class="bg-slate-100 text-slate-700 font-black uppercase tracking-wider text-[10px] sticky top-0 border-b border-slate-200 z-10">
                                 <tr>
-                                    <th class="p-2.5 text-center">#</th>
+                                    <th class="p-2.5 text-center w-12">#</th>
                                     <th class="p-2.5">ID / CPASS</th>
                                     <th class="p-2.5">Full Name</th>
                                     <th class="p-2.5">Role</th>
                                     <th class="p-2.5">Program &amp; Section</th>
-                                    <th class="p-2.5">Transit / Vehicle</th>
+                                    <th class="p-2.5">Transit Mode</th>
                                     <th class="p-2.5 text-center">Status</th>
+                                    <th class="p-2.5 text-center w-10">Action</th>
                                 </tr>
                             </thead>
                             <tbody id="bulkPreviewTableBody" class="divide-y divide-slate-200/60 bg-white font-medium"></tbody>
@@ -1965,13 +2241,16 @@ void startBleServer() {
                     </div>
 
                     <!-- Animated Progress Bar Container -->
-                    <div id="bulkProgressBarContainer" class="hidden space-y-1.5">
-                        <div class="flex justify-between text-xs font-bold text-slate-700">
-                            <span id="bulkProgressLabel">Uploading records to CHARRMPASS...</span>
-                            <span id="bulkProgressPercent">0%</span>
+                    <div id="bulkProgressBarContainer" class="hidden space-y-2 p-4 rounded-2xl bg-emerald-50 border border-emerald-200">
+                        <div class="flex justify-between text-xs font-bold text-emerald-950">
+                            <span id="bulkProgressLabel" class="flex items-center gap-2">
+                                <i data-lucide="loader-2" class="w-4 h-4 animate-spin text-emerald-600"></i>
+                                Uploading records to CHARRMPASS...
+                            </span>
+                            <span id="bulkProgressPercent" class="font-mono text-emerald-800 font-black">0%</span>
                         </div>
-                        <div class="w-full h-3 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
-                            <div id="bulkProgressBarFill" class="h-full bg-emerald-500 transition-all duration-300 rounded-full" style="width: 0%;"></div>
+                        <div class="w-full h-3 bg-emerald-200/60 rounded-full overflow-hidden border border-emerald-300">
+                            <div id="bulkProgressBarFill" class="h-full bg-emerald-600 transition-all duration-300 rounded-full" style="width: 0%;"></div>
                         </div>
                     </div>
                 </div>
@@ -1979,13 +2258,13 @@ void startBleServer() {
             </div>
 
             <!-- Modal Footer Controls -->
-            <div class="p-6 border-t border-slate-100 bg-slate-50/70 flex flex-wrap items-center justify-between gap-3">
+            <div class="p-5 sm:p-6 border-t border-slate-100 bg-slate-50/80 flex flex-wrap items-center justify-between gap-3">
                 <button onclick="resetBulkUploadForm()" id="btnResetBulk" class="text-xs font-bold text-slate-500 hover:text-slate-800 flex items-center gap-1.5 transition-all">
-                    <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> Clear File
+                    <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> Clear &amp; Start Over
                 </button>
                 <div class="flex items-center gap-3">
-                    <button onclick="closeBulkUploadModal()" class="px-5 py-2.5 rounded-xl text-sm font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-50">Cancel</button>
-                    <button id="btnExecuteBulkImport" onclick="executeBulkImport()" disabled class="px-6 py-2.5 rounded-xl text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-md flex items-center gap-2 transition-all">
+                    <button onclick="closeBulkUploadModal()" class="px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 transition-all">Cancel</button>
+                    <button id="btnExecuteBulkImport" onclick="executeBulkImport()" disabled class="px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-emerald-600/20 flex items-center gap-2 transition-all">
                         <i data-lucide="check-circle-2" class="w-4 h-4"></i>
                         <span id="btnExecuteBulkImportText">Import to CHARRMPASS</span>
                     </button>
@@ -2514,9 +2793,24 @@ void startBleServer() {
                         </select>
                     </div>
                     <div class="space-y-1">
-                        <label class="form-label">Description / Note</label>
-                        <input type="text" id="formTagDesc" placeholder="e.g. Visitor Tag 01" class="form-input">
+                        <label class="form-label">Tag Label / Name</label>
+                        <input type="text" id="formTagLabel" placeholder="e.g. Visitor Pass 01 or ASU Ambulance" class="form-input">
                     </div>
+                    <div class="space-y-1">
+                        <label class="form-label">Description / Note</label>
+                        <input type="text" id="formTagDesc" placeholder="e.g. Assigned to Guest / Security Unit" class="form-input">
+                    </div>
+                    <div class="pt-4 flex justify-end gap-3 border-t border-slate-100 mt-4">
+                        <button type="button" onclick="closeSpecialTagModal()" class="px-4 py-2.5 text-xs font-bold text-slate-500 hover:text-slate-700 rounded-xl hover:bg-slate-100 transition-colors">Cancel</button>
+                        <button type="submit" id="btnSaveSpecialTag" class="px-6 py-2.5 bg-charm-dark text-white rounded-xl text-xs font-bold shadow-lg hover:opacity-90 flex items-center gap-2 transition-all">
+                            <i data-lucide="save" class="w-4 h-4 text-charm-yellow"></i> Save Special Tag
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <!-- Generate Report Modal -->
     <div id="generateReportModal" class="hidden fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 opacity-0 transition-opacity">
         <div class="bg-white rounded-3xl w-full max-w-xl shadow-2xl border border-slate-100 flex flex-col transform scale-95 transition-transform overflow-hidden" id="generateReportModalContent">
@@ -2548,15 +2842,33 @@ void startBleServer() {
                         </select>
                     </div>
 
+                    <!-- Timeframe Presets (Fast Auto-Fill) -->
+                    <div class="space-y-2 p-3.5 rounded-2xl bg-slate-50 border border-slate-200">
+                        <div class="flex items-center justify-between">
+                            <label class="font-bold text-xs text-slate-800 flex items-center gap-1.5">
+                                <i data-lucide="calendar" class="w-3.5 h-3.5 text-charm-dark"></i> Timeframe Presets:
+                            </label>
+                            <span class="text-[10px] font-semibold text-slate-500">Auto-fills date range</span>
+                        </div>
+                        <div class="grid grid-cols-3 sm:grid-cols-6 gap-1.5 text-xs">
+                            <button type="button" onclick="setModalReportPreset('today')" class="py-1.5 px-2 rounded-xl font-bold border border-slate-200 bg-white hover:bg-slate-800 hover:text-white transition-all text-slate-700 shadow-sm text-center">Today</button>
+                            <button type="button" onclick="setModalReportPreset('yesterday')" class="py-1.5 px-2 rounded-xl font-bold border border-slate-200 bg-white hover:bg-slate-800 hover:text-white transition-all text-slate-700 shadow-sm text-center">Yesterday</button>
+                            <button type="button" onclick="setModalReportPreset('7days')" class="py-1.5 px-2 rounded-xl font-bold border border-slate-200 bg-white hover:bg-slate-800 hover:text-white transition-all text-slate-700 shadow-sm text-center">Past 7 Days</button>
+                            <button type="button" onclick="setModalReportPreset('thisMonth')" class="py-1.5 px-2 rounded-xl font-bold border border-slate-200 bg-white hover:bg-slate-800 hover:text-white transition-all text-slate-700 shadow-sm text-center">This Month</button>
+                            <button type="button" onclick="setModalReportPreset('lastMonth')" class="py-1.5 px-2 rounded-xl font-bold border border-slate-200 bg-white hover:bg-slate-800 hover:text-white transition-all text-slate-700 shadow-sm text-center">Last Month</button>
+                            <button type="button" onclick="setModalReportPreset('allTime')" class="py-1.5 px-2 rounded-xl font-bold border border-slate-200 bg-white hover:bg-slate-800 hover:text-white transition-all text-slate-700 shadow-sm text-center">Full Year</button>
+                        </div>
+                    </div>
+
                     <!-- Date Range -->
                     <div class="grid grid-cols-2 gap-4">
                         <div class="space-y-1">
                             <label class="form-label font-bold text-xs">From Date *</label>
-                            <input type="date" id="modalReportFrom" required class="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-sm font-semibold text-slate-700">
+                            <input type="date" id="modalReportFrom" required class="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-sm font-semibold text-slate-700 bg-white">
                         </div>
                         <div class="space-y-1">
                             <label class="form-label font-bold text-xs">To Date *</label>
-                            <input type="date" id="modalReportTo" required class="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-sm font-semibold text-slate-700">
+                            <input type="date" id="modalReportTo" required class="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-sm font-semibold text-slate-700 bg-white">
                         </div>
                     </div>
 

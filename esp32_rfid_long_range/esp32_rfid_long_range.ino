@@ -159,6 +159,58 @@ const char* WHITELIST_FILE   = "/uhf_whitelist.csv";
 const char* INSIDE_LIST_FILE = "/currently_inside.csv";
 const char* OFFLINE_TX_FILE  = "/offline_txns.csv";
 const char* WIFI_CONFIG_FILE = "/config/wifi.cfg";  // SD Wi-Fi backup
+const char* OFFLINE_TX_TMP   = "/offline_txns.tmp";
+
+// -----------------------------------------------------
+// OFFLINE BUFFER + UHF CONFIRMATION SETTINGS
+// -----------------------------------------------------
+#define OFFLINE_FLUSH_BATCH     5     // records uploaded per pass after reconnect
+// Boland/Wiegand UHF readers report ID only (no RSSI). As a proxy for
+// "vehicle is really at the gate", require N reads inside a short window.
+// 1 = disabled (act on first read). Try 2-3 if cars queued behind trigger early.
+#define UHF_MIN_CONFIRM_READS   1
+#define UHF_CONFIRM_WINDOW_MS   1500
+
+// Returns UTC ISO-8601 time, or "" if NTP has not synced yet.
+String isoUtcNow() {
+  time_t now = time(nullptr);
+  if (now < 1700000000) return "";
+  struct tm t;
+  gmtime_r(&now, &t);
+  char buf[25];
+  strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &t);
+  return String(buf);
+}
+
+struct PendingConfirm { String uid; int reads; unsigned long firstMs; };
+PendingConfirm pendingConfirm[4];
+
+// true once the tag has been read enough times within the window
+bool uhfReadConfirmed(const String &uid) {
+  if (UHF_MIN_CONFIRM_READS <= 1) return true;
+  unsigned long now = millis();
+  int free = -1;
+  for (int i = 0; i < 4; i++) {
+    if (pendingConfirm[i].uid == uid) {
+      if (now - pendingConfirm[i].firstMs > UHF_CONFIRM_WINDOW_MS) {
+        pendingConfirm[i].reads = 1;
+        pendingConfirm[i].firstMs = now;
+        return false;
+      }
+      if (++pendingConfirm[i].reads >= UHF_MIN_CONFIRM_READS) {
+        pendingConfirm[i].uid = "";
+        return true;
+      }
+      return false;
+    }
+    if (free == -1 && (pendingConfirm[i].uid.length() == 0 || now - pendingConfirm[i].firstMs > UHF_CONFIRM_WINDOW_MS)) free = i;
+  }
+  if (free == -1) free = 0;
+  pendingConfirm[free].uid = uid;
+  pendingConfirm[free].reads = 1;
+  pendingConfirm[free].firstMs = now;
+  return false;
+}
 
 // =====================================================
 // MULTI-TAG ANTI-SPAM & COOLDOWN TRACKER
@@ -312,6 +364,7 @@ void syncWhitelistToRam();
 void triggerBarrier();
 bool isTagCurrentlyInsideOnline(String uid);
 void insertTransactionOnline(String uid, String direction, String status, String remarks, String vId = "", String uId = "", String uType = "VEHICLE");
+bool attemptWifiConnection(String testSsid, String testPass, int timeoutSeconds = 20);
 
 // =====================================================
 // 4. LCD & AUDIO HELPERS
@@ -657,7 +710,7 @@ void scanAndPrintNetworks() {
 // =====================================================
 // 6. WI-FI CONNECTION CONTROLLER
 // =====================================================
-bool attemptWifiConnection(String testSsid, String testPass, int timeoutSeconds = 20) {
+bool attemptWifiConnection(String testSsid, String testPass, int timeoutSeconds) {
   if (testSsid.length() == 0) return false;
 
   Serial.println("\n===========================================");
@@ -705,6 +758,7 @@ bool attemptWifiConnection(String testSsid, String testPass, int timeoutSeconds 
   if (WiFi.status() == WL_CONNECTED) {
     wifiConnected = true;
     WiFi.setSleep(false); // Disable WiFi modem sleep only AFTER successful connection
+    configTime(0, 0, "pool.ntp.org", "time.google.com"); // UTC clock for offline timestamps
     Serial.println("\n[OK] WiFi Connected! IP: " + WiFi.localIP().toString() + " | RSSI: " + String(WiFi.RSSI()) + " dBm");
     lcdMsg("WIFI CONNECTED", WiFi.localIP().toString());
     delay(1000);
@@ -1140,6 +1194,123 @@ void insertTransactionOnline(String uid, String direction, String status, String
 }
 
 // =====================================================
+// OFFLINE TRANSACTION BUFFER (SD card, survives reboot)
+// Line format: ts|uid|dir|status|remarks|vId|uId|uType
+// =====================================================
+static String cleanField(String s) {
+  s.replace("|", "/");
+  s.replace("\r", " ");
+  s.replace("\n", " ");
+  return s;
+}
+
+void saveOfflineTransactionSD(String uid, String dir, String status, String remarks, String vId, String uId, String uType) {
+  if (!sdCardReady) {
+    Serial.println("[OFFLINE BUFFER] SD card not ready - scan could not be stored!");
+    return;
+  }
+  File f = SD.open(OFFLINE_TX_FILE, FILE_APPEND);
+  if (!f) return;
+  f.println(isoUtcNow() + "|" + cleanField(uid) + "|" + dir + "|" + status + "|" + cleanField(remarks) + "|" + cleanField(vId) + "|" + cleanField(uId) + "|" + cleanField(uType));
+  f.close();
+  Serial.println("[OFFLINE BUFFER] Stored scan for " + uid + " (" + dir + ")");
+}
+
+// Same as insertTransactionOnline but returns success and can carry the original tap time.
+bool insertTransactionOnlineTs(String uid, String direction, String status, String remarks, String vId, String uId, String uType, String ts) {
+  HTTPClient http;
+  http.begin(String(SUPABASE_URL) + "/rest/v1/transactions");
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("apikey", SUPABASE_ANON);
+  http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
+  http.addHeader("Prefer", "return=minimal");
+
+  DynamicJsonDocument doc(640);
+  doc["rfid_uid"]  = uid;
+  doc["direction"] = direction;
+  doc["gate"]      = GATE_ID;
+  doc["status"]    = status;
+  doc["remarks"]   = remarks;
+  doc["user_type"] = uType;
+  doc["rfid_type"] = "LONG_RANGE";
+  if (ts.length() > 0) doc["timestamp"] = ts;
+  if (vId.length() > 0 && vId != "null") doc["vehicle_id"] = vId;
+  if (uId.length() > 0 && uId != "null") doc["user_id"] = uId;
+
+  String body;
+  serializeJson(doc, body);
+  int code = http.POST(body);
+  http.end();
+  return code >= 200 && code < 300;
+}
+
+static String nextField(String &line) {
+  int p = line.indexOf('|');
+  String f;
+  if (p < 0) { f = line; line = ""; }
+  else { f = line.substring(0, p); line = line.substring(p + 1); }
+  return f;
+}
+
+// Uploads up to OFFLINE_FLUSH_BATCH buffered scans per call. Records that fail
+// to upload stay on the card and are retried on the next pass.
+void flushOfflineTransactions() {
+  static unsigned long lastFlush = 0;
+  if (!wifiConnected || !sdCardReady || !SD.exists(OFFLINE_TX_FILE)) return;
+  if (txQueueCount > 0 || wiegandBitCount > 0) return;
+  if (millis() - lastFlush < 3000) return;
+  lastFlush = millis();
+
+  File in = SD.open(OFFLINE_TX_FILE, FILE_READ);
+  if (!in) return;
+  if (in.size() == 0) { in.close(); SD.remove(OFFLINE_TX_FILE); return; }
+
+  if (SD.exists(OFFLINE_TX_TMP)) SD.remove(OFFLINE_TX_TMP);
+  File out = SD.open(OFFLINE_TX_TMP, FILE_WRITE);
+  if (!out) { in.close(); return; }
+
+  int sent = 0, kept = 0;
+  bool halt = false;
+  while (in.available()) {
+    String line = in.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0) continue;
+
+    if (!halt && sent < OFFLINE_FLUSH_BATCH) {
+      String rest = line;
+      String ts = nextField(rest), uid = nextField(rest), dir = nextField(rest), st = nextField(rest);
+      String rem = nextField(rest), vId = nextField(rest), uId = nextField(rest), uType = nextField(rest);
+      if (uType.length() == 0) uType = "VEHICLE";
+      if (insertTransactionOnlineTs(uid, dir, st, "[OFFLINE SYNC] " + rem, vId, uId, uType, ts)) {
+        sent++;
+        continue;
+      }
+      halt = true; // network problem - keep this and everything after it
+    }
+    out.println(line);
+    kept++;
+  }
+  in.close();
+  out.close();
+
+  SD.remove(OFFLINE_TX_FILE);
+  if (kept > 0) SD.rename(OFFLINE_TX_TMP, OFFLINE_TX_FILE);
+  else SD.remove(OFFLINE_TX_TMP);
+
+  if (sent > 0) Serial.println("[OFFLINE BUFFER] Uploaded " + String(sent) + " buffered scan(s), " + String(kept) + " remaining.");
+}
+
+// Called when Wi-Fi drops: move anything still waiting in RAM onto the SD card.
+void spillRamQueueToSd() {
+  while (txQueueCount > 0) {
+    QueuedTransaction item = txQueue[txQueueHead];
+    txQueueHead = (txQueueHead + 1) % MAX_TX_QUEUE;
+    txQueueCount--;
+    saveOfflineTransactionSD(item.uid, item.direction, item.status, item.remarks, item.vehicleId, item.userId, item.userType);
+  }
+}
+
+// =====================================================
 // 9. HIGH-SPEED SCAN EVENT DISPATCHER
 // Fast in-memory RAM match (< 0.1ms), instant LCD & Serial
 // =====================================================
@@ -1158,6 +1329,11 @@ void handleScannedTag(String uid, String altUid = "") {
 
   // Multi-Tag Anti-Spam Check: Ignore duplicate pulses for this tag within 4s window
   if (isTagInCooldown(uid) || (altUid.length() > 0 && isTagInCooldown(altUid))) {
+    return;
+  }
+
+  // Optional: only act once the tag has been read enough times in a short window
+  if (!uhfReadConfirmed(uid)) {
     return;
   }
 
@@ -1320,10 +1496,15 @@ void handleScannedTag(String uid, String altUid = "") {
     digitalWrite(RED_LED, LOW);
   }
 
-  // 5. ENQUEUE FOR ASYNC CLOUD SYNC (< 1 us)
-  if (wifiConnected) {
+  // 5. ENQUEUE FOR ASYNC CLOUD SYNC (< 1 us) - or buffer to SD when offline
+  {
     String remarks = authorized ? ("UHF Drive-Through (" + uType + ")") : "Unregistered UHF Tag";
-    enqueueTransaction(finalUid, direction, authorized ? "AUTHORIZED" : "DENIED", remarks, vId, uId, uType);
+    String st = authorized ? "AUTHORIZED" : "DENIED";
+    if (wifiConnected) {
+      enqueueTransaction(finalUid, direction, st, remarks, vId, uId, uType);
+    } else {
+      saveOfflineTransactionSD(finalUid, direction, st, remarks, vId, uId, uType);
+    }
   }
   if (authorized) {
     updateOfflinePresence(finalUid, direction);
@@ -1569,6 +1750,7 @@ void loop() {
     if (wifiConnected) {
       wifiConnected = false;
       Serial.println("[WIFI] Lost Wi-Fi connection. BLE active for re-provisioning...");
+      spillRamQueueToSd();
       startBleServer();
       showReady();
     }
@@ -1576,6 +1758,7 @@ void loop() {
 
   // 1. Process asynchronous background cloud transactions whenever Wiegand is idle
   processCloudQueue();
+  flushOfflineTransactions();
 
   // 2. Periodic RAM Whitelist Sync from Supabase (every 5 minutes)
   if (wifiConnected && (millis() - lastWhitelistSync >= WHITELIST_SYNC_INTERVAL)) {

@@ -615,3 +615,16 @@ body {
         max-height: none !important;
     }
 }
+
+/* ===================== */
+/* Supabase DB Status Badge */
+/* ===================== */
+#dbStatusBadge, .db-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: all 0.3s ease;
+    user-select: none;
+    line-height: 1;
+}
+

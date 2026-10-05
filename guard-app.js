@@ -13,20 +13,15 @@ let appState = {
     recentScans: [], users: [], specialTags: [], activeVehicles: []
 };
 
-// Demo users (fallback when Supabase is offline)
-const mockUsers = {
-    'B7 78 96 31': { uid:'B7 78 96 31', cpass_id:'2022-00123', name:'Juan Dela Cruz', role:'Student', program:'BSIT', section:'3A', type:'Car', model:'Honda Civic', plate:'XYZ-123', color:'Black', status:'AUTHORIZED' },
-    'UID67890': { uid:'UID67890', cpass_id:'CP00', name:'Maria Santos', role:'Faculty', program:'Engineering', section:'--', type:'SUV', model:'Toyota Fortuner', plate:'ABC-789', color:'White', status:'AUTHORIZED' },
-    'UID55555': { uid:'UID55555', cpass_id:'CP01', name:'Carlos Reyes', role:'Staff', program:'Admin', section:'--', type:'Motorcycle', model:'Yamaha NMAX', plate:'DEF-456', color:'Silver', status:'AUTHORIZED' },
-};
-
-
-
 // =====================
-// INIT STATE
+// INIT STATE FROM SUPABASE
 // =====================
 async function initState() {
-    if (isConnected) {
+    if (!supabaseClient && typeof initSupabase === 'function') {
+        initSupabase();
+    }
+
+    if (supabaseClient) {
         try {
             // Load users with vehicles and rfid_cards
             const { data: users, error: ue } = await supabaseClient
@@ -37,7 +32,7 @@ async function initState() {
                     rfid_cards ( id, rfid_uid, authorization_status )
                 `);
             if (ue) console.error('Users fetch error:', ue);
-            if (users) {
+            if (users && Array.isArray(users)) {
                 appState.users = users.map(u => ({
                     ...u,
                     vehicle_type:     u.vehicles?.[0]?.vehicle_type     || null,
@@ -50,12 +45,15 @@ async function initState() {
                     authorization_status: u.rfid_cards?.[0]?.authorization_status || 'PENDING',
                 }));
                 appState.totalVehicles = users.length;
+            } else {
+                appState.users = [];
+                appState.totalVehicles = 0;
             }
 
-            // Load special tags first
+            // Load special tags
             const { data: st, error: ste } = await supabaseClient.from('special_tags').select('*');
             if (ste) console.error('Special tags fetch error:', ste);
-            if (st) appState.specialTags = st;
+            appState.specialTags = (st && Array.isArray(st)) ? st : [];
 
             // Load recent access logs
             const today = new Date().toISOString().split('T')[0];
@@ -68,8 +66,9 @@ async function initState() {
                 `)
                 .order('timestamp', { ascending: false })
                 .limit(500);
+
             if (le) console.error('Logs fetch error:', le);
-            if (logs) {
+            if (logs && Array.isArray(logs)) {
                 appState.recentScans = logs.map(l => {
                     const cleanUid = (l.rfid_uid || '').replace(/\s+/g, '').toUpperCase();
                     const special = appState.specialTags.find(s => 
@@ -82,7 +81,7 @@ async function initState() {
                     let role = l.users?.role === 'OTHERS' && l.users?.role_detail ? l.users.role_detail : l.users?.role;
                     let cpass_id = l.users?.cpass_id || l.users?.student_id || null;
 
-                    // 1. Check remarks for Visitor or Emergency details
+                    // Check remarks for Visitor or Emergency details
                     if (l.remarks) {
                         if (l.remarks.includes('Visitor')) {
                             const match = l.remarks.match(/Visitor (?:Exit|Entry):\s*([^|]+)(?:\s*\|\s*Plate:\s*([^|]+))?/i);
@@ -103,7 +102,7 @@ async function initState() {
                         }
                     }
 
-                    // 2. Fallback to special_tags
+                    // Fallback to special_tags
                     if (!name && special) {
                         if (special.type === 'EMERGENCY') {
                             name = special.label || 'Emergency Response';
@@ -144,21 +143,49 @@ async function initState() {
                 const todayLogs = logs.filter(l => l.timestamp?.startsWith(today));
                 appState.entriesToday = todayLogs.filter(l => l.direction === 'ENTRY').length;
                 appState.exitsToday   = todayLogs.filter(l => l.direction === 'EXIT').length;
+            } else {
+                appState.recentScans = [];
+                appState.vehiclesInside = 0;
+                appState.entriesToday = 0;
+                appState.exitsToday = 0;
             }
 
-            console.log('✅ Guard data loaded from Supabase:', appState.totalVehicles, 'vehicles,', appState.vehiclesInside, 'inside');
-        } catch(e) { console.error('Init error:', e); }
-    } else {
-        appState.totalVehicles = 103;
-        appState.entriesToday = 42; appState.exitsToday = 18; appState.vehiclesInside = 24;
-        const mockArr = Object.values(mockUsers);
-        for (let i = 0; i < 6; i++) {
-            const u = mockArr[i % 3];
-            appState.recentScans.push({ uid: u.uid, cpass_id: u.cpass_id, name: u.name, role: u.role, plate: u.plate, status: u.status, event: i%2===0?'ENTRY':'EXIT', duration: i%2===0?'INSIDE':'15m', time: new Date(Date.now()-i*900000).toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit'}) });
+            console.log('🟢 Guard data loaded from Supabase:', appState.totalVehicles, 'vehicles,', appState.vehiclesInside, 'inside');
+            setupGuardRealtime();
+        } catch(e) { 
+            console.error('Guard Init error:', e); 
         }
     }
+
     renderAll();
     loadGuardInfo();
+}
+
+// Auto-reload data on connection ready
+window.addEventListener('supabase:connected', () => {
+    console.log('🔄 Re-fetching guard live data after Supabase connection...');
+    initState();
+});
+
+function setupGuardRealtime() {
+    if (!isConnected || !supabaseClient) return;
+
+    try {
+        supabaseClient.channel('guard-live-feed')
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'transactions' }, payload => {
+                const txn = payload.new;
+                console.log('⚡ [Guard RT] Inbound gate scan:', txn);
+                if (txn && txn.rfid_uid) {
+                    processRFIDScan(txn.rfid_uid, txn.id, txn, txn.direction);
+                }
+            })
+            .subscribe((status, err) => {
+                console.log('⚡ [Guard RT] Subscription status:', status);
+                if (err) console.error('Guard RT error:', err);
+            });
+    } catch(e) {
+        console.warn('Realtime channel initialization error:', e);
+    }
 }
 
 function loadGuardInfo() {
@@ -577,13 +604,6 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                     status:       card.authorization_status === 'AUTHORIZED' ? 'AUTHORIZED' : 'DENIED'
                 };
             }
-        } catch(e) { console.error('DB Lookup error:', e); }
-    }
-
-    // Fallback to mock data if offline
-    if (!result && mockUsers[uid]) {
-        result = { ...mockUsers[uid] };
-        userId = uid;
     }
 
     // Check Special Tags (Visitor & Emergency) - flexible space matching

@@ -26,14 +26,17 @@ let scanTimeout     = null;
 
 // ─── CONNECTION BADGE ─────────────────────────────────────────
 function updateConnBadge() {
+  updateDBBadge();
   const ind  = document.getElementById('connIndicator');
   const txt  = document.getElementById('connText');
-  if (isConnected) {
-    ind.className = 'hdr-online';
-    txt.textContent = 'ONLINE';
-  } else {
-    ind.className = 'hdr-online offline';
-    txt.textContent = 'OFFLINE';
+  if (ind && txt) {
+    if (isConnected) {
+      ind.className = 'hdr-online';
+      txt.textContent = 'ONLINE';
+    } else {
+      ind.className = 'hdr-online offline';
+      txt.textContent = 'OFFLINE';
+    }
   }
 }
 
@@ -52,18 +55,15 @@ async function doLogin() {
 
   try {
     let account = null;
-    if (isConnected) {
-      const { data } = await supabaseClient
+    const client = typeof supabaseClient !== 'undefined' ? supabaseClient : null;
+    if (client) {
+      const { data } = await client
         .from('system_accounts')
         .select('*')
         .eq('username', user)
         .eq('password', pass)
         .maybeSingle();
       account = data;
-    } else {
-      // Offline fallback
-      if (user === 'guard' && pass === 'guard123') account = { username: 'guard', role: 'GUARD' };
-      if (user === 'admin' && pass === 'admin123') account = { username: 'admin', role: 'ADMIN' };
     }
 
     if (!account) {

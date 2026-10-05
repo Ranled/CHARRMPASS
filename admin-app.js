@@ -8,6 +8,7 @@ if (typeof updateDBBadge === 'function') updateDBBadge();
 if (window.lucide) lucide.createIcons();
 const el = id => document.getElementById(id);
 
+// State
 let adminState = { 
     users: [], 
     pendingUsers: [], 
@@ -24,27 +25,6 @@ let adminState = {
     activeHistUser: null,
     histDirection: 'ALL'
 };
-
-// Demo data (fallback)
-const demoUsers = [
-    { id:'1', full_name:'Juan Dela Cruz', cpass_id:'2021-0123', role:'Student', user_type:'VEHICLE', default_transit_mode:'VEHICLE', rfid_type:'LONG_RANGE', rfid_uid:'B7 78 96 31', program:'BSIT', section:'3A', vehicle_type:'Car', vehicle_model:'Honda Civic', plate_number:'XYZ-123', vehicle_color:'Black', authorization_status:'AUTHORIZED', age:21, sex:'Male', address:'Ibajay, Aklan', created_at:'2024-01-15' },
-    { id:'2', full_name:'Maria Santos', cpass_id:'CP00', role:'Faculty', user_type:'VEHICLE', default_transit_mode:'VEHICLE', rfid_type:'LONG_RANGE', rfid_uid:'UID67890', program:'Engineering', section:'--', vehicle_type:'SUV', vehicle_model:'Toyota Fortuner', plate_number:'ABC-789', vehicle_color:'White', authorization_status:'AUTHORIZED', age:35, sex:'Female', address:'Kalibo, Aklan', created_at:'2024-02-01' },
-    { id:'3', full_name:'Carlos Reyes', cpass_id:'CP01', role:'Staff', user_type:'PEDESTRIAN', default_transit_mode:'PEDESTRIAN', rfid_type:'CLOSE_RANGE', rfid_uid:'UID55555', program:'Admin', section:'--', vehicle_type:'None', vehicle_model:'Pedestrian', plate_number:'PEDESTRIAN', vehicle_color:'--', authorization_status:'AUTHORIZED', age:28, sex:'Male', address:'Nabas, Aklan', created_at:'2024-03-10' },
-    { id:'4', full_name:'Ana Lopez', cpass_id:'2022-0456', role:'Student', user_type:'PEDESTRIAN', default_transit_mode:'PEDESTRIAN', rfid_type:'CLOSE_RANGE', rfid_uid:'', program:'BSCS', section:'2B', vehicle_type:'None', vehicle_model:'Pedestrian', plate_number:'PEDESTRIAN', vehicle_color:'--', authorization_status:'PENDING', age:20, sex:'Female', address:'Ibajay, Aklan', created_at:'2024-05-13' },
-    { id:'5', full_name:'Pedro Garcia', cpass_id:'2023-0789', role:'Student', user_type:'VEHICLE', default_transit_mode:'VEHICLE', rfid_type:'LONG_RANGE', rfid_uid:'', program:'BSA', section:'1A', vehicle_type:'Car', vehicle_model:'Vios', plate_number:'JKL-012', vehicle_color:'Blue', authorization_status:'PENDING', age:19, sex:'Male', address:'Tangalan, Aklan', created_at:'2024-05-14' },
-];
-
-const demoSpecialTags = [
-    { id: '1', rfid_uid: '73 71 A9 FE', type: 'VISITOR', user_type: 'PEDESTRIAN', rfid_type: 'CLOSE_RANGE', description: 'Visitor Pass (Reusable Close-Range RFID Card)' },
-    { id: '2', rfid_uid: 'D3 85 96 FE', type: 'EMERGENCY', user_type: 'VEHICLE', rfid_type: 'LONG_RANGE', description: 'Emergency Response Long-Range UHF Vehicle Tag' }
-];
-
-const demoAccounts = [
-    { id: '1', username: 'guard', password: 'guard123', role: 'GUARD' },
-    { id: '2', username: 'admin', password: 'admin123', role: 'ADMIN' }
-];
-
-
 
 // =====================
 // VIEW SWITCHING
@@ -71,25 +51,31 @@ function adminView(v) {
 }
 window.adminView = adminView;
 
-
-
 // =====================
-// LOAD DATA
+// LOAD REAL SUPABASE DATA
 // =====================
 async function loadData() {
-    if (isConnected) {
+    if (!supabaseClient && typeof initSupabase === 'function') {
+        initSupabase();
+    }
+
+    if (supabaseClient) {
         try {
-            // Load users with their vehicles and rfid_cards via JOIN
-            const {data:u, error:ue} = await supabaseClient
+            // 1. Load users with their vehicles and rfid_cards via relational JOIN
+            const { data: u, error: ue } = await supabaseClient
                 .from('users')
                 .select(`
                     *,
                     vehicles ( id, vehicle_type, vehicle_model, plate_number, vehicle_color, motorcycle_image, or_cr_image, approval_status, created_at ),
                     rfid_cards ( id, rfid_uid, authorization_status, rfid_type, user_type, vehicle_id )
                 `)
-                .order('created_at', {ascending: false});
-            if (ue) { console.error('Users error:', ue); throw ue; }
-            if (u) {
+                .order('created_at', { ascending: false });
+
+            if (ue) {
+                console.error('❌ Supabase Users query error:', ue);
+            }
+
+            if (u && Array.isArray(u)) {
                 // Map users with full vehicle & RFID card collections
                 adminState.users = u.map(usr => {
                     const vehList = usr.vehicles || [];
@@ -126,7 +112,7 @@ async function loadData() {
                     const cpassDisplay = usr.cpass_id || usr.student_id || 'PENDING';
                     const pedCard = (usr.rfid_cards || []).find(c => !c.vehicle_id);
 
-                    // 1. Check if person's pedestrian registration is pending
+                    // Check if person's pedestrian registration is pending
                     const isPersonPending = usr.approval_status === 'PENDING' || !usr.approval_status;
                     const isPedCardPending = pedCard ? (pedCard.authorization_status === 'PENDING' || !pedCard.rfid_uid || pedCard.rfid_uid.startsWith('UNASSIGNED_')) : isPersonPending;
 
@@ -151,7 +137,7 @@ async function loadData() {
                         });
                     }
 
-                    // 2. Check each registered vehicle under this user
+                    // Check each registered vehicle under this user
                     (usr.vehicles || []).forEach(veh => {
                         const vehCard = (usr.rfid_cards || []).find(c => c.vehicle_id === veh.id);
                         const isVehPending = veh.approval_status === 'PENDING' || !veh.approval_status;
@@ -186,22 +172,27 @@ async function loadData() {
 
                 adminState.pendingItems = pendingItems;
                 adminState.pendingUsers = pendingItems;
+            } else {
+                adminState.users = [];
+                adminState.pendingItems = [];
+                adminState.pendingUsers = [];
             }
 
-            // Load transactions with vehicle & user info
-            const {data:l, error:le} = await supabaseClient
+            // 2. Load transactions with vehicle & user info
+            const { data: l, error: le } = await supabaseClient
                 .from('transactions')
                 .select(`
                     *,
                     users ( full_name, role, role_detail, program, section, profile_image, default_transit_mode, cpass_id, student_id ),
                     vehicles ( plate_number, vehicle_type, vehicle_model, vehicle_color )
                 `)
-                .order('timestamp', {ascending: false})
+                .order('timestamp', { ascending: false })
                 .limit(1000);
-            if (le) console.error('Transactions error:', le);
-            if (l) adminState.logs = l;
 
-            // Currently inside counts = ENTRY count - EXIT count (authorized)
+            if (le) console.error('❌ Supabase Transactions error:', le);
+            adminState.logs = (l && Array.isArray(l)) ? l : [];
+
+            // Calculate live on-campus presence
             const vehEntries = adminState.logs.filter(t => t.direction === 'ENTRY' && t.status === 'AUTHORIZED' && (t.user_type === 'VEHICLE' || t.rfid_type === 'LONG_RANGE' || (t.vehicles?.plate_number && t.vehicles?.plate_number !== 'PEDESTRIAN'))).length;
             const vehExits   = adminState.logs.filter(t => t.direction === 'EXIT'  && t.status === 'AUTHORIZED' && (t.user_type === 'VEHICLE' || t.rfid_type === 'LONG_RANGE' || (t.vehicles?.plate_number && t.vehicles?.plate_number !== 'PEDESTRIAN'))).length;
             adminState.activeVehicles = Math.max(0, vehEntries - vehExits);
@@ -210,60 +201,69 @@ async function loadData() {
             const pedExits   = adminState.logs.filter(t => t.direction === 'EXIT'  && t.status === 'AUTHORIZED' && (t.user_type === 'PEDESTRIAN' || t.rfid_type === 'CLOSE_RANGE' || t.vehicles?.vehicle_type === 'None' || t.vehicles?.plate_number === 'PEDESTRIAN' || t.gate?.includes('PEDESTRIAN'))).length;
             adminState.activePedestrians = Math.max(0, pedEntries - pedExits);
 
-            const {data:acc, error:acce} = await supabaseClient.from('system_accounts').select('*');
-            if (acce) console.error('Accounts error:', acce);
-            if (acc && acc.length) adminState.accounts = acc;
-            else if (!adminState.accounts.length) adminState.accounts = [...demoAccounts];
+            // 3. Load system accounts
+            const { data: acc, error: acce } = await supabaseClient.from('system_accounts').select('*');
+            if (acce) console.error('❌ Supabase Accounts error:', acce);
+            adminState.accounts = (acc && Array.isArray(acc)) ? acc : [];
 
-            const {data:st, error:ste} = await supabaseClient.from('special_tags').select('*');
-            if (ste) console.error('Special tags error:', ste);
-            if (st && st.length) adminState.specialTags = st;
-            else if (!adminState.specialTags.length) adminState.specialTags = [...demoSpecialTags];
+            // 4. Load special tags (Visitor & Emergency)
+            const { data: st, error: ste } = await supabaseClient.from('special_tags').select('*');
+            if (ste) console.error('❌ Supabase Special tags error:', ste);
+            adminState.specialTags = (st && Array.isArray(st)) ? st : [];
 
-            // Load registered ESP32 gate devices
-            const {data:dev, error:deve} = await supabaseClient.from('devices').select('*').order('device_name', {ascending: true});
-            if (deve) console.error('Devices error:', deve);
-            if (dev && dev.length) {
-                adminState.devices = dev;
-            } else if (!adminState.devices.length) {
-                adminState.devices = [
-                    { id: '1', device_name: 'CHARRMPASS Entry Unit', device_location: 'Entry Gate', esp32_identifier: 'CHARRMPASS_GATE_ENTRY', gate_type: 'ENTRY', device_category: 'VEHICLE_BARRIER', rfid_range: 'LONG_RANGE', status: 'ONLINE', last_online: new Date().toISOString() },
-                    { id: '2', device_name: 'CHARRMPASS Exit Unit', device_location: 'Exit Gate', esp32_identifier: 'CHARRMPASS_GATE_EXIT', gate_type: 'EXIT', device_category: 'VEHICLE_BARRIER', rfid_range: 'LONG_RANGE', status: 'ONLINE', last_online: new Date().toISOString() }
-                ];
-            }
+            // 5. Load registered ESP32 gate devices
+            const { data: dev, error: deve } = await supabaseClient.from('devices').select('*').order('device_name', { ascending: true });
+            if (deve) console.error('❌ Supabase Devices error:', deve);
+            adminState.devices = (dev && Array.isArray(dev)) ? dev : [];
 
-            console.log('✅ Admin data refreshed:', adminState.users.length, 'users,', adminState.pendingItems.length, 'pending items,', adminState.logs.length, 'transactions,', adminState.devices.length, 'devices');
+            console.log('🟢 Real Supabase data loaded:', adminState.users.length, 'users,', adminState.logs.length, 'transactions,', adminState.specialTags.length, 'special tags');
         } catch(e) {
-            console.error('CRITICAL LOAD ERROR:', e);
-            showToast('Database Error: ' + e.message, 'error');
-            if (!adminState.specialTags.length) adminState.specialTags = [...demoSpecialTags];
-            if (!adminState.accounts.length) adminState.accounts = [...demoAccounts];
+            console.error('CRITICAL DATABASE LOAD ERROR:', e);
+            showToast('Database connection error: ' + (e.message || e), 'error');
         }
-    } else {
-        adminState.users = [...demoUsers];
-        adminState.pendingItems = adminState.users.filter(u => u.authorization_status === 'PENDING' || !u.authorization_status).map(u => ({
-            type: u.user_type || 'PEDESTRIAN',
-            id: u.id,
-            userId: u.id,
-            vehicleId: u.vehicle_id,
-            user: u,
-            cpassId: u.cpass_id || 'CP00',
-            name: u.full_name,
-            role: u.role,
-            plate: u.plate_number,
-            created_at: u.created_at,
-            status: u.authorization_status || 'PENDING'
-        }));
-        adminState.pendingUsers = adminState.pendingItems;
-        adminState.specialTags = [...demoSpecialTags];
-        adminState.accounts = [...demoAccounts];
-        adminState.devices = [
-            { id: '1', device_name: 'CHARRMPASS Entry Unit', device_location: 'Entry Gate', esp32_identifier: 'CHARRMPASS_GATE_ENTRY', gate_type: 'ENTRY', device_category: 'VEHICLE_BARRIER', rfid_range: 'LONG_RANGE', status: 'ONLINE', last_online: new Date().toISOString() },
-            { id: '2', device_name: 'CHARRMPASS Exit Unit', device_location: 'Exit Gate', esp32_identifier: 'CHARRMPASS_GATE_EXIT', gate_type: 'EXIT', device_category: 'VEHICLE_BARRIER', rfid_range: 'LONG_RANGE', status: 'ONLINE', last_online: new Date().toISOString() }
-        ];
     }
+
     renderAdmin();
     renderEsp32DevicesTable();
+    setupAdminRealtime();
+}
+
+// Auto-reload data whenever connection is confirmed
+window.addEventListener('supabase:connected', () => {
+    console.log('🔄 Re-fetching live data after Supabase connection event...');
+    loadData();
+});
+
+let adminRealtimeSubscribed = false;
+function setupAdminRealtime() {
+    if (!isConnected || !supabaseClient || adminRealtimeSubscribed) return;
+    adminRealtimeSubscribed = true;
+
+    try {
+        supabaseClient.channel('admin-live-bus')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
+                console.log('⚡ [Admin RT] Transactions updated');
+                if (typeof initAdminState === 'function') initAdminState();
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'rfid_cards' }, () => {
+                console.log('⚡ [Admin RT] RFID cards updated');
+                if (typeof initAdminState === 'function') initAdminState();
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => {
+                console.log('⚡ [Admin RT] Users/registrations updated');
+                if (typeof initAdminState === 'function') initAdminState();
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, () => {
+                console.log('⚡ [Admin RT] Devices updated');
+                if (typeof initAdminState === 'function') initAdminState();
+            })
+            .subscribe((status, err) => {
+                console.log('⚡ [Admin RT] Channel status:', status);
+                if (err) console.error('Admin RT Error:', err);
+            });
+    } catch(e) {
+        console.warn('Admin realtime setup error:', e);
+    }
 }
 
 const renderAll = renderAdmin;
@@ -327,6 +327,22 @@ window.setUserTableFilter = function(filter) {
 };
 
 window.filterUsers = function() {
+    const searchVal = el('userSearch')?.value || '';
+    const clearBtn = el('userSearchClearBtn');
+    if (clearBtn) {
+        clearBtn.classList.toggle('hidden', searchVal.length === 0);
+    }
+    renderAdmin();
+};
+
+window.clearUserSearch = function() {
+    const input = el('userSearch');
+    if (input) {
+        input.value = '';
+        input.focus();
+    }
+    const clearBtn = el('userSearchClearBtn');
+    if (clearBtn) clearBtn.classList.add('hidden');
     renderAdmin();
 };
 
@@ -563,71 +579,70 @@ function renderAdmin() {
             const vehCount = (u.vehicles || []).length;
 
             return `
-            <tr class="hover:bg-slate-50/80 transition-colors">
-                <td class="p-4">
+            <tr class="hover:bg-slate-50/80 transition-colors border-b border-slate-100">
+                <!-- 1. Person / Driver -->
+                <td class="p-3.5">
                     <div class="flex items-center gap-3">
-                        <img src="${avatar}" class="w-10 h-10 rounded-xl object-cover border border-slate-200 shadow-sm cursor-pointer hover:opacity-80" onclick="openReviewModal('${u.id}', '${vehCount ? 'VEHICLE' : 'PEDESTRIAN'}', '${u.vehicles?.[0]?.id || ''}')" title="Click to view registration details" onerror="this.src='https://ui-avatars.com/api/?name=User'">
-                        <div>
-                            <div class="font-extrabold text-slate-800 hover:text-charm-dark cursor-pointer flex items-center gap-1.5" onclick="openReviewModal('${u.id}', '${vehCount ? 'VEHICLE' : 'PEDESTRIAN'}', '${u.vehicles?.[0]?.id || ''}')">
-                                <span>${u.full_name || '--'}</span>
-                                <span class="font-mono text-[10px] font-black px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300" title="CHARRMPASS ID">${cpassDisplay}</span>
+                        <img src="${avatar}" class="w-9 h-9 rounded-xl object-cover border border-slate-200 shadow-sm cursor-pointer hover:opacity-80 shrink-0" onclick="openReviewModal('${u.id}', '${vehCount ? 'VEHICLE' : 'PEDESTRIAN'}', '${u.vehicles?.[0]?.id || ''}')" title="Click to view dossier" onerror="this.src='https://ui-avatars.com/api/?name=User'">
+                        <div class="min-w-0">
+                            <div class="font-extrabold text-slate-800 hover:text-charm-dark cursor-pointer flex items-center gap-1.5 flex-wrap" onclick="openReviewModal('${u.id}', '${vehCount ? 'VEHICLE' : 'PEDESTRIAN'}', '${u.vehicles?.[0]?.id || ''}')">
+                                <span class="truncate">${u.full_name || '--'}</span>
+                                <span class="font-mono text-[10px] font-black px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 border border-amber-300 shrink-0" title="CPASS ID">${cpassDisplay}</span>
                             </div>
-                            <div class="text-xs text-slate-400 font-medium">${u.program || 'No Program'} ${u.section ? '• ' + u.section : ''}</div>
+                            <div class="text-[11px] text-slate-400 font-medium truncate">${u.program || 'No Program'} ${u.section ? '• ' + u.section : ''}</div>
                         </div>
                     </div>
                 </td>
-                <td class="p-4">
-                    <span class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${roleBadgeClass}">${roleDisplay}</span>
-                    <div class="text-[11px] text-slate-400 mt-1">${u.address ? u.address.substring(0, 18) + (u.address.length > 18 ? '...' : '') : '--'}</div>
+
+                <!-- 2. Role & Transit -->
+                <td class="p-3.5 whitespace-nowrap">
+                    <div class="flex flex-col items-start gap-1">
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${roleBadgeClass}">${roleDisplay}</span>
+                        <span class="text-[10px] font-bold text-slate-600 flex items-center gap-1">
+                            ${hasPed && vehCount > 0 ? '<span>🚶+🚗</span> Hybrid' : (hasPed ? '<span>🚶</span> Pedestrian' : '<span>🚗</span> Vehicle')}
+                        </span>
+                    </div>
                 </td>
-                <td class="p-4 whitespace-nowrap">
+
+                <!-- 3. Vehicle & Plate -->
+                <td class="p-3.5">
                     ${(() => {
-                        if (hasPed && vehCount > 0) {
-                            return `
-                                <div class="flex flex-col gap-1.5 items-start">
-                                    <span class="px-2.5 py-1 rounded-xl text-[10px] font-black bg-blue-100 text-blue-800 border border-blue-200 inline-flex items-center gap-1.5 whitespace-nowrap shadow-xs">
-                                        <span>🚶</span> Pedestrian (Close-Range)
-                                    </span>
-                                    <span class="px-2.5 py-1 rounded-xl text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1.5 whitespace-nowrap shadow-xs">
-                                        <span>🚗</span> ${vehCount} Vehicle(s) (Long-Range UHF)
-                                    </span>
-                                </div>`;
-                        } else if (hasPed) {
-                            return `
-                                <span class="px-2.5 py-1 rounded-xl text-[10px] font-black bg-blue-100 text-blue-800 border border-blue-200 inline-flex items-center gap-1.5 whitespace-nowrap shadow-xs">
-                                    <span>🚶</span> Pedestrian (Close-Range)
-                                </span>`;
-                        } else {
-                            return `
-                                <span class="px-2.5 py-1 rounded-xl text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1.5 whitespace-nowrap shadow-xs">
-                                    <span>🚗</span> ${vehCount || 1} Vehicle (Long-Range UHF)
-                                </span>`;
+                        const vehs = u.vehicles || [];
+                        if (!vehs.length) {
+                            return `<div class="text-xs font-semibold text-slate-400 italic">🚶 Walking / Pedestrian</div>`;
                         }
+                        return vehs.map(v => `
+                            <div class="mb-1 last:mb-0">
+                                <div class="font-mono text-xs font-black text-slate-900 bg-slate-100 hover:bg-slate-200 px-1.5 py-0.5 rounded border border-slate-200 inline-block cursor-pointer" onclick="openReviewModal('${u.id}', 'VEHICLE', '${v.id}')" title="Review vehicle">${v.plate_number || 'NO PLATE'}</div>
+                                <div class="text-[11px] text-slate-500 font-medium truncate max-w-[160px]">${v.vehicle_model || v.vehicle_type || 'Vehicle'}</div>
+                            </div>
+                        `).join('');
                     })()}
                 </td>
-                <td class="p-4">
-                    <div class="space-y-1 max-w-[220px]">
+
+                <!-- 4. RFID UID Tag -->
+                <td class="p-3.5">
+                    <div class="space-y-1">
                         ${(() => {
                             const cards = u.rfid_cards || [];
                             if (!cards.length) {
-                                return `<span class="px-2 py-0.5 rounded-lg bg-yellow-50 text-yellow-700 border border-yellow-200 text-xs font-bold inline-flex items-center gap-1"><i data-lucide="alert-circle" class="w-3 h-3"></i> Unassigned</span>`;
+                                return `<span class="px-2 py-0.5 rounded-lg bg-yellow-50 text-yellow-700 border border-yellow-200 text-[11px] font-bold inline-flex items-center gap-1"><i data-lucide="alert-circle" class="w-3 h-3"></i> Unassigned</span>`;
                             }
                             return cards.map(c => {
                                 const isVehCard = !!c.vehicle_id;
                                 const v = isVehCard ? (u.vehicles||[]).find(veh => veh.id === c.vehicle_id) : null;
-                                const tagLabel = isVehCard ? (v ? v.plate_number : 'UHF Tag') : 'Ped Card';
+                                const tagLabel = isVehCard ? (v ? v.plate_number : 'UHF') : 'Card';
                                 const uidVal = (c.rfid_uid && !c.rfid_uid.startsWith('UNASSIGNED_')) ? c.rfid_uid : null;
                                 if (!uidVal) {
                                     return `
-                                        <div class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-yellow-50 text-yellow-700 border border-yellow-200 truncate cursor-pointer hover:bg-yellow-100 inline-block mr-1" title="Click to assign UID" onclick="openReviewModal('${u.id}', '${isVehCard ? 'VEHICLE' : 'PEDESTRIAN'}', '${c.vehicle_id || ''}')">
+                                        <div class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-yellow-50 text-yellow-700 border border-yellow-200 cursor-pointer hover:bg-yellow-100 inline-block mr-1" title="Click to assign UID" onclick="openReviewModal('${u.id}', '${isVehCard ? 'VEHICLE' : 'PEDESTRIAN'}', '${c.vehicle_id || ''}')">
                                             ${tagLabel}: Unassigned
                                         </div>
                                     `;
                                 }
                                 return `
-                                    <div class="inline-flex items-center gap-1 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-2 py-0.5 rounded-lg text-xs font-mono font-bold text-slate-800 cursor-pointer transition-colors mr-1 mb-1" onclick="copyToClipboard('${uidVal}', '${tagLabel} UID')" title="Click to copy UID">
+                                    <div class="inline-flex items-center gap-1 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-2 py-0.5 rounded-lg text-xs font-mono font-bold text-slate-800 cursor-pointer transition-colors mr-1" onclick="copyToClipboard('${uidVal}', '${tagLabel} UID')" title="Click to copy UID: ${uidVal}">
                                         <i data-lucide="${isVehCard ? 'radio' : 'nfc'}" class="w-3 h-3 text-emerald-600"></i>
-                                        <span class="text-[10px] text-slate-500 font-sans">${tagLabel}:</span>
                                         <span>${uidVal}</span>
                                     </div>
                                 `;
@@ -635,46 +650,34 @@ function renderAdmin() {
                         })()}
                     </div>
                 </td>
-                <td class="p-4">
-                    ${(() => {
-                        const vehs = u.vehicles || [];
-                        if (!vehs.length) {
-                            return `<div class="text-xs font-bold text-slate-400 italic">Walking / Pedestrian</div>`;
-                        }
-                        return vehs.map(v => `
-                            <div class="mb-1 last:mb-0">
-                                <div class="font-semibold text-slate-700 text-xs">${v.vehicle_type || 'Vehicle'} - ${v.vehicle_model || '--'}</div>
-                                <div class="font-mono text-xs font-black text-slate-900 bg-slate-100 px-1.5 py-0.2 rounded border border-slate-200 inline-block mt-0.5 cursor-pointer hover:bg-slate-200" onclick="openReviewModal('${u.id}', 'VEHICLE', '${v.id}')" title="Review and manage this vehicle">${v.plate_number || 'NO PLATE'}</div>
-                            </div>
-                        `).join('');
-                    })()}
+
+                <!-- 5. Status & Campus Presence -->
+                <td class="p-3.5 text-center whitespace-nowrap">
+                    <div class="flex flex-col items-center gap-1">
+                        <span class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase border ${statusClass}">${statusLabel}</span>
+                        ${onCampus ? `
+                            <span class="inline-flex items-center gap-1 px-2 py-0.2 rounded-full text-[9px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> INSIDE
+                            </span>
+                        ` : `
+                            <span class="text-[10px] font-semibold text-slate-400">Off-Campus</span>
+                        `}
+                    </div>
                 </td>
-                <td class="p-4 text-center whitespace-nowrap">
-                    ${onCampus ? `
-                        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-xs whitespace-nowrap">
-                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> INSIDE
-                        </span>
-                    ` : `
-                        <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-black bg-slate-100 text-slate-500 border border-slate-200 whitespace-nowrap">
-                            ⚪ OFF-CAMPUS
-                        </span>
-                    `}
-                </td>
-                <td class="p-4 text-center">
-                    <span class="px-2.5 py-1 rounded-full text-[10px] font-black uppercase border ${statusClass}">${statusLabel}</span>
-                </td>
-                <td class="p-4 text-right whitespace-nowrap">
+
+                <!-- 6. Actions -->
+                <td class="p-3.5 text-right whitespace-nowrap">
                     <div class="flex items-center justify-end gap-1">
-                        <button onclick="openReviewModal('${u.id}', '${vehCount ? 'VEHICLE' : 'PEDESTRIAN'}', '${u.vehicles?.[0]?.id || ''}')" class="p-2 text-slate-500 hover:text-charm-dark bg-white border border-slate-200 rounded-xl hover:bg-slate-50 shadow-sm transition-all" title="View Full Registration Dossier & Documents">
+                        <button onclick="openReviewModal('${u.id}', '${vehCount ? 'VEHICLE' : 'PEDESTRIAN'}', '${u.vehicles?.[0]?.id || ''}')" class="p-1.5 text-slate-500 hover:text-charm-dark bg-white border border-slate-200 rounded-lg hover:bg-slate-50 shadow-xs transition-all" title="View Dossier & Documents">
                             <i data-lucide="file-search" class="w-4 h-4"></i>
                         </button>
-                        <button onclick="openUserHistoryModal('${u.id}')" class="p-2 text-slate-500 hover:text-blue-600 bg-white border border-slate-200 rounded-xl hover:bg-blue-50 shadow-sm transition-all" title="View Access History & Logs">
+                        <button onclick="openUserHistoryModal('${u.id}')" class="p-1.5 text-slate-500 hover:text-blue-600 bg-white border border-slate-200 rounded-lg hover:bg-blue-50 shadow-xs transition-all" title="Access History & Logs">
                             <i data-lucide="history" class="w-4 h-4"></i>
                         </button>
-                        <button onclick="openUserModal('${u.id}')" class="p-2 text-slate-500 hover:text-charm-dark bg-white border border-slate-200 rounded-xl hover:bg-slate-50 shadow-sm transition-all" title="Edit Profile & Assign UID">
+                        <button onclick="openUserModal('${u.id}')" class="p-1.5 text-slate-500 hover:text-charm-dark bg-white border border-slate-200 rounded-lg hover:bg-slate-50 shadow-xs transition-all" title="Edit Profile & Assign UID">
                             <i data-lucide="edit-3" class="w-4 h-4"></i>
                         </button>
-                        <button onclick="deleteUser('${u.id}')" class="p-2 text-slate-400 hover:text-red-500 bg-white border border-slate-200 rounded-xl hover:bg-red-50 shadow-sm transition-all" title="Delete User">
+                        <button onclick="deleteUser('${u.id}')" class="p-1.5 text-slate-400 hover:text-red-500 bg-white border border-slate-200 rounded-lg hover:bg-red-50 shadow-xs transition-all" title="Delete User">
                             <i data-lucide="trash-2" class="w-4 h-4"></i>
                         </button>
                     </div>
@@ -682,7 +685,7 @@ function renderAdmin() {
             </tr>`;
         }).join('') : `
             <tr>
-                <td colspan="8" class="p-12 text-center text-slate-400">
+                <td colspan="6" class="p-12 text-center text-slate-400">
                     <div class="flex flex-col items-center justify-center">
                         <div class="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mb-2 text-slate-400">
                             <i data-lucide="search-x" class="w-6 h-6"></i>
@@ -1503,18 +1506,59 @@ window.setTrafficGranularity = function(gran) {
     renderAnalyticsCharts();
 };
 
+window.refreshAnalyticsData = async function() {
+    const icon = el('iconRefreshAnalytics');
+    const btn = el('btnRefreshAnalytics');
+    if (icon) icon.classList.add('animate-spin');
+    if (btn) btn.disabled = true;
+
+    showToast('Refreshing analytics data...', 'info');
+
+    try {
+        if (isConnected && supabaseClient) {
+            await loadData();
+        } else {
+            renderAnalytics();
+        }
+        showToast('Analytics refreshed with latest campus activity!', 'success');
+    } catch(err) {
+        console.error('Error refreshing analytics:', err);
+        showToast('Failed to refresh: ' + err.message, 'error');
+    } finally {
+        setTimeout(() => {
+            if (icon) icon.classList.remove('animate-spin');
+            if (btn) btn.disabled = false;
+        }, 500);
+    }
+};
+
 function getFilteredAnalyticsLogs(preset = analyticsPreset, customFrom = customAnalyticsFrom, customTo = customAnalyticsTo) {
     const now = new Date();
     const logs = adminState.logs || [];
     
     if (preset === 'today') {
-        const todayStr = now.toISOString().split('T')[0];
-        return logs.filter(l => l.timestamp && l.timestamp.startsWith(todayStr));
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date();
+        endOfDay.setHours(23, 59, 59, 999);
+        return logs.filter(l => {
+            if (!l.timestamp) return false;
+            const t = new Date(l.timestamp);
+            return t >= startOfDay && t <= endOfDay;
+        });
     }
     if (preset === 'yesterday') {
-        const y = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-        const yStr = y.toISOString().split('T')[0];
-        return logs.filter(l => l.timestamp && l.timestamp.startsWith(yStr));
+        const startOfYesterday = new Date();
+        startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+        startOfYesterday.setHours(0, 0, 0, 0);
+        const endOfYesterday = new Date();
+        endOfYesterday.setDate(endOfYesterday.getDate() - 1);
+        endOfYesterday.setHours(23, 59, 59, 999);
+        return logs.filter(l => {
+            if (!l.timestamp) return false;
+            const t = new Date(l.timestamp);
+            return t >= startOfYesterday && t <= endOfYesterday;
+        });
     }
     if (preset === '7days') {
         const past7 = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -1525,17 +1569,21 @@ function getFilteredAnalyticsLogs(preset = analyticsPreset, customFrom = customA
         return logs.filter(l => l.timestamp && new Date(l.timestamp) >= past30);
     }
     if (preset === 'thisMonth') {
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        const prefix = `${year}-${month}`;
-        return logs.filter(l => l.timestamp && l.timestamp.startsWith(prefix));
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+        return logs.filter(l => {
+            if (!l.timestamp) return false;
+            const t = new Date(l.timestamp);
+            return t >= startOfMonth && t <= now;
+        });
     }
     if (preset === 'lastMonth') {
-        const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        const year = lastMonthDate.getFullYear();
-        const month = String(lastMonthDate.getMonth() + 1).padStart(2, '0');
-        const prefix = `${year}-${month}`;
-        return logs.filter(l => l.timestamp && l.timestamp.startsWith(prefix));
+        const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0);
+        const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+        return logs.filter(l => {
+            if (!l.timestamp) return false;
+            const t = new Date(l.timestamp);
+            return t >= startOfLastMonth && t <= endOfLastMonth;
+        });
     }
     if (preset === 'custom' && customFrom && customTo) {
         const fromDate = new Date(customFrom + 'T00:00:00');
@@ -2534,10 +2582,11 @@ function renderReportHistory() {
                 <td class="p-3 text-xs font-mono text-slate-600">${h.period}</td>
                 <td class="p-3 text-xs font-semibold text-slate-700">${h.generatedBy}</td>
                 <td class="p-3 text-xs text-slate-500">${h.timestamp}</td>
-                <td class="p-3 text-center"><span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 uppercase">${h.format}</span></td>
+                <td class="p-3 text-center"><span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 uppercase">${h.format || 'PDF'}</span></td>
                 <td class="p-3 text-right">
-                    <button onclick="printOfficialReport()" class="p-1.5 text-slate-400 hover:text-slate-800" title="Print"><i data-lucide="printer" class="w-4 h-4"></i></button>
-                    <button onclick="exportCurrentReportCSV()" class="p-1.5 text-slate-400 hover:text-emerald-700 ml-1" title="CSV"><i data-lucide="download" class="w-4 h-4"></i></button>
+                    <button onclick="downloadOfficialReportPDF()" class="p-1.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-lg transition-colors" title="Download PDF"><i data-lucide="file-down" class="w-4 h-4"></i></button>
+                    <button onclick="printOfficialReport()" class="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg ml-1 transition-colors" title="Print"><i data-lucide="printer" class="w-4 h-4"></i></button>
+                    <button onclick="exportCurrentReportCSV()" class="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg ml-1 transition-colors" title="CSV"><i data-lucide="download" class="w-4 h-4"></i></button>
                 </td>
             </tr>
         `).join('') : '<tr><td colspan="6" class="p-6 text-center text-slate-400 text-xs">No reports generated yet. Click Generate Custom Report to start.</td></tr>';
@@ -2552,7 +2601,99 @@ window.renderReports = function() {
     renderReportHistory();
 };
 
-window.generateQuickReport = function(type) {
+let activeReportTimeframePreset = 'today';
+
+window.setReportTimeframePreset = function(preset) {
+    activeReportTimeframePreset = preset;
+    
+    // Update pill highlight UI
+    document.querySelectorAll('.rep-time-tab').forEach(b => {
+        b.className = 'rep-time-tab px-3 py-1.5 rounded-xl font-bold text-xs text-slate-600 hover:text-slate-900 transition-all';
+    });
+    const activeBtn = el(`repBtn-${preset}`);
+    if (activeBtn) {
+        activeBtn.className = 'rep-time-tab px-3 py-1.5 rounded-xl font-bold text-xs bg-charm-dark text-white shadow-sm transition-all';
+    }
+
+    // Hide custom date box if selecting standard presets
+    const customBox = el('repCustomDateBox');
+    if (customBox) customBox.classList.add('hidden');
+
+    generateQuickReport(preset);
+};
+
+window.toggleReportCustomDate = function() {
+    const customBox = el('repCustomDateBox');
+    if (!customBox) return;
+
+    const isHidden = customBox.classList.contains('hidden');
+    if (isHidden) {
+        customBox.classList.remove('hidden');
+        // Set default dates if empty
+        const now = new Date();
+        const past = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        if (el('repInlineFrom') && !el('repInlineFrom').value) el('repInlineFrom').value = past.toISOString().split('T')[0];
+        if (el('repInlineTo') && !el('repInlineTo').value) el('repInlineTo').value = now.toISOString().split('T')[0];
+        
+        document.querySelectorAll('.rep-time-tab').forEach(b => {
+            b.className = 'rep-time-tab px-3 py-1.5 rounded-xl font-bold text-xs text-slate-600 hover:text-slate-900 transition-all';
+        });
+        el('repBtn-custom')?.classList.add('bg-charm-dark', 'text-white', 'shadow-sm');
+        el('repBtn-custom')?.classList.remove('text-slate-600');
+    } else {
+        customBox.classList.add('hidden');
+        setReportTimeframePreset('today');
+    }
+    if (window.lucide) lucide.createIcons();
+};
+
+window.applyReportInlineCustomDates = function() {
+    const fromVal = el('repInlineFrom')?.value;
+    const toVal = el('repInlineTo')?.value;
+    if (!fromVal || !toVal) {
+        showToast('Please select both Start and End dates.', 'warning');
+        return;
+    }
+    if (new Date(fromVal) > new Date(toVal)) {
+        showToast('Start date cannot be after End date.', 'warning');
+        return;
+    }
+    generateQuickReport('custom', fromVal, toVal);
+};
+
+window.setModalReportPreset = function(preset) {
+    const now = new Date();
+    const fromEl = el('modalReportFrom');
+    const toEl = el('modalReportTo');
+    if (!fromEl || !toEl) return;
+
+    toEl.value = now.toISOString().split('T')[0];
+
+    if (preset === 'today') {
+        fromEl.value = now.toISOString().split('T')[0];
+    } else if (preset === 'yesterday') {
+        const y = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        fromEl.value = y.toISOString().split('T')[0];
+        toEl.value = y.toISOString().split('T')[0];
+    } else if (preset === '7days') {
+        const past7 = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        fromEl.value = past7.toISOString().split('T')[0];
+    } else if (preset === 'thisMonth') {
+        const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+        fromEl.value = firstDay.toISOString().split('T')[0];
+    } else if (preset === 'lastMonth') {
+        const firstDayLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const lastDayLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+        fromEl.value = firstDayLastMonth.toISOString().split('T')[0];
+        toEl.value = lastDayLastMonth.toISOString().split('T')[0];
+    } else if (preset === 'allTime') {
+        const startYear = new Date(now.getFullYear(), 0, 1);
+        fromEl.value = startYear.toISOString().split('T')[0];
+    }
+    showToast(`Timeframe set to ${preset}`, 'info');
+};
+
+window.generateQuickReport = function(type, customFrom, customTo) {
     const now = new Date();
     let title = "VEHICLE ACCESS & TRAFFIC ACTIVITY REPORT";
     let periodText = "";
@@ -2560,30 +2701,53 @@ window.generateQuickReport = function(type) {
 
     if (type === 'today') {
         title = "DAILY CAMPUS VEHICLE ACCESS REPORT";
-        periodText = `Date: ${now.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`;
+        periodText = `Date: ${now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}`;
         logs = getFilteredAnalyticsLogs('today');
     } else if (type === 'yesterday') {
         title = "YESTERDAY'S VEHICLE ACCESS SUMMARY";
         const y = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-        periodText = `Date: ${y.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`;
+        periodText = `Date: ${y.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}`;
         logs = getFilteredAnalyticsLogs('yesterday');
     } else if (type === 'week') {
         title = "WEEKLY ACCESS & SECURITY AUDIT REPORT";
         const past7 = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        periodText = `Period: ${past7.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+        periodText = `Period: ${past7.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} (Past 7 Days)`;
         logs = getFilteredAnalyticsLogs('7days');
     } else if (type === 'month') {
         title = "MONTHLY COMPREHENSIVE ACCESS REPORT";
         periodText = `Month: ${now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`;
         logs = getFilteredAnalyticsLogs('thisMonth');
+    } else if (type === 'lastMonth') {
+        title = "PREVIOUS MONTH VEHICLE ACCESS REPORT";
+        const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        periodText = `Month: ${lastMonthDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`;
+        logs = getFilteredAnalyticsLogs('lastMonth');
+    } else if (type === 'all') {
+        title = "ALL-TIME VEHICLE ACCESS MASTERLIST";
+        periodText = `Period: Complete All-Time Records (Up to ${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })})`;
+        logs = adminState.logs || [];
+    } else if (type === 'custom' && customFrom && customTo) {
+        title = "CUSTOM PERIOD VEHICLE ACCESS REPORT";
+        const d1 = new Date(customFrom + 'T00:00:00');
+        const d2 = new Date(customTo + 'T23:59:59');
+        periodText = `Period: ${d1.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} to ${d2.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+        logs = (adminState.logs || []).filter(l => {
+            if (!l.timestamp) return false;
+            const t = new Date(l.timestamp);
+            return t >= d1 && t <= d2;
+        });
     }
 
+    const dateNum = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+    const randSuffix = String(Math.floor(1000 + Math.random() * 9000));
+    const reportId = `CP-ASU-${dateNum}-${randSuffix}`;
+
     displayGeneratedReport({
-        id: `ASU-CRP-${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}-${Math.floor(100 + Math.random()*900)}`,
+        id: reportId,
         title: title,
         period: periodText,
-        generatedBy: 'Obsidian Devs / Security Admin',
-        generatedAt: now.toLocaleString(),
+        generatedBy: 'CHARRMPASS SYSTEM',
+        generatedAt: now.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }),
         logs: logs,
         format: 'PDF',
         options: { summary: true, charts: true, logs: true, guards: true }
@@ -2645,12 +2809,16 @@ window.handleCustomReportSubmit = function(e) {
     };
 
     const now = new Date();
+    const dateNum = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+    const randSuffix = String(Math.floor(1000 + Math.random() * 9000));
+    const reportId = `CP-ASU-${dateNum}-${randSuffix}`;
+
     const payload = {
-        id: `ASU-CRP-${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}-${Math.floor(100 + Math.random()*900)}`,
+        id: reportId,
         title: reportTitles[reportType] || 'CHARRMPASS VEHICLE REPORT',
         period: `Period: ${fromVal} to ${toVal}`,
-        generatedBy: 'Obsidian Devs / Security Admin',
-        generatedAt: now.toLocaleString(),
+        generatedBy: 'CHARRMPASS SYSTEM',
+        generatedAt: now.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }),
         logs: filteredLogs,
         format: format,
         options: { summary: incSummary, charts: incCharts, logs: incLogs, guards: incGuard }
@@ -2669,29 +2837,64 @@ function displayGeneratedReport(payload) {
     if (el('repDocId')) el('repDocId').textContent = payload.id;
     if (el('repDocGeneratedAt')) el('repDocGeneratedAt').textContent = payload.generatedAt;
     if (el('repDocGeneratedBy')) el('repDocGeneratedBy').textContent = payload.generatedBy;
-    if (el('repDocTotalRecords')) el('repDocTotalRecords').textContent = `${payload.logs.length} Total Scans`;
+    if (el('repDocTotalRecords')) el('repDocTotalRecords').textContent = `${payload.logs.length} Total Records`;
 
     // Summary Statistics
     const entries = payload.logs.filter(l => l.direction === 'ENTRY' && l.status === 'AUTHORIZED').length;
     const exits = payload.logs.filter(l => l.direction === 'EXIT' && l.status === 'AUTHORIZED').length;
     const failed = payload.logs.filter(l => l.status === 'DENIED').length;
     const uniquePlates = new Set();
+    let students = 0, facultyStaff = 0, visitors = 0, emergency = 0;
+    const hoursCount = Array(24).fill(0);
+
     payload.logs.forEach(l => {
         const p = l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || l.rfid_uid;
-        if (p && p !== '--') uniquePlates.add(p);
+        if (p && p !== '--' && p !== 'N/A') uniquePlates.add(p);
+
+        const role = (l.users?.role || '').toUpperCase();
+        if (role === 'STUDENT') students++;
+        else if (role === 'FACULTY' || role === 'STAFF') facultyStaff++;
+        else if (l.remarks && (l.remarks.includes('Visitor') || l.remarks.includes('VISITOR'))) visitors++;
+        else if (l.is_emergency || (l.remarks && l.remarks.includes('Emergency'))) emergency++;
+        else students++;
+
+        if (l.timestamp) {
+            const h = new Date(l.timestamp).getHours();
+            if (h >= 0 && h < 24) hoursCount[h]++;
+        }
     });
+
+    let peakHour = 7;
+    let peakCount = 0;
+    hoursCount.forEach((cnt, hr) => {
+        if (cnt > peakCount) { peakCount = cnt; peakHour = hr; }
+    });
+
+    const formatHour = (h) => {
+        const period = h >= 12 ? 'PM' : 'AM';
+        const displayH = h % 12 === 0 ? 12 : h % 12;
+        return `${displayH}:00 ${period}`;
+    };
+    const peakHourText = payload.logs.length > 0 ? `${formatHour(peakHour)} – ${formatHour((peakHour + 1) % 24)} (${peakCount} scans)` : 'No activity logged';
+    const authRate = payload.logs.length > 0 ? `${(((entries + exits) / payload.logs.length) * 100).toFixed(1)}%` : '100%';
 
     if (el('repSumEntries')) el('repSumEntries').textContent = entries.toLocaleString();
     if (el('repSumExits')) el('repSumExits').textContent = exits.toLocaleString();
     if (el('repSumUnique')) el('repSumUnique').textContent = uniquePlates.size.toLocaleString();
     if (el('repSumFailed')) el('repSumFailed').textContent = failed.toLocaleString();
 
-    // Tabular Detailed Logs with Masked UIDs
+    if (el('repAnStudent')) el('repAnStudent').textContent = students.toLocaleString();
+    if (el('repAnStaff')) el('repAnStaff').textContent = facultyStaff.toLocaleString();
+    if (el('repAnVisitor')) el('repAnVisitor').textContent = visitors.toLocaleString();
+    if (el('repAnEmergency')) el('repAnEmergency').textContent = emergency.toLocaleString();
+    if (el('repAnAuthRate')) el('repAnAuthRate').textContent = authRate;
+    if (el('repAnPeakHour')) el('repAnPeakHour').textContent = peakHourText;
+
+    // Tabular Detailed Logs: Include ALL filtered records without slicing
     if (el('repDetailedLogsTable')) {
-        el('repDetailedLogsTable').innerHTML = payload.logs.length ? payload.logs.slice(0, 100).map(l => {
-            // Mask RFID UID: e.g. "73 71 A9 FE" -> "****A9FE"
-            const rawUid = (l.rfid_uid || '').replace(/\s+/g, '');
-            const maskedUid = rawUid.length >= 4 ? `****${rawUid.slice(-4)}` : (rawUid || '****');
+        el('repDetailedLogsTable').innerHTML = payload.logs.length ? payload.logs.map((l, index) => {
+            // Complete RFID UID Tag (Uncensored for administrative reporting)
+            const uidTag = (l.rfid_uid || '--').trim().toUpperCase();
             
             let ownerName = l.users?.full_name;
             let plate = l.vehicles?.plate_number;
@@ -2721,15 +2924,15 @@ function displayGeneratedReport(payload) {
             const dateStr = l.timestamp ? new Date(l.timestamp).toLocaleDateString([], {month:'short', day:'numeric'}) + ' ' + new Date(l.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '--';
 
             return `
-                <tr class="hover:bg-slate-50 text-xs">
-                    <td class="p-2.5 font-mono text-[11px] text-slate-600">${dateStr}</td>
-                    <td class="p-2.5 font-mono font-bold text-slate-700">${maskedUid}</td>
-                    <td class="p-2.5 font-mono font-bold text-slate-900">${plate}</td>
-                    <td class="p-2.5 font-semibold text-slate-800">${ownerName}</td>
-                    <td class="p-2.5"><span class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-600 uppercase">${role}</span></td>
-                    <td class="p-2.5 text-center font-bold ${l.direction === 'ENTRY' ? 'text-emerald-700' : 'text-blue-700'}">${l.direction || 'ENTRY'}</td>
-                    <td class="p-2.5 text-center font-semibold text-slate-600">${l.direction === 'EXIT' ? 'Gate 2 (Exit)' : 'Gate 1 (Entry)'}</td>
-                    <td class="p-2.5 text-right">${statusBadge}</td>
+                <tr class="hover:bg-slate-50 text-xs border-b border-slate-100">
+                    <td class="p-2 font-mono text-[11px] text-slate-600">${dateStr}</td>
+                    <td class="p-2 font-mono font-bold text-slate-700">${uidTag}</td>
+                    <td class="p-2 font-mono font-bold text-slate-900">${plate}</td>
+                    <td class="p-2 font-semibold text-slate-800">${ownerName}</td>
+                    <td class="p-2"><span class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-600 uppercase">${role}</span></td>
+                    <td class="p-2 text-center font-bold ${l.direction === 'ENTRY' ? 'text-emerald-700' : 'text-blue-700'}">${l.direction || 'ENTRY'}</td>
+                    <td class="p-2 text-center font-medium text-slate-600">${l.direction === 'EXIT' ? 'Gate 2 (Exit)' : 'Gate 1 (Entry)'}</td>
+                    <td class="p-2 text-right">${statusBadge}</td>
                 </tr>
             `;
         }).join('') : '<tr><td colspan="8" class="p-8 text-center text-slate-400">No transactions recorded in this period.</td></tr>';
@@ -2749,16 +2952,399 @@ window.printOfficialReport = function() {
     window.print();
 };
 
+window.downloadOfficialReportPDF = function() {
+    if (!currentReportPayload) {
+        generateQuickReport('today');
+    }
+    if (!currentReportPayload) {
+        showToast('No report data available to download.', 'warning');
+        return;
+    }
+
+    const payload = currentReportPayload;
+    const reportId = payload.id || `CP-ASU-${Date.now()}`;
+    const safeTitle = (payload.title || 'CHARRMPASS_Report').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const fileName = `${reportId}_${safeTitle}.pdf`;
+
+    showToast('Generating official PDF document...', 'info');
+
+    try {
+        const jsPdfClass = window.jspdf?.jsPDF || window.jsPDF;
+        if (jsPdfClass) {
+            const doc = new jsPdfClass({
+                orientation: 'portrait',
+                unit: 'mm',
+                format: 'a4'
+            });
+
+            const pageWidth = doc.internal.pageSize.getWidth(); // 210mm
+            const pageHeight = doc.internal.pageSize.getHeight(); // 297mm
+            const margin = 14;
+            const contentWidth = pageWidth - (margin * 2); // 182mm
+
+            // 1. Official Header with Logo (Clean, Institutional)
+            let logoDataUrl = null;
+            try {
+                const img = document.getElementById('repDocLogoImg') || document.querySelector('img[src*="logocharrmpark"]');
+                if (img && img.complete && img.naturalWidth > 0) {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = img.naturalWidth;
+                    canvas.height = img.naturalHeight;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0);
+                    logoDataUrl = canvas.toDataURL('image/png');
+                }
+            } catch(e) {
+                console.warn('Could not extract logo canvas:', e);
+            }
+
+            if (logoDataUrl) {
+                try {
+                    doc.addImage(logoDataUrl, 'PNG', margin + 2, 10, 15, 15);
+                } catch(e) {
+                    console.warn('doc.addImage error:', e);
+                }
+            }
+
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(15);
+            doc.setTextColor(14, 75, 58); // #0E4B3A
+            doc.text('AKLAN STATE UNIVERSITY', pageWidth / 2 + 5, 16, { align: 'center' });
+
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(8.5);
+            doc.setTextColor(51, 65, 85);
+            doc.text('IBAJAY CAMPUS • IBAJAY, AKLAN', pageWidth / 2 + 5, 21.5, { align: 'center' });
+
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(7.5);
+            doc.setTextColor(100, 116, 139);
+            doc.text('Campus Hybrid Automated RFID Real-Time Management Parking & Access Security System', pageWidth / 2 + 5, 26, { align: 'center' });
+
+            // Green header divider line
+            doc.setDrawColor(14, 75, 58);
+            doc.setLineWidth(0.7);
+            doc.line(margin, 29.5, pageWidth - margin, 29.5);
+
+            // 2. Report Title & Timeframe
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(11);
+            doc.setTextColor(15, 23, 42);
+            doc.text((payload.title || 'CAMPUS VEHICLE ACCESS REPORT').toUpperCase(), pageWidth / 2, 35.5, { align: 'center' });
+
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(8);
+            doc.setTextColor(100, 116, 139);
+            doc.text(payload.period || 'Access Period Records', pageWidth / 2, 40, { align: 'center' });
+
+            // 3. Metadata Bar (Report ID, Generated On, Generated By, Total Records)
+            const metaY = 43.5;
+            const metaH = 12.5;
+            doc.setFillColor(248, 250, 252);
+            doc.setDrawColor(203, 213, 225);
+            doc.setLineWidth(0.3);
+            doc.roundedRect(margin, metaY, contentWidth, metaH, 1.5, 1.5, 'FD');
+
+            doc.setFontSize(6.5);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(100, 116, 139);
+            doc.text('REPORT ID:', margin + 4, metaY + 4);
+            doc.text('GENERATED ON:', margin + 50, metaY + 4);
+            doc.text('GENERATED BY:', margin + 102, metaY + 4);
+            doc.text('TOTAL RECORDS:', margin + 148, metaY + 4);
+
+            doc.setFontSize(7.5);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(15, 23, 42);
+            doc.text(payload.id || reportId, margin + 4, metaY + 9);
+            doc.text(payload.generatedAt || new Date().toLocaleString(), margin + 50, metaY + 9);
+            
+            doc.setTextColor(14, 75, 58);
+            doc.text(payload.generatedBy || 'CHARRMPASS SYSTEM', margin + 102, metaY + 9);
+
+            doc.setTextColor(16, 185, 129);
+            doc.text(`${(payload.logs || []).length} Records`, margin + 148, metaY + 9);
+
+            // 4. Executive Summary Statistics
+            const entries = (payload.logs || []).filter(l => l.direction === 'ENTRY' && l.status === 'AUTHORIZED').length;
+            const exits = (payload.logs || []).filter(l => l.direction === 'EXIT' && l.status === 'AUTHORIZED').length;
+            const failed = (payload.logs || []).filter(l => l.status === 'DENIED').length;
+            const uniquePlates = new Set();
+            let students = 0, facultyStaff = 0, visitors = 0, emergency = 0;
+            const hoursCount = Array(24).fill(0);
+
+            (payload.logs || []).forEach(l => {
+                const p = l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || l.rfid_uid;
+                if (p && p !== '--' && p !== 'N/A') uniquePlates.add(p);
+
+                const role = (l.users?.role || '').toUpperCase();
+                if (role === 'STUDENT') students++;
+                else if (role === 'FACULTY' || role === 'STAFF') facultyStaff++;
+                else if (l.remarks && (l.remarks.includes('Visitor') || l.remarks.includes('VISITOR'))) visitors++;
+                else if (l.is_emergency || (l.remarks && l.remarks.includes('Emergency'))) emergency++;
+                else students++;
+
+                if (l.timestamp) {
+                    const h = new Date(l.timestamp).getHours();
+                    if (h >= 0 && h < 24) hoursCount[h]++;
+                }
+            });
+
+            let peakHour = 7;
+            let peakCount = 0;
+            hoursCount.forEach((cnt, hr) => {
+                if (cnt > peakCount) { peakCount = cnt; peakHour = hr; }
+            });
+
+            const formatHour = (h) => {
+                const period = h >= 12 ? 'PM' : 'AM';
+                const displayH = h % 12 === 0 ? 12 : h % 12;
+                return `${displayH}:00 ${period}`;
+            };
+            const peakHourText = (payload.logs || []).length > 0 ? `${formatHour(peakHour)} – ${formatHour((peakHour + 1) % 24)} (${peakCount} scans)` : 'N/A';
+            const authRate = (payload.logs || []).length > 0 ? `${(((entries + exits) / (payload.logs || []).length) * 100).toFixed(1)}%` : '100%';
+
+            const statBoxWidth = (contentWidth - 6) / 4;
+            const statY = 58;
+            const statH = 11.5;
+
+            const statCards = [
+                { label: 'TOTAL ENTRIES', val: entries.toLocaleString(), color: [16, 185, 129] },
+                { label: 'TOTAL EXITS', val: exits.toLocaleString(), color: [59, 130, 246] },
+                { label: 'UNIQUE VEHICLES', val: uniquePlates.size.toLocaleString(), color: [139, 92, 246] },
+                { label: 'SECURITY DENIALS', val: failed.toLocaleString(), color: [239, 68, 68] }
+            ];
+
+            statCards.forEach((c, idx) => {
+                const x = margin + (idx * (statBoxWidth + 2));
+                doc.setFillColor(248, 250, 252);
+                doc.setDrawColor(226, 232, 240);
+                doc.roundedRect(x, statY, statBoxWidth, statH, 1.5, 1.5, 'FD');
+
+                doc.setFontSize(6);
+                doc.setFont('helvetica', 'bold');
+                doc.setTextColor(100, 116, 139);
+                doc.text(c.label, x + (statBoxWidth / 2), statY + 4, { align: 'center' });
+
+                doc.setFontSize(9.5);
+                doc.setFont('helvetica', 'bold');
+                doc.setTextColor(c.color[0], c.color[1], c.color[2]);
+                doc.text(c.val, x + (statBoxWidth / 2), statY + 9, { align: 'center' });
+            });
+
+            // 5. Analytics Summary Bar (User Demographics & Access Flow)
+            const anY = 71.5;
+            const anH = 13.5;
+            const anW = (contentWidth - 3) / 2;
+
+            // Box 1: User Demographics (Two Clean Rows to Prevent Any Cutoff)
+            doc.setFillColor(248, 250, 252);
+            doc.setDrawColor(226, 232, 240);
+            doc.roundedRect(margin, anY, anW, anH, 1.5, 1.5, 'FD');
+
+            doc.setFontSize(6);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(100, 116, 139);
+            doc.text('USER CATEGORIES SCANNED', margin + 3.5, anY + 3.5);
+
+            doc.setFontSize(7);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(15, 23, 42);
+            doc.text(`Students: ${students.toLocaleString()}     |     Faculty / Staff: ${facultyStaff.toLocaleString()}`, margin + 3.5, anY + 7.5);
+            doc.text(`Visitors: ${visitors.toLocaleString()}     |     Emergency Units: ${emergency.toLocaleString()}`, margin + 3.5, anY + 11.5);
+
+            // Box 2: Flow & Peak Activity (Two Clean Rows to Prevent Any Cutoff)
+            const anX2 = margin + anW + 3;
+            doc.setFillColor(248, 250, 252);
+            doc.setDrawColor(226, 232, 240);
+            doc.roundedRect(anX2, anY, anW, anH, 1.5, 1.5, 'FD');
+
+            doc.setFontSize(6);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(100, 116, 139);
+            doc.text('ACCESS SECURITY & TRAFFIC FLOW', anX2 + 3.5, anY + 3.5);
+
+            doc.setFontSize(7);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(15, 23, 42);
+            doc.text(`Authorization Rate: `, anX2 + 3.5, anY + 7.5);
+            doc.setTextColor(16, 185, 129);
+            doc.text(authRate, anX2 + 28, anY + 7.5);
+
+            doc.setTextColor(15, 23, 42);
+            doc.text(`Peak Activity Window: ${peakHourText}`, anX2 + 3.5, anY + 11.5);
+
+            // 6. Table Data via autoTable (Uncensored Full RFID UIDs, Perfect Column Fit)
+            const headers = [['Date & Time', 'RFID UID Tag', 'Vehicle Plate', 'Owner / Driver', 'Category', 'Direction', 'Gate Location', 'Status']];
+            const tableRows = (payload.logs || []).map(l => {
+                const uidTag = (l.rfid_uid || '--').trim().toUpperCase();
+                
+                let ownerName = l.users?.full_name;
+                let plate = l.vehicles?.plate_number;
+                let role = l.users?.role || 'General';
+
+                if (l.remarks) {
+                    if (l.remarks.includes('Visitor')) {
+                        const match = l.remarks.match(/Visitor (?:Exit|Entry):\s*([^|]+)(?:\s*\|\s*Plate:\s*([^|]+))?/i);
+                        if (match) {
+                            ownerName = match[1]?.trim();
+                            if (match[2]?.trim()) plate = match[2].trim();
+                        } else ownerName = 'Visitor Pass';
+                        role = 'VISITOR';
+                    } else if (l.remarks.includes('Emergency')) {
+                        ownerName = 'Emergency Response';
+                        plate = 'EMERGENCY';
+                        role = 'EMERGENCY';
+                    }
+                }
+                if (!ownerName) ownerName = l.status === 'DENIED' ? 'Unregistered User' : 'Cardholder';
+                if (!plate) plate = '--';
+
+                const dateStr = l.timestamp ? new Date(l.timestamp).toLocaleDateString([], {month:'short', day:'numeric'}) + ' ' + new Date(l.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '--';
+                const gateStr = l.direction === 'EXIT' ? 'Gate 2 (Exit)' : 'Gate 1 (Entry)';
+                const statusStr = l.status === 'AUTHORIZED' ? 'ALLOWED' : 'DENIED';
+
+                return [
+                    dateStr,
+                    uidTag,
+                    plate,
+                    ownerName,
+                    role.toUpperCase(),
+                    l.direction || 'ENTRY',
+                    gateStr,
+                    statusStr
+                ];
+            });
+
+            if (tableRows.length === 0) {
+                tableRows.push(['--', '--', '--', 'No transactions recorded in this period', '--', '--', '--', '--']);
+            }
+
+            const runAutoTable = (opts) => {
+                if (typeof doc.autoTable === 'function') {
+                    doc.autoTable(opts);
+                    return true;
+                }
+                if (typeof window.jspdf?.autoTable === 'function') {
+                    window.jspdf.autoTable(doc, opts);
+                    return true;
+                }
+                if (typeof window.autoTable === 'function') {
+                    window.autoTable(doc, opts);
+                    return true;
+                }
+                return false;
+            };
+
+            const autoTableSuccess = runAutoTable({
+                head: headers,
+                body: tableRows,
+                startY: 87,
+                margin: { left: margin, right: margin, bottom: 22 },
+                styles: {
+                    font: 'helvetica',
+                    fontSize: 6.8,
+                    cellPadding: { top: 1.8, right: 1.5, bottom: 1.8, left: 1.5 },
+                    textColor: [30, 41, 59],
+                    lineColor: [226, 232, 240],
+                    lineWidth: 0.2,
+                    overflow: 'linebreak'
+                },
+                headStyles: {
+                    fillColor: [14, 75, 58],
+                    textColor: [255, 255, 255],
+                    fontStyle: 'bold',
+                    fontSize: 7,
+                    halign: 'left',
+                    cellPadding: 2
+                },
+                alternateRowStyles: {
+                    fillColor: [248, 250, 252]
+                },
+                columnStyles: {
+                    0: { cellWidth: 26 },
+                    1: { cellWidth: 27, font: 'courier', fontStyle: 'bold' },
+                    2: { cellWidth: 22, font: 'courier', fontStyle: 'bold' },
+                    3: { cellWidth: 35 },
+                    4: { cellWidth: 20 },
+                    5: { cellWidth: 16, halign: 'center', fontStyle: 'bold' },
+                    6: { cellWidth: 18, halign: 'center' },
+                    7: { cellWidth: 18, halign: 'center', fontStyle: 'bold' }
+                },
+                didParseCell: function(data) {
+                    if (data.section === 'body') {
+                        if (data.column.index === 5) {
+                            if (data.cell.raw === 'ENTRY') data.cell.styles.textColor = [5, 150, 105];
+                            else if (data.cell.raw === 'EXIT') data.cell.styles.textColor = [37, 99, 235];
+                        }
+                        if (data.column.index === 7) {
+                            if (data.cell.raw === 'ALLOWED') data.cell.styles.textColor = [16, 185, 129];
+                            else if (data.cell.raw === 'DENIED') data.cell.styles.textColor = [220, 38, 38];
+                        }
+                    }
+                },
+                didDrawPage: function(data) {
+                    const pageNum = doc.internal.getNumberOfPages();
+                    doc.setDrawColor(226, 232, 240);
+                    doc.setLineWidth(0.3);
+                    doc.line(margin, pageHeight - 12, pageWidth - margin, pageHeight - 12);
+
+                    doc.setFontSize(7);
+                    doc.setFont('helvetica', 'normal');
+                    doc.setTextColor(148, 163, 184);
+                    doc.text(`CHARRMPASS • Campus Automated RFID Audit Record • Page ${pageNum}`, margin, pageHeight - 7);
+                    doc.text('Generated by CHARRMPASS SYSTEM • Aklan State University', pageWidth - margin, pageHeight - 7, { align: 'right' });
+                }
+            });
+
+            if (autoTableSuccess) {
+                // Add official sign-off on final page
+                const finalY = (doc.lastAutoTable ? doc.lastAutoTable.finalY : 180) + 10;
+                if (finalY + 24 < pageHeight - 16) {
+                    doc.setFontSize(7);
+                    doc.setFont('helvetica', 'bold');
+                    doc.setTextColor(100, 116, 139);
+                    doc.text('GENERATED BY:', margin, finalY);
+                    doc.text('CERTIFIED & APPROVED BY:', pageWidth / 2 + 10, finalY);
+
+                    doc.setDrawColor(148, 163, 184);
+                    doc.setLineWidth(0.3);
+                    doc.line(margin, finalY + 9, margin + 60, finalY + 9);
+                    doc.line(pageWidth / 2 + 10, finalY + 9, pageWidth / 2 + 75, finalY + 9);
+
+                    doc.setFont('helvetica', 'bold');
+                    doc.setTextColor(15, 23, 42);
+                    doc.text(payload.generatedBy || 'CHARRMPASS SYSTEM', margin, finalY + 13);
+                    doc.text('Campus Security & Safety Officer', pageWidth / 2 + 10, finalY + 13);
+
+                    doc.setFont('helvetica', 'normal');
+                    doc.setTextColor(148, 163, 184);
+                    doc.text('Automated Campus Security Platform', margin, finalY + 17);
+                    doc.text('Aklan State University – Ibajay Campus', pageWidth / 2 + 10, finalY + 17);
+                }
+
+                doc.save(fileName);
+                showToast('Official PDF downloaded successfully!', 'success');
+                return;
+            }
+        }
+    } catch(err) {
+        console.error('jsPDF generation error:', err);
+    }
+
+    // High-speed fallback: print window
+    window.print();
+};
+
 window.exportCurrentReportCSV = function() {
     if (!currentReportPayload || !currentReportPayload.logs || !currentReportPayload.logs.length) {
         showToast('No report records to export.', 'warning');
         return;
     }
 
-    const headers = ['Report ID', 'Date & Time', 'Masked RFID UID', 'Plate Number', 'Owner / Driver', 'User Category', 'Direction', 'Status', 'Remarks'];
+    const headers = ['Report ID', 'Date & Time', 'RFID UID Tag', 'Plate Number', 'Owner / Driver', 'User Category', 'Direction', 'Status', 'Remarks'];
     const rows = currentReportPayload.logs.map(l => {
-        const rawUid = (l.rfid_uid || '').replace(/\s+/g, '');
-        const maskedUid = rawUid.length >= 4 ? `****${rawUid.slice(-4)}` : '****';
+        const uidTag = (l.rfid_uid || 'N/A').trim().toUpperCase();
         let owner = l.users?.full_name || 'Unregistered';
         let plate = l.vehicles?.plate_number || 'N/A';
         let role = l.users?.role || 'N/A';
@@ -2775,7 +3361,7 @@ window.exportCurrentReportCSV = function() {
         return [
             `"${currentReportPayload.id}"`,
             `"${l.timestamp || ''}"`,
-            `"${maskedUid}"`,
+            `"${uidTag}"`,
             `"${plate}"`,
             `"${owner.replace(/"/g, '""')}"`,
             `"${role}"`,
@@ -2816,58 +3402,121 @@ function setupRealtime() {
 // Special Tag Modal Actions
 window.openSpecialTagModal = function(id = null) {
     const modal = el('specialTagModal');
-    el('specialTagForm').reset();
-    el('formTagId').value = '';
-    el('specialTagModalTitle').textContent = id ? 'Edit Special Tag' : 'Add Special Tag';
+    if (!modal) return;
+    el('specialTagForm')?.reset();
+    if (el('formTagId')) el('formTagId').value = '';
+    if (el('specialTagModalTitle')) el('specialTagModalTitle').textContent = id ? 'Edit Special Tag' : 'Add Special Tag';
     
     if (id) {
         const tag = adminState.specialTags.find(t => t.id === id);
         if (tag) {
-            el('formTagId').value = tag.id;
-            el('formTagUid').value = tag.rfid_uid;
-            el('formTagType').value = tag.type;
-            el('formTagDesc').value = tag.description || '';
+            if (el('formTagId')) el('formTagId').value = tag.id;
+            if (el('formTagUid')) el('formTagUid').value = tag.rfid_uid;
+            if (el('formTagType')) el('formTagType').value = tag.type;
+            if (el('formTagLabel')) el('formTagLabel').value = tag.label || '';
+            if (el('formTagDesc')) el('formTagDesc').value = tag.description || '';
         }
+    } else {
+        if (el('formTagLabel')) el('formTagLabel').value = '';
     }
 
     modal.classList.remove('hidden');
-    setTimeout(() => { modal.classList.add('opacity-100'); el('specialTagModalContent').classList.remove('scale-95'); }, 10);
-    lucide.createIcons();
+    setTimeout(() => { 
+        modal.classList.remove('opacity-0'); 
+        modal.classList.add('opacity-100'); 
+        el('specialTagModalContent')?.classList.remove('scale-95'); 
+    }, 10);
+    if (window.lucide) lucide.createIcons();
 };
 
 window.closeSpecialTagModal = function() {
     const modal = el('specialTagModal');
-    modal.classList.remove('opacity-100'); el('specialTagModalContent').classList.add('scale-95');
+    if (!modal) return;
+    modal.classList.remove('opacity-100'); 
+    modal.classList.add('opacity-0');
+    el('specialTagModalContent')?.classList.add('scale-95');
     setTimeout(() => modal.classList.add('hidden'), 300);
 };
 
-window.editSpecialTag = function(id) { editSpecialTagId = id; openSpecialTagModal(id); };
+window.editSpecialTag = function(id) { 
+    openSpecialTagModal(id); 
+};
 
 el('specialTagForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const id = el('formTagId').value;
-    const data = {
-        rfid_uid: el('formTagUid').value.trim().toUpperCase(),
-        type: el('formTagType').value,
-        description: el('formTagDesc').value.trim()
+    const id = el('formTagId')?.value || '';
+    const rawUid = (el('formTagUid')?.value || '').trim().toUpperCase();
+    const type = el('formTagType')?.value || 'VISITOR';
+    const label = (el('formTagLabel')?.value || '').trim() || (type === 'VISITOR' ? 'Visitor Pass' : 'Emergency Vehicle');
+    const description = (el('formTagDesc')?.value || '').trim();
+
+    if (!rawUid) {
+        showToast('Please enter an RFID UID tag.', 'warning');
+        return;
+    }
+
+    const tagData = {
+        rfid_uid: rawUid,
+        type: type,
+        label: label,
+        description: description
     };
+
     try {
-        showToast('Saving tag...', 'info');
-        const { error } = await supabaseClient.from('special_tags').upsert({ id: id || undefined, ...data });
-        if (error) throw error;
-        showToast('Special tag saved!', 'success');
-        closeSpecialTagModal(); await loadData();
-    } catch(err) { showToast('Error: ' + err.message, 'error'); }
+        showToast('Saving special tag...', 'info');
+
+        if (isConnected && supabaseClient) {
+            if (id) {
+                const { error } = await supabaseClient
+                    .from('special_tags')
+                    .update(tagData)
+                    .eq('id', id);
+                if (error) throw error;
+            } else {
+                const { data: inserted, error } = await supabaseClient
+                    .from('special_tags')
+                    .insert([tagData])
+                    .select();
+                if (error) throw error;
+                if (inserted && inserted[0]) tagData.id = inserted[0].id;
+            }
+        }
+
+        // Local state update for instant UI feedback
+        if (id) {
+            const idx = adminState.specialTags.findIndex(t => t.id === id);
+            if (idx !== -1) adminState.specialTags[idx] = { ...adminState.specialTags[idx], ...tagData };
+        } else {
+            if (!tagData.id) tagData.id = 'st-' + Date.now();
+            adminState.specialTags.unshift(tagData);
+        }
+
+        showToast(id ? 'Special tag updated successfully!' : 'Special tag added successfully!', 'success');
+        closeSpecialTagModal();
+        renderAdmin();
+        if (isConnected) await loadData();
+    } catch(err) {
+        console.error('Error saving special tag:', err);
+        showToast('Error saving special tag: ' + err.message, 'error');
+    }
 });
 
 window.deleteSpecialTag = async function(id) {
-    if (!confirm('Delete this special tag?')) return;
+    if (!confirm('Are you sure you want to delete this special tag?')) return;
     try {
-        const { error } = await supabaseClient.from('special_tags').delete().eq('id', id);
-        if (error) throw error;
-        showToast('Tag deleted.', 'success');
-        await loadData();
-    } catch(err) { showToast('Error: ' + err.message, 'error'); }
+        showToast('Deleting special tag...', 'info');
+        if (isConnected && supabaseClient) {
+            const { error } = await supabaseClient.from('special_tags').delete().eq('id', id);
+            if (error) throw error;
+        }
+        adminState.specialTags = adminState.specialTags.filter(t => t.id !== id);
+        showToast('Special tag deleted.', 'success');
+        renderAdmin();
+        if (isConnected) await loadData();
+    } catch(err) { 
+        console.error('Error deleting special tag:', err);
+        showToast('Error: ' + err.message, 'error'); 
+    }
 };
 
 // ==============================================
@@ -4846,7 +5495,68 @@ window.toggleBulkStudentScope = function() {
     }
 };
 
-// 3. Template Generation & Download (.CSV)
+// Switch between File Upload and Direct Excel Paste
+window.switchBulkInputMode = function(type, mode) {
+    const fileContainer = el(`${type === 'faculty' ? 'faculty' : 'student'}DropzoneContainer`);
+    const pasteContainer = el(`${type === 'faculty' ? 'faculty' : 'student'}PasteContainer`);
+    const btnFile = el(`bulkInputModeBtn-${type}-file`);
+    const btnPaste = el(`bulkInputModeBtn-${type}-paste`);
+
+    if (mode === 'file') {
+        if (fileContainer) fileContainer.classList.remove('hidden');
+        if (pasteContainer) pasteContainer.classList.add('hidden');
+        if (btnFile) btnFile.className = 'px-3 py-1 rounded-lg text-xs font-bold bg-white text-slate-800 shadow-sm transition-all flex items-center gap-1.5';
+        if (btnPaste) btnPaste.className = 'px-3 py-1 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition-all flex items-center gap-1.5';
+    } else {
+        if (fileContainer) fileContainer.classList.add('hidden');
+        if (pasteContainer) pasteContainer.classList.remove('hidden');
+        if (btnFile) btnFile.className = 'px-3 py-1 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition-all flex items-center gap-1.5';
+        if (btnPaste) btnPaste.className = 'px-3 py-1 rounded-lg text-xs font-bold bg-white text-slate-800 shadow-sm transition-all flex items-center gap-1.5';
+    }
+
+    if (window.lucide && typeof lucide.createIcons === 'function') {
+        lucide.createIcons();
+    }
+};
+
+// Load Sample Demo Data into Paste Textarea
+window.loadSamplePasteData = function(type) {
+    if (type === 'students') {
+        const area = el('bulkStudentPasteArea');
+        if (area) {
+            area.value = "Student ID\tLast Name\tFirst Name\tMiddle Name\tSuffix\tTransit Mode\n" +
+                         "2022-00101\tDela Cruz\tJuan\tMercado\t\tVEHICLE\n" +
+                         "2022-00102\tSantos\tMaria Clara\tReyes\t\tPEDESTRIAN\n" +
+                         "2022-00103\tReyes\tCarlos\tPadilla\tJr.\tPEDESTRIAN\n" +
+                         "2022-00104\tVillanueva\tAna Beatriz\tFlores\t\tVEHICLE\n" +
+                         "2022-00105\tTan\tKenji\tLim\t\tPEDESTRIAN";
+            showToast('Sample student roster pasted. Click "Read and Verify" to view.', 'info');
+        }
+    } else {
+        const area = el('bulkFacultyPasteArea');
+        if (area) {
+            area.value = "Employee ID\tLast Name\tFirst Name\tMiddle Name\tDepartment\tRole\tTransit Mode\n" +
+                         "EMP-2019-01\tTuring\tAlan\tMathison\tCollege of Computing\tFaculty\tVEHICLE\n" +
+                         "EMP-2021-04\tHopper\tGrace\tBrewster\tCollege of Computing\tFaculty\tVEHICLE\n" +
+                         "STAFF-009\tCruz\tJuanita\tBautista\tAdministration\tStaff\tPEDESTRIAN\n" +
+                         "VENDOR-02\tPenduko\tPedro\tSantos\tCanteen Services\tOthers\tVEHICLE";
+            showToast('Sample faculty roster pasted. Click "Read and Verify" to view.', 'info');
+        }
+    }
+};
+
+// Process Data Pasted from Clipboard / Excel
+window.processPastedText = function(type) {
+    const areaId = type === 'students' ? 'bulkStudentPasteArea' : 'bulkFacultyPasteArea';
+    const text = (el(areaId)?.value || '').trim();
+    if (!text) {
+        showToast('Please paste your roster data from Excel into the box first.', 'warning');
+        return;
+    }
+    parseCSVTextAndPreview(text, type, 'Pasted from Excel / Clipboard');
+};
+
+// 3. Template Generation & Download (.CSV with UTF-8 BOM for Microsoft Excel)
 window.downloadCSVTemplate = function(type) {
     let csvContent = '';
     let filename = '';
@@ -4857,28 +5567,29 @@ window.downloadCSVTemplate = function(type) {
             const prog = el('bulkStudentProgram')?.value || 'BSIT';
             const sec = el('bulkStudentSection')?.value || '3A';
             filename = `CHARRMPASS_Students_${prog}_${sec}_Template.csv`;
-            csvContent = "Student ID,Last Name,First Name,Middle Name,Suffix,Sex,Age,Address,Transit Mode,Vehicle Type,Plate Number\n" +
-                         "2022-00101,Dela Cruz,Juan,Mercado,,Male,21,\"Ibajay, Aklan\",VEHICLE,Motorcycle,ABC-1234\n" +
-                         "2022-00102,Santos,Maria Clara,Reyes,,Female,20,\"Kalibo, Aklan\",PEDESTRIAN,None,\n" +
-                         "2022-00103,Reyes,Carlos,Padilla,Jr.,Male,21,\"Tangalan, Aklan\",PEDESTRIAN,None,\n" +
-                         "2022-00104,Lopez,Ana Beatriz,Villanueva,,Female,22,\"Numancia, Aklan\",VEHICLE,Car,XYZ-5678\n";
+            csvContent = "Student ID,Last Name,First Name,Middle Name,Suffix,Sex,Age,Address,Transit Mode,Plate Number\n" +
+                         "2022-00101,Dela Cruz,Juan,Mercado,,Male,21,\"Ibajay, Aklan\",VEHICLE,ABC-1234\n" +
+                         "2022-00102,Santos,Maria Clara,Reyes,,Female,20,\"Kalibo, Aklan\",PEDESTRIAN,\n" +
+                         "2022-00103,Reyes,Carlos,Padilla,Jr.,Male,21,\"Tangalan, Aklan\",PEDESTRIAN,\n" +
+                         "2022-00104,Lopez,Ana Beatriz,Villanueva,,Female,22,\"Numancia, Aklan\",VEHICLE,XYZ-5678\n";
         } else {
             filename = `CHARRMPASS_Master_Students_Template.csv`;
-            csvContent = "Student ID,Last Name,First Name,Middle Name,Suffix,Program,Section,Sex,Age,Address,Transit Mode,Vehicle Type,Plate Number\n" +
-                         "2022-00101,Dela Cruz,Juan,Mercado,,BSIT,3A,Male,21,\"Ibajay, Aklan\",VEHICLE,Motorcycle,ABC-1234\n" +
-                         "2022-00102,Santos,Maria Clara,Reyes,,BSCS,2B,Female,20,\"Kalibo, Aklan\",PEDESTRIAN,None,\n" +
-                         "2022-00103,Reyes,Carlos,Padilla,Jr.,BSA,1A,Male,19,\"Tangalan, Aklan\",PEDESTRIAN,None,\n";
+            csvContent = "Student ID,Last Name,First Name,Middle Name,Suffix,Program,Section,Sex,Age,Address,Transit Mode,Plate Number\n" +
+                         "2022-00101,Dela Cruz,Juan,Mercado,,BSIT,3A,Male,21,\"Ibajay, Aklan\",VEHICLE,ABC-1234\n" +
+                         "2022-00102,Santos,Maria Clara,Reyes,,BSCS,2B,Female,20,\"Kalibo, Aklan\",PEDESTRIAN,\n" +
+                         "2022-00103,Reyes,Carlos,Padilla,Jr.,BSA,1A,Male,19,\"Tangalan, Aklan\",PEDESTRIAN,\n";
         }
     } else {
         filename = `CHARRMPASS_Faculty_Staff_Template.csv`;
-        csvContent = "Employee ID,Last Name,First Name,Middle Name,Suffix,Role,Department,Sex,Age,Address,Transit Mode,Vehicle Type,Plate Number\n" +
-                     "EMP-2018-01,Turing,Alan,Mathison,Dr.,Faculty,\"College of Computing\",Male,42,\"Kalibo, Aklan\",VEHICLE,SUV,ABC-789\n" +
-                     "EMP-2020-04,Hopper,Grace,Brewster,,Faculty,\"College of Engineering\",Female,38,\"Ibajay, Aklan\",VEHICLE,Car,XYZ-456\n" +
-                     "STAFF-009,Cruz,Juanita,Bautista,,Staff,Administration,Female,30,\"Makato, Aklan\",PEDESTRIAN,None,\n" +
-                     "VENDOR-02,Penduko,Pedro,Santos,,Others,\"Canteen Services\",Male,45,\"Numancia, Aklan\",VEHICLE,Motorcycle,JKL-321\n";
+        csvContent = "Employee ID,Last Name,First Name,Middle Name,Suffix,Role,Department,Sex,Age,Address,Transit Mode,Plate Number\n" +
+                     "EMP-2018-01,Turing,Alan,Mathison,Dr.,Faculty,\"College of Computing\",Male,42,\"Kalibo, Aklan\",VEHICLE,ABC-789\n" +
+                     "EMP-2020-04,Hopper,Grace,Brewster,,Faculty,\"College of Computing\",Female,38,\"Ibajay, Aklan\",VEHICLE,XYZ-456\n" +
+                     "STAFF-009,Cruz,Juanita,Bautista,,Staff,Administration,Female,30,\"Makato, Aklan\",PEDESTRIAN,\n" +
+                     "VENDOR-02,Penduko,Pedro,Santos,,Others,\"Canteen Services\",Male,45,\"Numancia, Aklan\",VEHICLE,JKL-321\n";
     }
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    // Include UTF-8 Byte Order Mark (\uFEFF) so Microsoft Excel opens it cleanly without garbling characters
+    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
@@ -4917,7 +5628,7 @@ window.handleFileSelected = function(e, type) {
     }
 };
 
-// 5. Robust CSV Parsing & Normalization Engine
+// 5. Robust Smart Parsing & Normalization Engine
 function processUploadedCSVFile(file, type) {
     if (!file) return;
     bulkUploadState.fileType = type;
@@ -4934,16 +5645,20 @@ function processUploadedCSVFile(file, type) {
 function parseCSVTextAndPreview(csvText, type, fileName) {
     let rows = [];
 
-    // Use PapaParse if available, otherwise pure JS fallback
-    if (window.Papa && typeof Papa.parse === 'function') {
-        const results = Papa.parse(csvText, { header: true, skipEmptyLines: true });
+    // Auto-detect delimiter (tabs, commas, or semicolons)
+    const firstLine = (csvText.split(/\r\n|\n/)[0] || '');
+    const hasTabs = firstLine.includes('\t');
+    const hasSemicolon = !hasTabs && firstLine.includes(';') && !firstLine.includes(',');
+
+    if (window.Papa && typeof Papa.parse === 'function' && !hasTabs) {
+        const results = Papa.parse(csvText, { header: true, skipEmptyLines: true, delimiter: hasSemicolon ? ';' : '' });
         rows = results.data;
     } else {
-        rows = fallbackPureJsCSVParse(csvText);
+        rows = fallbackPureJsCSVParse(csvText, hasTabs ? '\t' : (hasSemicolon ? ';' : ','));
     }
 
     if (!rows || rows.length === 0) {
-        showToast('The uploaded CSV file contains no readable data rows.', 'error');
+        showToast('The uploaded file or text contains no readable data rows.', 'error');
         return;
     }
 
@@ -4969,7 +5684,7 @@ function parseCSVTextAndPreview(csvText, type, fileName) {
             const val = (row[key] || '').toString().trim();
             const cleanKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
             
-            if (['studentid', 'idnumber', 'id', 'cpassid', 'cpass', 'employeeid'].includes(cleanKey)) {
+            if (['studentid', 'idnumber', 'idno', 'id', 'studentno', 'lrn', 'schoolid', 'cpassid', 'cpass', 'employeeid', 'empid'].includes(cleanKey)) {
                 mapped.id_number = val;
             } else if (['lastname', 'surname', 'familyname', 'lname', 'last'].includes(cleanKey)) {
                 mapped.last_name = val;
@@ -4979,29 +5694,29 @@ function parseCSVTextAndPreview(csvText, type, fileName) {
                 mapped.middle_name = val;
             } else if (['suffix', 'extension', 'ext', 'nameext', 'suffixname'].includes(cleanKey)) {
                 mapped.suffix = val;
-            } else if (['fullname', 'name', 'studentname', 'person', 'employeename'].includes(cleanKey)) {
+            } else if (['fullname', 'name', 'studentname', 'person', 'employeename', 'completename'].includes(cleanKey)) {
                 mapped.full_name = val;
             } else if (['sex', 'gender'].includes(cleanKey)) {
                 mapped.sex = val.toUpperCase().startsWith('F') ? 'Female' : 'Male';
             } else if (['age'].includes(cleanKey)) {
                 mapped.age = parseInt(val, 10) || null;
-            } else if (['address'].includes(cleanKey)) {
+            } else if (['address', 'residence', 'homeaddress', 'location'].includes(cleanKey)) {
                 mapped.address = val;
-            } else if (['program', 'course', 'department', 'dept'].includes(cleanKey)) {
+            } else if (['program', 'course', 'degree', 'department', 'dept', 'college'].includes(cleanKey)) {
                 mapped.program = val.toUpperCase();
-            } else if (['section', 'sec', 'yearandsection'].includes(cleanKey)) {
+            } else if (['section', 'sec', 'class', 'yearandsection', 'yrsec'].includes(cleanKey)) {
                 mapped.section = val.toUpperCase();
-            } else if (['role'].includes(cleanKey)) {
+            } else if (['role', 'designation', 'position', 'usertype', 'type'].includes(cleanKey)) {
                 mapped.role = val;
-            } else if (['transitmode', 'mode', 'transittype', 'transit'].includes(cleanKey)) {
+            } else if (['transitmode', 'mode', 'transittype', 'transit', 'accessmode'].includes(cleanKey)) {
                 mapped.default_transit_mode = val.toUpperCase().includes('VEH') ? 'VEHICLE' : 'PEDESTRIAN';
-            } else if (['platenumber', 'plate', 'plateno'].includes(cleanKey)) {
+            } else if (['platenumber', 'plate', 'plateno', 'platenumbervehicle'].includes(cleanKey)) {
                 mapped.plate_number = val.toUpperCase();
-            } else if (['vehicletype', 'type'].includes(cleanKey)) {
+            } else if (['vehicletype', 'vtype'].includes(cleanKey)) {
                 mapped.vehicle_type = val;
             } else if (['vehiclemodel', 'model'].includes(cleanKey)) {
                 mapped.vehicle_model = val;
-            } else if (['rfiduid', 'uid', 'rfid'].includes(cleanKey)) {
+            } else if (['rfiduid', 'uid', 'rfid', 'rfidtag', 'tag'].includes(cleanKey)) {
                 mapped.rfid_uid = val.toUpperCase();
             }
         }
@@ -5030,7 +5745,7 @@ function parseCSVTextAndPreview(csvText, type, fileName) {
 
         mapped.full_name = finalFullName;
 
-        if (!mapped.full_name && !mapped.id_number) return; // skip completely empty rows
+        if (!mapped.full_name && !mapped.id_number) return; // skip empty rows
 
         // Set role & hierarchy based on type & scope
         let role = mapped.role || (type === 'students' ? 'Student' : defaultFacultyRole);
@@ -5051,13 +5766,13 @@ function parseCSVTextAndPreview(csvText, type, fileName) {
         }
 
         const transitMode = mapped.default_transit_mode || 
-                            (mapped.plate_number ? 'VEHICLE' : (type === 'students' ? defaultStudentTransit : 'VEHICLE'));
+                            (mapped.plate_number ? 'VEHICLE' : (type === 'students' ? defaultStudentTransit : 'PEDESTRIAN'));
         const approvalStatus = type === 'students' ? defaultStudentStatus : defaultFacultyStatus;
 
         // Duplicate Check
         const isDuplicate = existingUsers.some(u => 
             (mapped.id_number && (u.student_id === mapped.id_number || u.cpass_id === mapped.id_number)) ||
-            (mapped.full_name && u.full_name.toLowerCase() === mapped.full_name.toLowerCase())
+            (mapped.full_name && u.full_name && u.full_name.toLowerCase() === mapped.full_name.toLowerCase())
         );
 
         normalizedList.push({
@@ -5074,11 +5789,11 @@ function parseCSVTextAndPreview(csvText, type, fileName) {
             default_transit_mode: transitMode,
             vehicle_type: mapped.vehicle_type || (transitMode === 'VEHICLE' ? 'Motorcycle' : 'None'),
             vehicle_model: mapped.vehicle_model || '',
-            plate_number: mapped.plate_number || (transitMode === 'VEHICLE' ? 'PENDING-PLATE' : ''),
+            plate_number: mapped.plate_number || '',
             rfid_uid: mapped.rfid_uid || '',
             approval_status: approvalStatus,
             isDuplicate: isDuplicate,
-            isValid: Boolean(mapped.full_name && mapped.full_name.length > 2)
+            isValid: Boolean(mapped.full_name && mapped.full_name.length >= 2)
         });
     });
 
@@ -5086,24 +5801,19 @@ function parseCSVTextAndPreview(csvText, type, fileName) {
     renderBulkPreviewUI(fileName);
 }
 
-function fallbackPureJsCSVParse(text) {
+function fallbackPureJsCSVParse(text, delimiter = ',') {
     const lines = text.split(/\r\n|\n/).map(l => l.trim()).filter(Boolean);
     if (!lines.length) return [];
     
     // Parse header
-    const headers = lines[0].split(',').map(h => h.replace(/^["']|["']$/g, '').trim());
+    const headers = lines[0].split(delimiter).map(h => h.replace(/^["']|["']$/g, '').trim());
     const data = [];
 
     for (let i = 1; i < lines.length; i++) {
-        // Regex to handle quoted commas correctly
-        const rowValues = [];
-        let match;
-        const re = /(?:\"([^\"]*(?:\"\"[^\"]*)*)\")|([^,]+)/g;
-        let line = lines[i];
-        
-        let colIdx = 0;
+        const line = lines[i];
+        if (!line) continue;
+        const simpleCols = line.split(delimiter);
         const obj = {};
-        const simpleCols = line.split(',');
         headers.forEach((h, idx) => {
             obj[h] = simpleCols[idx] ? simpleCols[idx].replace(/^["']|["']$/g, '').trim() : '';
         });
@@ -5120,59 +5830,130 @@ function renderBulkPreviewUI(fileName) {
     const btnExecuteText = el('btnExecuteBulkImportText');
     const badgeTotal = el('bulkBadgeTotal');
     const badgeValid = el('bulkBadgeValid');
+    const badgeValidText = el('bulkBadgeValidText');
     const badgeWarn = el('bulkBadgeWarn');
+    const badgeError = el('bulkBadgeError');
     const previewFileName = el('bulkPreviewFileName');
 
     if (!previewContainer || !tableBody) return;
 
     previewContainer.classList.remove('hidden');
-    if (previewFileName) previewFileName.textContent = `${fileName} (${bulkUploadState.parsedRecords.length} records ready)`;
+    if (previewFileName) previewFileName.textContent = `${fileName} (${bulkUploadState.parsedRecords.length} records processed)`;
 
     const total = bulkUploadState.parsedRecords.length;
     const validCount = bulkUploadState.parsedRecords.filter(r => r.isValid).length;
     const duplicateCount = bulkUploadState.parsedRecords.filter(r => r.isDuplicate).length;
+    const errorCount = total - validCount;
 
-    if (badgeTotal) badgeTotal.textContent = `${total} Total Rows`;
-    if (badgeValid) badgeValid.textContent = `${validCount} Valid`;
+    if (badgeTotal) badgeTotal.textContent = `${total} Total`;
+    if (badgeValidText) badgeValidText.textContent = `${validCount} Ready to Enroll`;
+    
     if (badgeWarn) {
         if (duplicateCount > 0) {
-            badgeWarn.textContent = `${duplicateCount} Existing / Update`;
+            badgeWarn.textContent = `${duplicateCount} Existing (Will Update)`;
             badgeWarn.classList.remove('hidden');
         } else {
             badgeWarn.classList.add('hidden');
         }
     }
 
-    tableBody.innerHTML = bulkUploadState.parsedRecords.map(r => `
-        <tr class="hover:bg-slate-50 border-b border-slate-100 ${!r.isValid ? 'bg-red-50/50' : ''}">
-            <td class="p-2.5 text-center font-mono font-bold text-slate-400">${r.rowNumber}</td>
-            <td class="p-2.5 font-mono font-bold text-slate-800">${r.student_id || '<span class="text-slate-400 italic">Auto CPASS</span>'}</td>
-            <td class="p-2.5 font-bold text-slate-800 flex items-center gap-1.5">
-                ${r.full_name || '<span class="text-red-500 font-bold">Missing Name!</span>'}
-                ${r.isDuplicate ? '<span class="text-[9px] px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-800 font-bold">Exists</span>' : ''}
-            </td>
-            <td class="p-2.5"><span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700">${r.role}</span></td>
-            <td class="p-2.5 font-semibold text-slate-700">${r.program} <span class="text-slate-400">• ${r.section}</span></td>
-            <td class="p-2.5 font-mono text-xs">
-                ${r.default_transit_mode === 'VEHICLE' 
-                    ? `<span class="text-emerald-700 font-bold">🚗 ${r.plate_number || 'Vehicle'}</span>` 
-                    : '<span class="text-slate-500">🚶 Pedestrian</span>'}
-            </td>
-            <td class="p-2.5 text-center">
-                ${r.isValid 
-                    ? `<span class="px-2 py-0.5 rounded-full text-[10px] font-black ${r.approval_status === 'APPROVED' ? 'bg-emerald-100 text-emerald-800' : 'bg-yellow-100 text-yellow-800'}">${r.approval_status}</span>`
-                    : '<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-red-100 text-red-800">Invalid</span>'}
-            </td>
-        </tr>
-    `).join('');
+    if (badgeError) {
+        if (errorCount > 0) {
+            badgeError.textContent = `${errorCount} Missing Name`;
+            badgeError.classList.remove('hidden');
+        } else {
+            badgeError.classList.add('hidden');
+        }
+    }
+
+    renderBulkPreviewRows(bulkUploadState.parsedRecords);
 
     if (btnExecute) {
         btnExecute.disabled = validCount === 0;
         if (btnExecuteText) {
-            btnExecuteText.textContent = `Import ${validCount} ${bulkUploadState.fileType === 'students' ? 'Students' : 'Members'} to CHARRMPASS`;
+            btnExecuteText.textContent = `Enroll ${validCount} ${bulkUploadState.fileType === 'students' ? 'Students' : 'Members'} into CHARRMPASS`;
         }
     }
+
+    if (window.lucide && typeof lucide.createIcons === 'function') {
+        lucide.createIcons();
+    }
 }
+
+function renderBulkPreviewRows(recordsToRender) {
+    const tableBody = el('bulkPreviewTableBody');
+    if (!tableBody) return;
+
+    if (!recordsToRender.length) {
+        tableBody.innerHTML = `
+            <tr>
+                <td colspan="8" class="p-6 text-center text-slate-400 italic">No matching records found in preview.</td>
+            </tr>
+        `;
+        return;
+    }
+
+    tableBody.innerHTML = recordsToRender.map(r => `
+        <tr class="hover:bg-slate-50 border-b border-slate-100 transition-colors ${!r.isValid ? 'bg-red-50/60' : ''}">
+            <td class="p-2.5 text-center font-mono font-bold text-slate-400 text-[11px]">${r.rowNumber}</td>
+            <td class="p-2.5 font-mono font-bold text-slate-800 text-xs">
+                ${r.student_id ? `<span class="bg-slate-100 px-2 py-0.5 rounded-md">${r.student_id}</span>` : '<span class="text-slate-400 italic text-[11px]">Auto CPASS</span>'}
+            </td>
+            <td class="p-2.5 font-bold text-slate-800">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                    <span>${r.full_name || '<span class="text-red-500 font-bold text-xs">⚠️ Missing Full Name!</span>'}</span>
+                    ${r.isDuplicate ? '<span class="text-[9px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-bold border border-amber-200">Will Update</span>' : ''}
+                </div>
+            </td>
+            <td class="p-2.5"><span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700">${r.role}</span></td>
+            <td class="p-2.5 font-semibold text-slate-700 text-xs">
+                <span class="font-bold text-emerald-800">${r.program}</span> <span class="text-slate-400">• ${r.section}</span>
+            </td>
+            <td class="p-2.5 font-mono text-xs">
+                ${r.default_transit_mode === 'VEHICLE' 
+                    ? `<span class="text-emerald-700 font-bold flex items-center gap-1">🚗 ${r.plate_number || 'Vehicle'}</span>` 
+                    : '<span class="text-slate-500 flex items-center gap-1">🚶 Pedestrian</span>'}
+            </td>
+            <td class="p-2.5 text-center">
+                ${r.isValid 
+                    ? `<span class="px-2 py-0.5 rounded-full text-[10px] font-black ${r.approval_status === 'APPROVED' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-yellow-100 text-yellow-800'}">${r.approval_status}</span>`
+                    : '<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-red-100 text-red-800 border border-red-200">Fix Needed</span>'}
+            </td>
+            <td class="p-2.5 text-center">
+                <button type="button" onclick="removeBulkPreviewRow(${r.rowNumber})" class="text-slate-400 hover:text-red-600 p-1 rounded-lg hover:bg-red-50 transition-all" title="Remove this row">
+                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                </button>
+            </td>
+        </tr>
+    `).join('');
+
+    if (window.lucide && typeof lucide.createIcons === 'function') {
+        lucide.createIcons();
+    }
+}
+
+// Live search in preview table
+window.filterBulkPreviewTable = function() {
+    const q = (el('bulkPreviewSearch')?.value || '').toLowerCase().trim();
+    if (!q) {
+        renderBulkPreviewRows(bulkUploadState.parsedRecords);
+        return;
+    }
+    const filtered = bulkUploadState.parsedRecords.filter(r => 
+        (r.full_name && r.full_name.toLowerCase().includes(q)) ||
+        (r.student_id && r.student_id.toLowerCase().includes(q)) ||
+        (r.program && r.program.toLowerCase().includes(q)) ||
+        (r.section && r.section.toLowerCase().includes(q))
+    );
+    renderBulkPreviewRows(filtered);
+};
+
+// Remove single row directly from preview
+window.removeBulkPreviewRow = function(rowNum) {
+    bulkUploadState.parsedRecords = bulkUploadState.parsedRecords.filter(r => r.rowNumber !== rowNum);
+    renderBulkPreviewUI(bulkUploadState.fileName || 'Roster');
+    showToast(`Removed row #${rowNum}`, 'info');
+};
 
 window.resetBulkUploadForm = function() {
     bulkUploadState.parsedRecords = [];
@@ -5183,6 +5964,12 @@ window.resetBulkUploadForm = function() {
     if (studentFileInput) studentFileInput.value = '';
     const facultyFileInput = el('bulkFacultyFileInput');
     if (facultyFileInput) facultyFileInput.value = '';
+    const pasteStudentArea = el('bulkStudentPasteArea');
+    if (pasteStudentArea) pasteStudentArea.value = '';
+    const pasteFacultyArea = el('bulkFacultyPasteArea');
+    if (pasteFacultyArea) pasteFacultyArea.value = '';
+    const previewSearch = el('bulkPreviewSearch');
+    if (previewSearch) previewSearch.value = '';
     const btnExecute = el('btnExecuteBulkImport');
     if (btnExecute) btnExecute.disabled = true;
     const progressContainer = el('bulkProgressBarContainer');
@@ -5212,80 +5999,50 @@ window.executeBulkImport = async function() {
 
     try {
         if (isConnected && supabaseClient) {
-            // Check if RPC function bulk_upsert_users exists
-            let useRpc = false;
-            try {
-                const { error: rpcTestError } = await supabaseClient.rpc('bulk_upsert_users', {
-                    users_payload: validRecords.slice(0, 1),
-                    default_status: 'APPROVED',
-                    default_transit: 'PEDESTRIAN'
-                });
-                if (!rpcTestError) useRpc = true;
-            } catch(e) {
-                useRpc = false;
-            }
+            // Direct Supabase Client batch upsert
+            for (let i = 0; i < validRecords.length; i++) {
+                const r = validRecords[i];
+                const userPayload = {
+                    full_name: r.full_name,
+                    student_id: r.student_id || null,
+                    cpass_id: r.student_id || (r.cpass_id ? r.cpass_id.toUpperCase() : null),
+                    role: r.role,
+                    program: r.program,
+                    section: r.section,
+                    sex: r.sex,
+                    age: r.age,
+                    address: r.address,
+                    default_transit_mode: r.default_transit_mode,
+                    approval_status: r.approval_status
+                };
 
-            if (useRpc) {
-                // Batch in chunks of 50
-                const chunkSize = 50;
-                for (let i = 0; i < validRecords.length; i += chunkSize) {
-                    const chunk = validRecords.slice(i, i + chunkSize);
-                    await supabaseClient.rpc('bulk_upsert_users', {
-                        users_payload: chunk,
-                        default_status: chunk[0].approval_status || 'APPROVED',
-                        default_transit: chunk[0].default_transit_mode || 'PEDESTRIAN'
-                    });
-                    insertedCount += chunk.length;
-                    const pct = Math.min(100, Math.round((insertedCount / total) * 100));
-                    if (progressBarFill) progressBarFill.style.width = `${pct}%`;
-                    if (progressPercent) progressPercent.textContent = `${pct}%`;
-                    if (progressLabel) progressLabel.textContent = `Imported ${insertedCount} of ${total} records...`;
-                }
-            } else {
-                // Direct Supabase Client batch upsert
-                for (let i = 0; i < validRecords.length; i++) {
-                    const r = validRecords[i];
-                    const userPayload = {
-                        full_name: r.full_name,
-                        student_id: r.student_id || null,
-                        cpass_id: r.student_id || (r.cpass_id ? r.cpass_id.toUpperCase() : null),
-                        role: r.role,
-                        program: r.program,
-                        section: r.section,
-                        sex: r.sex,
-                        age: r.age,
-                        address: r.address,
-                        default_transit_mode: r.default_transit_mode,
-                        approval_status: r.approval_status
-                    };
+                const { data: userData, error: userError } = await supabaseClient
+                    .from('users')
+                    .upsert(userPayload, { onConflict: 'cpass_id' })
+                    .select()
+                    .single();
 
-                    const { data: userData, error: userError } = await supabaseClient
-                        .from('users')
-                        .upsert(userPayload, { onConflict: 'cpass_id' })
-                        .select()
-                        .single();
-
-                    if (!userError && userData) {
-                        // Attach Vehicle if present
-                        if (r.plate_number && r.plate_number !== 'PENDING-PLATE' && r.plate_number !== 'NONE') {
-                            await supabaseClient.from('vehicles').upsert({
-                                user_id: userData.id,
-                                plate_number: r.plate_number,
-                                vehicle_type: r.vehicle_type || 'Motorcycle',
-                                vehicle_model: r.vehicle_model || '',
-                                approval_status: r.approval_status
-                            }, { onConflict: 'plate_number' });
-                        }
+                if (!userError && userData) {
+                    // Attach Vehicle if plate provided
+                    if (r.plate_number && r.plate_number !== 'PENDING-PLATE' && r.plate_number !== 'NONE' && r.plate_number.trim()) {
+                        await supabaseClient.from('vehicles').upsert({
+                            user_id: userData.id,
+                            plate_number: r.plate_number,
+                            vehicle_type: r.vehicle_type || 'Motorcycle',
+                            vehicle_model: r.vehicle_model || '',
+                            approval_status: r.approval_status
+                        }, { onConflict: 'plate_number' });
                     }
-
-                    insertedCount++;
-                    const pct = Math.min(100, Math.round((insertedCount / total) * 100));
-                    if (progressBarFill) progressBarFill.style.width = `${pct}%`;
-                    if (progressPercent) progressPercent.textContent = `${pct}%`;
                 }
+
+                insertedCount++;
+                const pct = Math.min(100, Math.round((insertedCount / total) * 100));
+                if (progressBarFill) progressBarFill.style.width = `${pct}%`;
+                if (progressPercent) progressPercent.textContent = `${pct}%`;
+                if (progressLabel) progressLabel.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin text-emerald-600"></i> Enrolled ${insertedCount} of ${total} records...`;
             }
 
-            showToast(`🎉 Successfully batch-enrolled ${insertedCount} ${bulkUploadState.fileType === 'students' ? 'students' : 'members'}!`, 'success');
+            showToast(`🎉 Successfully enrolled ${insertedCount} ${bulkUploadState.fileType === 'students' ? 'students' : 'members'} into CHARRMPASS!`, 'success');
             await loadData();
             closeBulkUploadModal();
 
@@ -5316,7 +6073,7 @@ window.executeBulkImport = async function() {
 
                 const existingIdx = adminState.users.findIndex(u => 
                     (r.student_id && u.student_id === r.student_id) || 
-                    u.full_name.toLowerCase() === r.full_name.toLowerCase()
+                    (u.full_name && r.full_name && u.full_name.toLowerCase() === r.full_name.toLowerCase())
                 );
 
                 if (existingIdx !== -1) {
@@ -5329,7 +6086,7 @@ window.executeBulkImport = async function() {
             renderStats();
             renderUsersTable();
             renderPendingApprovals();
-            showToast(`Local Batch Import: Added/Updated ${validRecords.length} records.`, 'success');
+            showToast(`🎉 Local Batch Import: Enrolled ${validRecords.length} records into CHARRMPASS.`, 'success');
             closeBulkUploadModal();
         }
     } catch(err) {

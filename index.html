@@ -53,6 +53,10 @@
 
     <link rel="stylesheet" href="styles.css">
 
+    <!-- Supabase JS & Config -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="supabase-config.js"></script>
+
     <!-- Icons (Lucide) -->
     <script src="https://unpkg.com/lucide@latest"></script>
 </head>
@@ -93,10 +97,13 @@
         <p class="text-slate-200 text-xs md:text-sm font-medium tracking-wide max-w-lg drop-shadow">
             Smart Campus Entry &amp; Exit Monitoring System Using Dual-Range RFID Technology (Close-Range for Pedestrians &amp; Long-Range for Vehicles)
         </p>
-        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-950/70 border border-emerald-400/30 text-emerald-300 text-[11px] font-bold uppercase tracking-widest mt-2 backdrop-blur-md shadow-sm">
-            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            Aklan State University • Ibajay Campus
-        </span>
+        <div class="flex flex-wrap items-center justify-center gap-2 mt-2.5">
+            <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-950/70 border border-emerald-400/30 text-emerald-300 text-[11px] font-bold uppercase tracking-widest backdrop-blur-md shadow-sm">
+                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                Aklan State University • Ibajay Campus
+            </span>
+            <div id="dbStatusBadge"></div>
+        </div>
     </header>
 
     <!-- Main Content Container -->
@@ -224,8 +231,6 @@
     </footer>
 
     <!-- Scripts -->
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="supabase-config.js"></script>
     <script>
         // Custom Toast Function
         function showNotification(message, type = 'info') {
@@ -362,15 +367,26 @@
                 if (window.lucide) lucide.createIcons();
 
                 try {
-                    const { data, error } = await supabase
-                        .from('system_accounts')
-                        .select('*')
-                        .eq('username', username)
-                        .eq('password', password)
-                        .maybeSingle();
+                    let data = null;
+                    const client = supabase || supabaseClient;
+                    if (client) {
+                        const { data: dbAccount, error: dbErr } = await client
+                            .from('system_accounts')
+                            .select('*')
+                            .eq('username', username)
+                            .eq('password', password)
+                            .maybeSingle();
+                        
+                        if (dbErr) {
+                            console.error('Login query error:', dbErr);
+                        }
+                        if (dbAccount) {
+                            data = dbAccount;
+                        }
+                    }
 
-                    if (error || !data) {
-                        showNotification('Invalid username or password.', 'error');
+                    if (!data) {
+                        showNotification('Invalid username or password. Access Denied.', 'error');
                         loginBtn.disabled = false;
                         loginBtn.innerHTML = originalContent;
                         if (window.lucide) lucide.createIcons();
@@ -384,6 +400,7 @@
                         id: data.id,
                         username: data.username,
                         role: data.role,
+                        loginTime: Date.now(),
                         timestamp: Date.now()
                     }));
 
