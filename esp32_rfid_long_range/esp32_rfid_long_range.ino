@@ -1,67 +1,84 @@
 /*
  * =====================================================================================
- * CHARRMPASS — ESP32 Long-Range UHF RFID Gateway + BLE Wi-Fi Provisioning v4.5
+ * CHARRMPASS — ESP32 LONG-RANGE UHF AUTOMATED VEHICLE ENTRY MONITOR (NO BARRIER)
  * =====================================================================================
  *
- * 1. BLUETOOTH (BLE) WI-FI PROVISIONING:
- *    - Phone/Web Browser connects over BLE (Service: 4fafc201-..., Char: beb5483e-...).
- *    - Sends Wi-Fi SSID & Password directly to ESP32 without typing code.
- *    - Credentials saved permanently in ESP32 Flash Memory (NVS Preferences).
- *    - If Wi-Fi fails to connect, BLE automatically starts in Setup Mode.
+ * DEDICATED VEHICLE ENTRY GATE MONITOR:
+ *   - Operating Frequency: ~860–960 MHz UHF (Boland / Wiegand 26/34 Long-Range RFID)
+ *   - Role: Dedicated Automated Vehicle Entry Monitor (Free-flow automated logging, NO barrier arm)
+ *   - High-throughput Inbound Detection:
+ *       * All detected vehicles are logged as "ENTRY"
+ *       * 15-second Transit Anti-Passback Debounce suppresses duplicate repeat scans as car passes
+ *   - Standalone Vehicle Device: Free-flow automated drive-through monitoring for ASU-Ibajay campus.
  *
- * 2. SINGLE LONG-RANGE UHF RFID (AUTO ENTRY & EXIT):
- *    - Automatically detects if vehicle is currently inside or outside campus.
- *    - If inside -> Logs "EXIT" and opens gate.
- *    - If outside -> Logs "ENTRY" and opens gate.
- *    - 6-second anti-collision debounce suppresses repeat scans while car passes.
+ * ARDUINO IDE UPLOAD SETTINGS (IMPORTANT):
+ *   - Board: "ESP32 Dev Module" (or any standard ESP32 board)
+ *   - Partition Scheme: "Huge APP (3MB No OTA/1MB SPIFFS)" <-- MUST SET THIS!
+ *     (Required because Wi-Fi + BLE + mbedTLS together use ~1.9MB of flash)
+ *   - Upload Speed: 921600 or 115200
  *
- * 3. HARDWARE PINOUT:
- *    - Long-Range UHF Reader (UART): TX -> GPIO 16 (RX2), RX -> GPIO 17 (TX2)
- *    - 16x2 I2C LCD: SDA (GPIO 21), SCL (GPIO 22)
- *    - Relay / Boom Barrier Gate: GPIO 25 (Active LOW)
- *    - Status LEDs: Green (GPIO 4), Red (GPIO 2)
- *    - Active Buzzer: GPIO 15
- *    - MicroSD Card (HSPI): CS (GPIO 13), SCK (GPIO 26), MISO (GPIO 14), MOSI (GPIO 12)
+ * WI-FI CONNECTION & PROVISIONING:
+ *   - Set default Wi-Fi network below (DEFAULT_WIFI_SSID / DEFAULT_WIFI_PASS)
+ *   - Or configure wirelessly via Web Bluetooth (BLE) from the Admin Dashboard
+ *   - Or change Over-The-Air anytime with 1-click from the Web Admin Dashboard
+ *   - Or configure via MicroSD card (/config/wifi.cfg) or Serial Monitor ('WIFI:ssid,pass')
+ *   - Reset Wi-Fi: Hold onboard BOOT button for 3s, or type 'RESET' in Serial Monitor
  * =====================================================================================
  */
 
-#include <WiFi.h>
-#include <HTTPClient.h>
+#define GATE_ID "CHARRMPASS_GATE_01"
+#define GATE_NAME "CHARRMPASS Gate Unit 1"
+#define GATE_TYPE "ENTRY"
+#define GATE_CATEGORY "VEHICLE (ENTRY)"
+#define GATE_LOCATION "Main Gate"
+#define RFID_RANGE_MODE "LONG_RANGE"
+#define RFID_FREQUENCY "~860–960 MHz UHF"
+
+#include "soc/rtc_cntl_reg.h"
+#include "soc/soc.h"
 #include <ArduinoJson.h>
+#include <FS.h>
+#include <HTTPClient.h>
+#include <MFRC522.h>
+#include <Preferences.h>
+#include <SD.h>
+#include <SPI.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <Wire.h>
+#include <esp_wifi.h> // for esp_wifi_set_ps()
+#include <esp_bt.h>   // for esp_bt_controller_mem_release()
 #include <hd44780.h>
 #include <hd44780ioClass/hd44780_I2Cexp.h>
-#include <SPI.h>
-#include <MFRC522.h>
-#include <SD.h>
-#include <FS.h>
-#include <Preferences.h>
-#include <esp_wifi.h>   // for esp_wifi_set_ps(WIFI_PS_NONE)
 
-// BLE Libraries
+// BLE Libraries for wireless Web Bluetooth provisioning
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
 
-// =====================================================
-// 1. GATE IDENTIFIERS & BLE UUIDS (Standard 128-bit custom UUIDs)
-// =====================================================
-#define GATE_ID              "CHARRMPASS_UHF_SINGLE_GATE"
-#define GATE_CATEGORY        "VEHICLE_BARRIER"
-#define RFID_RANGE_MODE      "LONG_RANGE"
-
 // BLE Service & Characteristic UUIDs (Matches CHARRMPASS Web App)
-#define BLE_SERVICE_UUID     "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
-#define BLE_CHAR_UUID        "beb5483e-36e1-4688-b7f5-ea07361b26a8"
-#define BLE_DEVICE_NAME      "CHARRMPASS_ESP32_GATE"
+#define BLE_SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define BLE_CHAR_UUID    "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+#define BLE_DEVICE_NAME  "CHARRMPASS_UHF_BLE"
+
+// =======================
+// WI-FI CREDENTIALS & SETTINGS
+// Wi-Fi can be configured wirelessly via Web Bluetooth from the Admin Dashboard,
+// Over-The-Air remotely, or via MicroSD card (/config/wifi.cfg).
+// =======================
+const char *DEFAULT_WIFI_SSID = "YOUR_WIFI_SSID";
+const char *DEFAULT_WIFI_PASS = "YOUR_WIFI_PASSWORD";
 
 // Hardware Pin Configuration — Boland UHF Reader (Wiegand)
-#define ENABLE_WIEGAND       true
-#define WIEGAND_D0_PIN       32   // GREEN wire: Wiegand Data 0 (D0) with internal pull-up
-#define WIEGAND_D1_PIN       33   // WHITE wire: Wiegand Data 1 (D1) with internal pull-up
+#define ENABLE_WIEGAND true
+#define WIEGAND_D0_PIN                                                         \
+  32 // GREEN wire: Wiegand Data 0 (D0) with internal pull-up
+#define WIEGAND_D1_PIN                                                         \
+  33 // WHITE wire: Wiegand Data 1 (D1) with internal pull-up
 
-// Interrupt-safe Wiegand pulse buffer with independent microsecond noise filtering
+// Interrupt-safe Wiegand pulse buffer with independent microsecond noise
+// filtering
 volatile uint64_t wiegandRawBits = 0;
 volatile int wiegandBitCount = 0;
 volatile uint32_t lastPulseD0Us = 0;
@@ -74,7 +91,8 @@ volatile uint32_t wiegandTotalPulses = 0;
 void IRAM_ATTR isrWiegandD0() {
   uint32_t now = micros();
   // Filter electrical ringing under 30us
-  if (now - lastPulseD0Us < 30) return;
+  if (now - lastPulseD0Us < 30)
+    return;
   lastPulseD0Us = now;
   lastWiegandActivityUs = now;
   countD0++;
@@ -91,7 +109,8 @@ void IRAM_ATTR isrWiegandD0() {
 void IRAM_ATTR isrWiegandD1() {
   uint32_t now = micros();
   // Filter electrical ringing under 30us
-  if (now - lastPulseD1Us < 30) return;
+  if (now - lastPulseD1Us < 30)
+    return;
   lastPulseD1Us = now;
   lastWiegandActivityUs = now;
   countD1++;
@@ -105,26 +124,26 @@ void IRAM_ATTR isrWiegandD1() {
   }
 }
 
-#define ENABLE_SPI_MFRC522   true
-#define RFID_SS_PIN          5
-#define RFID_RST_PIN         27
+#define ENABLE_SPI_MFRC522 true
+#define RFID_SS_PIN 5
+#define RFID_RST_PIN 27
 
-#define SD_CS_PIN            13
-#define SD_MOSI_PIN          12
-#define SD_MISO_PIN          14
-#define SD_SCK_PIN           26
+#define SD_CS_PIN 13
+#define SD_MOSI_PIN 12
+#define SD_MISO_PIN 14
+#define SD_SCK_PIN 26
 
-#define RELAY_PIN            25   // Boom barrier gate relay
-#define GREEN_LED            4
-#define RED_LED              2
-#define BUZZER_PIN           15
-#define BOOT_BUTTON_PIN      0    // ESP32 onboard BOOT button (Hold 3s to reset Wi-Fi & start BLE)
+#define RELAY_PIN 25 // Auxiliary pass indicator / beacon relay (Free-flow pass, no barrier arm)
+#define GREEN_LED 4
+#define RED_LED 2
+#define BUZZER_PIN 15
+#define BOOT_BUTTON_PIN 0 // ESP32 onboard BOOT button
 
 // =====================================================
 // 2. SUPABASE CLOUD REST API
 // =====================================================
-const char* SUPABASE_URL = "https://sdwjkgtxrpeajuymgpxp.supabase.co";
-const char* SUPABASE_ANON =
+const char *SUPABASE_URL = "https://sdwjkgtxrpeajuymgpxp.supabase.co";
+const char *SUPABASE_ANON =
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
     "eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNkd2prZ3R4cnBlYWp1eW1ncHhwIiwicm9sZSI6Im"
     "Fub24iLCJpYXQiOjE3ODgxMDA0ODEsImV4cCI6MjEwMzY3NjQ4MX0.ZLloaPDBQTMj_"
@@ -137,44 +156,63 @@ hd44780_I2Cexp lcd;
 MFRC522 rfid(RFID_SS_PIN, RFID_RST_PIN);
 SPIClass spiSD(HSPI);
 Preferences preferences;
+WiFiClientSecure secureClient;
 
-// BLE Server handles
+// BLE Server handles & wireless provisioning state
 BLEServer* pBleServer = NULL;
 BLECharacteristic* pBleCharacteristic = NULL;
 bool bleClientConnected = false;
 bool bleServerRunning = false;
-bool newWifiCredentialsReceived = false;
+volatile bool newWifiCredentialsReceived = false;
+String pendingBleSsid = "";
+String pendingBlePass = "";
 
-// Wi-Fi credentials are NEVER hardcoded.
-// They are loaded exclusively from NVS (saved via Captive Portal or BLE).
+// BLE callbacks run on the Bluetooth stack task. They must NOT touch the I2C
+// LCD, buzzer delays, or Wi-Fi. They only raise these flags; loop() does the work.
+volatile bool bleEvtConnected = false;
+volatile bool bleEvtDisconnected = false;
+
 String currentSsid = "";
 String currentPass = "";
 
+// Background Wi-Fi reconnect watchdog (non-blocking)
+unsigned long lastWifiRetryMs = 0;
+const unsigned long WIFI_RETRY_INTERVAL = 30000; // retry saved network every 30s
+
+// ESP32 shares ONE 2.4GHz radio between Wi-Fi and BLE. When the BT controller
+// is running, ESP-IDF requires Wi-Fi modem sleep - WIFI_PS_NONE triggers
+// "Should enable WiFi modem sleep when both WiFi and Bluetooth are enabled"
+// and aborts (reboots) the chip. Only disable sleep when BLE is off.
+void applyWifiPowerSave() {
+  if (bleServerRunning) {
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+  } else {
+    esp_wifi_set_ps(WIFI_PS_NONE);
+  }
+}
+
 bool wifiConnected = false;
-bool sdCardReady   = false;
+bool sdCardReady = false;
 unsigned long lastHeartbeat = 0;
-const unsigned long HEARTBEAT_INTERVAL = 60000; // 60 seconds periodic health check
+const unsigned long HEARTBEAT_INTERVAL =
+    60000; // 60 seconds periodic health check
 
-const char* WHITELIST_FILE   = "/uhf_whitelist.csv";
-const char* INSIDE_LIST_FILE = "/currently_inside.csv";
-const char* OFFLINE_TX_FILE  = "/offline_txns.csv";
-const char* WIFI_CONFIG_FILE = "/config/wifi.cfg";  // SD Wi-Fi backup
-const char* OFFLINE_TX_TMP   = "/offline_txns.tmp";
+const char *WHITELIST_FILE = "/uhf_whitelist.csv";
+const char *INSIDE_LIST_FILE = "/currently_inside.csv";
+const char *OFFLINE_TX_FILE = "/offline_txns.csv";
+const char *WIFI_CONFIG_FILE = "/config/wifi.cfg"; // SD Wi-Fi backup
+const char *OFFLINE_TX_TMP = "/offline_txns.tmp";
 
 // -----------------------------------------------------
-// OFFLINE BUFFER + UHF CONFIRMATION SETTINGS
+// OFFLINE BUFFER SETTINGS
 // -----------------------------------------------------
-#define OFFLINE_FLUSH_BATCH     5     // records uploaded per pass after reconnect
-// Boland/Wiegand UHF readers report ID only (no RSSI). As a proxy for
-// "vehicle is really at the gate", require N reads inside a short window.
-// 1 = disabled (act on first read). Try 2-3 if cars queued behind trigger early.
-#define UHF_MIN_CONFIRM_READS   1
-#define UHF_CONFIRM_WINDOW_MS   1500
+#define OFFLINE_FLUSH_BATCH 5 // records uploaded per pass after reconnect
 
 // Returns UTC ISO-8601 time, or "" if NTP has not synced yet.
 String isoUtcNow() {
   time_t now = time(nullptr);
-  if (now < 1700000000) return "";
+  if (now < 1700000000)
+    return "";
   struct tm t;
   gmtime_r(&now, &t);
   char buf[25];
@@ -182,55 +220,70 @@ String isoUtcNow() {
   return String(buf);
 }
 
-struct PendingConfirm { String uid; int reads; unsigned long firstMs; };
-PendingConfirm pendingConfirm[4];
-
-// true once the tag has been read enough times within the window
-bool uhfReadConfirmed(const String &uid) {
-  if (UHF_MIN_CONFIRM_READS <= 1) return true;
-  unsigned long now = millis();
-  int free = -1;
-  for (int i = 0; i < 4; i++) {
-    if (pendingConfirm[i].uid == uid) {
-      if (now - pendingConfirm[i].firstMs > UHF_CONFIRM_WINDOW_MS) {
-        pendingConfirm[i].reads = 1;
-        pendingConfirm[i].firstMs = now;
-        return false;
-      }
-      if (++pendingConfirm[i].reads >= UHF_MIN_CONFIRM_READS) {
-        pendingConfirm[i].uid = "";
-        return true;
-      }
-      return false;
-    }
-    if (free == -1 && (pendingConfirm[i].uid.length() == 0 || now - pendingConfirm[i].firstMs > UHF_CONFIRM_WINDOW_MS)) free = i;
-  }
-  if (free == -1) free = 0;
-  pendingConfirm[free].uid = uid;
-  pendingConfirm[free].reads = 1;
-  pendingConfirm[free].firstMs = now;
-  return false;
-}
-
 // =====================================================
-// MULTI-TAG ANTI-SPAM & COOLDOWN TRACKER
-// Allows reading multiple distinct tags simultaneously
-// while preventing duplicate spam loops on any single tag.
+// 1. CONFIGURABLE MULTI-READ VALIDATION & PRESENCE PARAMETERS
+//    (Prioritizes Correctness over Speed)
 // =====================================================
-struct RecentTagRecord {
-  String uid;
-  unsigned long timestamp;
+const int REQUIRED_MATCHES =
+    1; // 1 = Instant responsive detection for vehicle drive-through (Hardware Wiegand parity already verified)
+const int MAX_READ_ATTEMPTS =
+    3; // Max read attempts
+const unsigned long VALIDATION_WINDOW_MS =
+    3500; // Time window if multi-read is enabled (3.5s)
+const unsigned long PRESENCE_TIMEOUT_MS =
+    3000; // Tag must disappear for 3s before vehicle cleared
+const unsigned long MIN_COOLDOWN_MS =
+    5000; // 5-second anti-spam debounce per vehicle event
+const unsigned long DISPLAY_HOLD_MS =
+    2500;                         // Time to keep status displayed on LCD (2.5s)
+const char *READER_ID = "UHF-01"; // Physical reader identifier
+
+// Reader State Machine
+enum ReaderState {
+  STATE_IDLE,
+  STATE_DETECTING,
+  STATE_VALIDATING,
+  STATE_CONFIRMED,
+  STATE_CHECKING_STATE,
+  STATE_LOGGING,
+  STATE_WAITING_FOR_CLEAR
 };
-#define MAX_RECENT_TAGS 16
-RecentTagRecord recentTags[MAX_RECENT_TAGS];
-int recentTagIdx = 0;
-const unsigned long TAG_COOLDOWN_MS = 4000; // 4 seconds per unique tag
 
-bool isTagInCooldown(const String &uid) {
+ReaderState currentReaderState = STATE_IDLE;
+
+// Multi-Read Validation Session
+struct ValidationSession {
+  String candidateUid;
+  String candidateAltUid;
+  int matchCount;
+  int totalAttempts;
+  unsigned long firstSeenMs;
+  unsigned long lastReadMs;
+};
+ValidationSession valSession = {"", "", 0, 0, 0, 0};
+
+// Presence Tracking & Cooldown Records (Tracks whether car is still in zone)
+struct PresenceRecord {
+  String uid;
+  String plate;
+  unsigned long lastSeenMs;
+  unsigned long loggedAtMs;
+  bool isPresentInZone;
+};
+#define MAX_PRESENCE_RECORDS 8
+PresenceRecord presenceRecords[MAX_PRESENCE_RECORDS];
+
+unsigned long transactionCounter = 1;
+
+bool isUidInPresence(const String &uid, String &outPlate) {
   unsigned long now = millis();
-  for (int i = 0; i < MAX_RECENT_TAGS; i++) {
-    if (recentTags[i].uid.length() > 0 && recentTags[i].uid.equalsIgnoreCase(uid)) {
-      if (now - recentTags[i].timestamp < TAG_COOLDOWN_MS) {
+  for (int i = 0; i < MAX_PRESENCE_RECORDS; i++) {
+    if (presenceRecords[i].uid.length() > 0 &&
+        presenceRecords[i].uid.equalsIgnoreCase(uid)) {
+      bool cooldownExpired =
+          (now - presenceRecords[i].loggedAtMs >= MIN_COOLDOWN_MS);
+      if (!cooldownExpired) {
+        outPlate = presenceRecords[i].plate;
         return true;
       }
     }
@@ -238,11 +291,58 @@ bool isTagInCooldown(const String &uid) {
   return false;
 }
 
-void markTagInCooldown(const String &uid) {
-  recentTags[recentTagIdx].uid = uid;
-  recentTags[recentTagIdx].timestamp = millis();
-  recentTagIdx = (recentTagIdx + 1) % MAX_RECENT_TAGS;
+void registerPresence(const String &uid, const String &plate) {
+  unsigned long now = millis();
+  int freeIdx = -1;
+  for (int i = 0; i < MAX_PRESENCE_RECORDS; i++) {
+    if (presenceRecords[i].uid.equalsIgnoreCase(uid)) {
+      presenceRecords[i].lastSeenMs = now;
+      presenceRecords[i].loggedAtMs = now;
+      presenceRecords[i].plate = plate;
+      presenceRecords[i].isPresentInZone = true;
+      return;
+    }
+    if (freeIdx == -1 && presenceRecords[i].uid.length() == 0) {
+      freeIdx = i;
+    }
+  }
+  if (freeIdx == -1)
+    freeIdx = 0;
+  presenceRecords[freeIdx].uid = uid;
+  presenceRecords[freeIdx].plate = plate;
+  presenceRecords[freeIdx].lastSeenMs = now;
+  presenceRecords[freeIdx].loggedAtMs = now;
+  presenceRecords[freeIdx].isPresentInZone = true;
 }
+
+void touchPresence(const String &uid) {
+  unsigned long now = millis();
+  for (int i = 0; i < MAX_PRESENCE_RECORDS; i++) {
+    if (presenceRecords[i].uid.equalsIgnoreCase(uid)) {
+      presenceRecords[i].lastSeenMs = now;
+      return;
+    }
+  }
+}
+
+void cleanupPresenceRecords();
+void showLcdIdle();
+void showLcdDetecting();
+void showLcdValidating(int current, int required, const String &uidSnippet);
+void showLcdConfirmed(int matches, int required);
+void showLcdEntry(const String &plate);
+void showLcdExit(const String &plate);
+void showLcdUnknown();
+void showLcdDuplicate();
+void showLcdMismatch();
+void setLcdHolding(unsigned long durationMs = DISPLAY_HOLD_MS);
+void handleUhfDetection(String uid, String altUid = "");
+void processConfirmedTag(String finalUid, String altUid, int matchCount);
+void updateReaderStateMachine();
+bool isTagInCooldown(const String &uid);
+void markTagInCooldown(const String &uid, const String &plate = "");
+bool uhfReadConfirmed(const String &uid);
+void initSDCard();
 
 // =====================================================
 // HIGH-SPEED IN-MEMORY RAM WHITELIST CACHE
@@ -257,8 +357,9 @@ typedef struct {
   String vehicleId;
   String userId;
   bool authorized;
-  bool isInside;               // TRUE if vehicle is currently inside campus, FALSE if outside
-  unsigned long lastActionTime; // Millis timestamp of last ENTRY/EXIT to prevent repeat flip-flop
+  bool isInside; // TRUE if vehicle is currently inside campus, FALSE if outside
+  unsigned long lastActionTime; // Millis timestamp of last ENTRY/EXIT to
+                                // prevent repeat flip-flop
   String cpassId;
 } RamCard;
 
@@ -266,7 +367,8 @@ typedef struct {
 RamCard ramCards[MAX_RAM_CARDS];
 int ramCardCount = 0;
 unsigned long lastWhitelistSync = 0;
-const unsigned long WHITELIST_SYNC_INTERVAL = 300000; // Auto-sync RAM every 5 minutes
+const unsigned long WHITELIST_SYNC_INTERVAL =
+    300000; // Auto-sync RAM every 5 minutes
 
 int findCardInRam(const String &uid) {
   for (int i = 0; i < ramCardCount; i++) {
@@ -277,7 +379,9 @@ int findCardInRam(const String &uid) {
   return -1;
 }
 
-void addCardToRam(String uid, String name, String plate, String role, String userType, String vId, String uId, bool auth, bool inside = false, String cpass = "") {
+void addCardToRam(String uid, String name, String plate, String role,
+                  String userType, String vId, String uId, bool auth,
+                  bool inside = false, String cpass = "") {
   int idx = findCardInRam(uid);
   if (idx != -1) {
     ramCards[idx].name = name;
@@ -288,7 +392,8 @@ void addCardToRam(String uid, String name, String plate, String role, String use
     ramCards[idx].userId = uId;
     ramCards[idx].authorized = auth;
     ramCards[idx].isInside = inside;
-    if (cpass.length() > 0) ramCards[idx].cpassId = cpass;
+    if (cpass.length() > 0)
+      ramCards[idx].cpassId = cpass;
     return;
   }
   if (ramCardCount < MAX_RAM_CARDS) {
@@ -326,7 +431,8 @@ int txQueueHead = 0;
 int txQueueTail = 0;
 int txQueueCount = 0;
 
-void enqueueTransaction(String uid, String dir, String status, String remarks, String vId, String uId, String uType) {
+void enqueueTransaction(String uid, String dir, String status, String remarks,
+                        String vId, String uId, String uType) {
   if (txQueueCount >= MAX_TX_QUEUE) {
     // Drop oldest to avoid buffer lock
     txQueueHead = (txQueueHead + 1) % MAX_TX_QUEUE;
@@ -344,27 +450,32 @@ void enqueueTransaction(String uid, String dir, String status, String remarks, S
 }
 
 // Scan verification state
-bool card_found        = false;
-bool card_authorized   = false;
-String card_name       = "";
-String card_plate      = "";
-String card_role       = "";
-String card_cpassId    = "";
-String card_userType   = "VEHICLE";
-String card_rfidType   = "LONG_RANGE";
-String card_vehicleId  = "";
-String card_userId     = "";
+bool card_found = false;
+bool card_authorized = false;
+String card_name = "";
+String card_plate = "";
+String card_role = "";
+String card_cpassId = "";
+String card_userType = "VEHICLE";
+String card_rfidType = "LONG_RANGE";
+String card_vehicleId = "";
+String card_userId = "";
 String calculatedDirection = "ENTRY";
 unsigned long lastTagDisplayMillis = 0;
 
 // Forward declarations
 void sendDeviceHeartbeat();
-void sendBleStatus(String status);
 void syncWhitelistToRam();
 void triggerBarrier();
 bool isTagCurrentlyInsideOnline(String uid);
-void insertTransactionOnline(String uid, String direction, String status, String remarks, String vId = "", String uId = "", String uType = "VEHICLE");
-bool attemptWifiConnection(String testSsid, String testPass, int timeoutSeconds = 20);
+void insertTransactionOnline(String uid, String direction, String status,
+                             String remarks, String vId = "", String uId = "",
+                             String uType = "VEHICLE");
+bool attemptWifiConnection(String testSsid, String testPass,
+                           int timeoutSeconds = 20);
+void startBleServer();
+void pauseBleAdvertising();
+void sendBleStatus(String status);
 
 // =====================================================
 // 4. LCD & AUDIO HELPERS
@@ -381,9 +492,7 @@ void lcdShowFast(String line1, String line2) {
   lastTagDisplayMillis = millis();
 }
 
-void lcdMsg(String line1, String line2) {
-  lcdShowFast(line1, line2);
-}
+void lcdMsg(String line1, String line2) { lcdShowFast(line1, line2); }
 
 void showReady() {
   digitalWrite(RED_LED, HIGH);
@@ -391,11 +500,11 @@ void showReady() {
   digitalWrite(RELAY_PIN, HIGH); // Relay off
 
   if (wifiConnected) {
-    lcdShowFast("UHF MONITOR RDY", "AUTO DRIVE-THRU");
+    lcdShowFast("UHF VEHICLE ENT", "AUTO DRIVE-THRU");
   } else if (bleServerRunning) {
-    lcdShowFast("[BLE SETUP MODE]", "PAIR PHONE/APP");
+    lcdShowFast("[OFFLINE] BLE ON", "PAIR TO SET WIFI");
   } else {
-    lcdShowFast("[OFFLINE] READY", "AUTO DRIVE-THRU");
+    lcdShowFast("[OFFLINE] ENTRY", "AUTO DRIVE-THRU");
   }
 }
 
@@ -404,13 +513,15 @@ void beep(int ms, int count = 1) {
     digitalWrite(BUZZER_PIN, HIGH);
     delay(ms);
     digitalWrite(BUZZER_PIN, LOW);
-    if (count > 1) delay(40);
+    if (count > 1)
+      delay(40);
   }
 }
 
 void triggerBarrier() {
-  // Free-flow automated drive-through monitoring (no barrier arm delay)
-  digitalWrite(RELAY_PIN, LOW);   // Quick pulse
+  // Free-flow automated drive-through monitoring (no mechanical barrier arm at ASU gate)
+  // Pulses auxiliary signal/relay and flashes Green LED to confirm automated passage registration
+  digitalWrite(RELAY_PIN, LOW); // Quick signal pulse
   digitalWrite(GREEN_LED, HIGH);
   digitalWrite(RED_LED, LOW);
   delay(100);
@@ -418,13 +529,150 @@ void triggerBarrier() {
   digitalWrite(GREEN_LED, LOW);
 }
 
+// =====================================================
+// MULTI-READ RFID VALIDATION & COOLDOWN SUBSYSTEM
+// Prioritizes correctness over speed:
+// 1. Tag Detected
+// 2. Multi-read validation (3/3 identical match within 2.5s window)
+// 3. Confirm UID & Check previous entry/exit state
+// 4. Create ONE transaction
+// 5. Activate cooldown lockout (8s) & wait for vehicle to clear zone
+// =====================================================
+
+bool isTagInCooldown(const String &uid) {
+  if (uid.length() == 0) return false;
+  String dummyPlate = "";
+  if (isUidInPresence(uid, dummyPlate)) {
+    // Keep touching presence while tag continues to produce RF pulses in zone
+    touchPresence(uid);
+    return true;
+  }
+  return false;
+}
+
+void markTagInCooldown(const String &uid, const String &plate) {
+  if (uid.length() == 0) return;
+  registerPresence(uid, plate);
+  Serial.printf("[COOLDOWN] Tag %s locked out (min cooldown: %lu ms, waiting for vehicle to leave zone)\n",
+                uid.c_str(), MIN_COOLDOWN_MS);
+}
+
+bool uhfReadConfirmed(const String &uid) {
+  if (uid.length() == 0) return false;
+  unsigned long now = millis();
+
+  // If vehicle is in active cooldown, ignore pulses
+  if (isTagInCooldown(uid)) {
+    return false;
+  }
+
+  // Instant mode: immediately confirm on the very first read
+  if (REQUIRED_MATCHES <= 1) {
+    Serial.printf("[UHF SCAN] Instant detection confirmed for UID: %s\n", uid.c_str());
+    return true;
+  }
+
+  // Multi-read mode (if configured with REQUIRED_MATCHES > 1)
+  if (valSession.candidateUid.length() > 0 &&
+      (now - valSession.firstSeenMs <= VALIDATION_WINDOW_MS)) {
+    if (valSession.candidateUid.equalsIgnoreCase(uid)) {
+      valSession.matchCount++;
+      valSession.totalAttempts++;
+      valSession.lastReadMs = now;
+      Serial.printf("[UHF MULTI-READ] Detection #%d/%d for UID: %s\n",
+                    valSession.matchCount, REQUIRED_MATCHES, uid.c_str());
+
+      // Show intermediate progress on LCD & short pip on buzzer
+      char l1[17], l2[17];
+      snprintf(l1, sizeof(l1), "VALIDATING %d/%d", valSession.matchCount, REQUIRED_MATCHES);
+      snprintf(l2, sizeof(l2), "TAG: %-11.11s", uid.c_str());
+      lcdShowFast(l1, l2);
+      digitalWrite(BUZZER_PIN, HIGH);
+      delay(15);
+      digitalWrite(BUZZER_PIN, LOW);
+
+      if (valSession.matchCount >= REQUIRED_MATCHES) {
+        Serial.printf("[UHF VALIDATION] %d/%d MATCH CONFIRMED for UID: %s! Proceeding to state determination.\n",
+                      REQUIRED_MATCHES, REQUIRED_MATCHES, uid.c_str());
+        valSession.candidateUid = ""; // Reset session for next vehicle
+        valSession.matchCount = 0;
+        return true;
+      }
+      return false; // Waiting for next matching pulse
+    } else {
+      // Mismatch: a different UID entered reading zone; reset session
+      Serial.printf("[UHF] New UID %s entered (previous was %s). Resetting window.\n",
+                    uid.c_str(), valSession.candidateUid.c_str());
+      valSession.candidateUid = uid;
+      valSession.matchCount = 1;
+      valSession.totalAttempts = 1;
+      valSession.firstSeenMs = now;
+      valSession.lastReadMs = now;
+      return false;
+    }
+  } else {
+    // New validation window started
+    valSession.candidateUid = uid;
+    valSession.matchCount = 1;
+    valSession.totalAttempts = 1;
+    valSession.firstSeenMs = now;
+    valSession.lastReadMs = now;
+    Serial.printf("[UHF MULTI-READ] Detection #1/%d for UID: %s (Window started)\n",
+                  REQUIRED_MATCHES, uid.c_str());
+
+    char l1[17], l2[17];
+    snprintf(l1, sizeof(l1), "DETECTING... 1/%d", REQUIRED_MATCHES);
+    snprintf(l2, sizeof(l2), "TAG: %-11.11s", uid.c_str());
+    lcdShowFast(l1, l2);
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(20);
+    digitalWrite(BUZZER_PIN, LOW);
+    return false;
+  }
+}
+
+// =======================
+// SD CARD INITIALIZATION (HSPI)
+// =======================
+void initSDCard() {
+  pinMode(SD_CS_PIN, OUTPUT);
+  digitalWrite(SD_CS_PIN, HIGH);
+
+  // Initialize dedicated HSPI bus for MicroSD Card (CS 13, MOSI 12, MISO 14, SCK 26)
+  spiSD.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
+
+  Serial.print("[SD] Initializing SD Card on HSPI (CS 13, MOSI 12, MISO 14, SCK 26)... ");
+
+  if (SD.begin(SD_CS_PIN, spiSD)) {
+    sdCardReady = true;
+    Serial.println("OK! (SD Card Ready)");
+
+    if (!SD.exists("/config")) {
+      SD.mkdir("/config");
+    }
+
+    if (!SD.exists(WHITELIST_FILE)) {
+      File f = SD.open(WHITELIST_FILE, FILE_WRITE);
+      if (f) {
+        f.println("UID,NAME,PLATE,ROLE,USER_TYPE,VEHICLE_ID,USER_ID,AUTHORIZED,IS_INSIDE,CPASS_ID");
+        f.close();
+      }
+    }
+  } else {
+    sdCardReady = false;
+    Serial.println("FAILED! (Check SD module wiring/card format)");
+  }
+}
+
 String urlEncode(String str) {
   String encoded = "";
   char c;
   for (int i = 0; i < str.length(); i++) {
     c = str.charAt(i);
-    if (isalnum(c)) encoded += c;
-    else if (c == ' ') encoded += "%20";
+    if (isalnum(c))
+      encoded += c;
+    else if (c == ' ')
+      encoded += "%20";
     else {
       char code[4];
       sprintf(code, "%%%02X", (unsigned char)c);
@@ -434,124 +682,62 @@ String urlEncode(String str) {
   return encoded;
 }
 
-// =====================================================
-// 5. BLUETOOTH (BLE) PROVISIONING CALLBACKS
-// =====================================================
-void sendBleStatus(String status) {
-  if (pBleCharacteristic && bleClientConnected) {
-    pBleCharacteristic->setValue(status.c_str());
-    pBleCharacteristic->notify();
-    Serial.println("[BLE TX NOTIFY] " + status);
-  }
-}
-
-class BleServerCallbacks : public BLEServerCallbacks {
-  void onConnect(BLEServer* pServer) {
-    bleClientConnected = true;
-    Serial.println("\n[BLE] Client Connected via Bluetooth!");
-    lcdMsg("BLUETOOTH PAIRED", "RECEIVING WIFI...");
-    beep(100, 2);
-  }
-
-  void onDisconnect(BLEServer* pServer) {
-    bleClientConnected = false;
-    Serial.println("[BLE] Client Disconnected.");
-    // Restart advertising so user can reconnect if needed
-    if (bleServerRunning) {
-      BLEDevice::startAdvertising();
-      showReady();
-    }
-  }
-};
-
-class BleCharCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic* pCharacteristic) {
-    String rxValue = pCharacteristic->getValue().c_str();
-    if (rxValue.length() > 0) {
-      DynamicJsonDocument doc(512);
-      DeserializationError err = deserializeJson(doc, rxValue);
-      if (err == DeserializationError::Ok) {
-        String newSsid = String(doc["ssid"] | "");
-        String newPass = String(doc["pass"] | "");
-        newSsid.trim();
-        newPass.trim();
-
-        if (newSsid.length() > 0) {
-          currentSsid = newSsid;
-          currentPass = newPass;
-
-          Serial.println("[BLE PROVISION] Received SSID: '" + currentSsid + "' - saving to NVS & SD...");
-          lcdMsg("SAVING WIFI...", currentSsid.substring(0, 16));
-          beep(200, 1);
-
-          saveWifiToNVS(currentSsid, currentPass);
-          saveWifiToSD(currentSsid, currentPass);
-
-          // Acknowledge receipt to Web Bluetooth client
-          if (pBleCharacteristic && bleClientConnected) {
-            String resp = "{\"event\":\"SAVED\",\"ssid\":\"" + currentSsid + "\"}";
-            pBleCharacteristic->setValue(resp.c_str());
-            pBleCharacteristic->notify();
-          }
-
-          newWifiCredentialsReceived = true;
-        }
-      }
-    }
-  }
-};
-
 void sendDeviceHeartbeat() {
-  if (WiFi.status() != WL_CONNECTED) return;
+  if (WiFi.status() != WL_CONNECTED)
+    return;
 
-  // 1. Check for Over-The-Air Wi-Fi Reconfiguration Commands from Supabase Admin Dashboard
+  // 1. Check for Over-The-Air Wi-Fi Reconfiguration Commands from Supabase
+  // Admin Dashboard
   HTTPClient checkHttp;
-  String checkUrl = String(SUPABASE_URL) + "/rest/v1/devices?esp32_identifier=eq." + String(GATE_ID) + "&select=target_ssid,target_pass";
-  checkHttp.begin(checkUrl);
+  String checkUrl = String(SUPABASE_URL) +
+                    "/rest/v1/devices?esp32_identifier=eq." + String(GATE_ID) +
+                    "&select=target_ssid,target_pass";
+  checkHttp.begin(secureClient, checkUrl);
+  checkHttp.setTimeout(4000);
   checkHttp.addHeader("apikey", SUPABASE_ANON);
   checkHttp.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
-  
+
   int getCode = checkHttp.GET();
   if (getCode == 200) {
     String resp = checkHttp.getString();
-    int ssidPos = resp.indexOf("\"target_ssid\":");
-    if (ssidPos != -1) {
-      int startQ = resp.indexOf("\"", ssidPos + 14);
-      int endQ = resp.indexOf("\"", startQ + 1);
-      if (startQ != -1 && endQ != -1 && endQ > startQ + 1) {
-        String newSsid = resp.substring(startQ + 1, endQ);
-        String newPass = "";
-        int passPos = resp.indexOf("\"target_pass\":");
-        if (passPos != -1) {
-          int pStart = resp.indexOf("\"", passPos + 14);
-          int pEnd = resp.indexOf("\"", pStart + 1);
-          if (pStart != -1 && pEnd != -1 && pEnd > pStart + 1) {
-            newPass = resp.substring(pStart + 1, pEnd);
-          }
-        }
+    DynamicJsonDocument doc(512);
+    DeserializationError jsonErr = deserializeJson(doc, resp);
+    if (!jsonErr && doc.is<JsonArray>() && doc.as<JsonArray>().size() > 0) {
+      JsonObject devObj = doc[0];
+      if (!devObj["target_ssid"].isNull()) {
+        String newSsid = devObj["target_ssid"].as<String>();
+        String newPass = devObj["target_pass"].isNull() ? "" : devObj["target_pass"].as<String>();
+        newSsid.trim();
+        newPass.trim();
 
-        if (newSsid.length() > 0) {
-          Serial.println("\n🌐 [REMOTE CLOUD CMD] Received Wi-Fi Change request for SSID: '" + newSsid + "'");
+        if (newSsid.length() > 0 && newSsid != "null" && newSsid != "target_pass") {
+          Serial.println("\n🌐 [REMOTE CLOUD CMD] Received Wi-Fi Change request for SSID: '" +
+                         newSsid + "'");
           lcdMsg("REMOTE WIFI CMD", newSsid.substring(0, 16));
           checkHttp.end();
 
           // Clear target_ssid in Supabase first to prevent loops
           HTTPClient clearHttp;
-          String clearUrl = String(SUPABASE_URL) + "/rest/v1/devices?esp32_identifier=eq." + String(GATE_ID);
-          clearHttp.begin(clearUrl);
+          String clearUrl = String(SUPABASE_URL) +
+                            "/rest/v1/devices?esp32_identifier=eq." +
+                            String(GATE_ID);
+          clearHttp.begin(secureClient, clearUrl);
+          clearHttp.setTimeout(4000);
           clearHttp.addHeader("apikey", SUPABASE_ANON);
-          clearHttp.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
+          clearHttp.addHeader("Authorization",
+                              String("Bearer ") + SUPABASE_ANON);
           clearHttp.addHeader("Content-Type", "application/json");
           clearHttp.PATCH("{\"target_ssid\":null,\"target_pass\":null}");
           clearHttp.end();
 
           // Attempt connection to the new network
-          bool ok = attemptWifiConnection(newSsid, newPass, 15);
+          bool ok = attemptWifiConnection(newSsid, newPass, 20);
           if (ok) {
             syncWhitelistToRam();
           } else {
-            Serial.println("[REMOTE CMD] Failed to connect to new Wi-Fi. Reconnecting to saved network...");
-            attemptWifiConnection(currentSsid, currentPass, 10);
+            Serial.println("[REMOTE CMD] Failed to connect to new Wi-Fi. "
+                           "Reconnecting to saved network...");
+            attemptWifiConnection(currentSsid, currentPass, 15);
           }
           showReady();
           return;
@@ -563,85 +749,73 @@ void sendDeviceHeartbeat() {
 
   // 2. Report Live Online Status, Wi-Fi SSID, and IP Address to Cloud
   HTTPClient http;
-  String url = String(SUPABASE_URL) + "/rest/v1/devices?esp32_identifier=eq." + String(GATE_ID);
-  http.begin(url);
+  String url = String(SUPABASE_URL) + "/rest/v1/devices?esp32_identifier=eq." +
+               String(GATE_ID);
+  http.begin(secureClient, url);
+  http.setTimeout(4000);
   http.addHeader("apikey", SUPABASE_ANON);
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
   http.addHeader("Content-Type", "application/json");
 
-  String payload = "{\"status\":\"ONLINE\",\"last_online\":\"now()\",\"wifi_ssid\":\"" + WiFi.SSID() + "\",\"ip_address\":\"" + WiFi.localIP().toString() + "\"}";
+  String sdStat = sdCardReady ? "MOUNTED (HSPI)" : "UNMOUNTED / ERROR";
+  String payload =
+      "{\"status\":\"ONLINE\",\"last_online\":\"now()\",\"wifi_ssid\":\"" +
+      WiFi.SSID() + "\",\"ip_address\":\"" + WiFi.localIP().toString() + 
+      "\",\"sd_status\":\"" + sdStat + 
+      "\",\"rfid_status\":\"WIEGAND 26/34 READY\",\"led_status\":\"ACTIVE (🔴🟢)\",\"buzzer_status\":\"PWM READY\",\"lcd_status\":\"INITIALIZED (16x2)\",\"relay_status\":\"PASS SIGNAL ARMED\"}";
+  // return=representation lets us detect a PATCH that matched 0 rows ("[]"),
+  // which PostgREST otherwise reports as a silent success.
+  http.addHeader("Prefer", "return=representation");
   int code = http.PATCH(payload);
-  if (code < 200 || code >= 300) {
+  String patchResp = (code > 0) ? http.getString() : "";
+  bool patched = (code >= 200 && code < 300 && patchResp != "[]");
+  if (!patched) {
+    Serial.printf("[HEARTBEAT] PATCH failed/0 rows (HTTP %d): %s\n", code,
+                  patchResp.substring(0, 160).c_str());
     http.end();
-    String upsertUrl = String(SUPABASE_URL) + "/rest/v1/devices";
-    http.begin(upsertUrl);
+    // Upsert keyed on the UNIQUE esp32_identifier column (not the UUID PK)
+    String upsertUrl = String(SUPABASE_URL) +
+                       "/rest/v1/devices?on_conflict=esp32_identifier";
+    http.begin(secureClient, upsertUrl);
+    http.setTimeout(4000);
     http.addHeader("apikey", SUPABASE_ANON);
     http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
     http.addHeader("Content-Type", "application/json");
-    http.addHeader("Prefer", "resolution=merge-duplicates");
-    String fullPayload = "{\"esp32_identifier\":\"" + String(GATE_ID) + 
-                         "\",\"device_name\":\"CHARRMPASS Long-Range UHF Unit" + 
-                         "\",\"gate_type\":\"ENTRY_EXIT" + 
-                         "\",\"device_category\":\"" + String(GATE_CATEGORY) + 
-                         "\",\"rfid_range\":\"" + String(RFID_RANGE_MODE) + 
-                         "\",\"device_location\":\"Main Gate Barrier\"" + 
-                         ",\"status\":\"ONLINE\",\"last_online\":\"now()\",\"wifi_ssid\":\"" + WiFi.SSID() + "\",\"ip_address\":\"" + WiFi.localIP().toString() + "\"}";
-    http.POST(fullPayload);
+    http.addHeader("Prefer", "resolution=merge-duplicates,return=minimal");
+    String fullPayload =
+        "{\"esp32_identifier\":\"" + String(GATE_ID) + "\",\"device_name\":\"" +
+        String(GATE_NAME) + "\",\"gate_type\":\"" + String(GATE_TYPE) +
+        "\",\"device_category\":\"" + String(GATE_CATEGORY) +
+        "\",\"rfid_range\":\"" + String(RFID_FREQUENCY) +
+        "\",\"device_location\":\"" + String(GATE_LOCATION) + "\"" +
+        ",\"status\":\"ONLINE\",\"last_online\":\"now()\",\"wifi_ssid\":\"" +
+        WiFi.SSID() + "\",\"ip_address\":\"" + WiFi.localIP().toString() +
+        "\",\"sd_status\":\"" + sdStat + 
+        "\",\"rfid_status\":\"WIEGAND 26/34 READY\",\"led_status\":\"ACTIVE (🔴🟢)\",\"buzzer_status\":\"PWM READY\",\"lcd_status\":\"INITIALIZED (16x2)\",\"relay_status\":\"PASS SIGNAL ARMED\"}";
+    int upCode = http.POST(fullPayload);
+    if (upCode >= 200 && upCode < 300) {
+      Serial.println("[HEARTBEAT] Device row upserted -> ONLINE");
+    } else {
+      Serial.printf("[HEARTBEAT] Upsert FAILED (HTTP %d): %s\n", upCode,
+                    http.getString().substring(0, 200).c_str());
+      Serial.println("[HEARTBEAT] Hint: run supabase/schema.sql (needs "
+                     "devices.ip_address column).");
+    }
+  } else {
+    Serial.printf("[HEARTBEAT] ONLINE | RSSI %d dBm | Free heap %u bytes\n",
+                  WiFi.RSSI(), ESP.getFreeHeap());
   }
   http.end();
 }
-
-void startBleServer() {
-  if (bleServerRunning) return;
-
-  Serial.println("[BLE] Initializing Bluetooth Provisioning Server...");
-  lcdMsg("BLE SETUP MODE", "PAIR ON WEB/APP");
-
-  BLEDevice::init(BLE_DEVICE_NAME);
-  BLEDevice::setMTU(517);
-  pBleServer = BLEDevice::createServer();
-  pBleServer->setCallbacks(new BleServerCallbacks());
-
-  BLEService* pService = pBleServer->createService(BLE_SERVICE_UUID);
-  pBleCharacteristic = pService->createCharacteristic(
-      BLE_CHAR_UUID,
-      BLECharacteristic::PROPERTY_READ |
-      BLECharacteristic::PROPERTY_WRITE |
-      BLECharacteristic::PROPERTY_WRITE_NR |
-      BLECharacteristic::PROPERTY_NOTIFY
-  );
-
-  pBleCharacteristic->setCallbacks(new BleCharCallbacks());
-  pBleCharacteristic->addDescriptor(new BLE2902());
-  pService->start();
-
-  BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(BLE_SERVICE_UUID);
-  pAdvertising->setScanResponse(true);
-  pAdvertising->setMinPreferred(0x06);
-  pAdvertising->setMinPreferred(0x12);
-  BLEDevice::startAdvertising();
-
-  bleServerRunning = true;
-  Serial.println("[BLE] Broadcasting as '" + String(BLE_DEVICE_NAME) + "'. Ready for pairing.");
-}
-
-void stopBleServer() {
-  if (!bleServerRunning) return;
-  Serial.println("[BLE] Wi-Fi connected! Stopping Bluetooth to free RAM...");
-  BLEDevice::deinit(true);
-  bleServerRunning = false;
-  bleClientConnected = false;
-}
-
-
 
 // =======================
 // SD CARD: SAVE Wi-Fi BACKUP
 // =======================
 void saveWifiToSD(String ssid, String pass) {
-  if (!sdCardReady) return;
-  if (!SD.exists("/config")) SD.mkdir("/config");
+  if (!sdCardReady)
+    return;
+  if (!SD.exists("/config"))
+    SD.mkdir("/config");
   File f = SD.open(WIFI_CONFIG_FILE, FILE_WRITE);
   if (f) {
     f.println("SSID=" + ssid);
@@ -657,10 +831,13 @@ void saveWifiToSD(String ssid, String pass) {
 // SD CARD: LOAD Wi-Fi BACKUP
 // =======================
 bool loadWifiFromSD(String &outSsid, String &outPass) {
-  if (!sdCardReady || !SD.exists(WIFI_CONFIG_FILE)) return false;
+  if (!sdCardReady || !SD.exists(WIFI_CONFIG_FILE))
+    return false;
   File f = SD.open(WIFI_CONFIG_FILE, FILE_READ);
-  if (!f) return false;
-  outSsid = ""; outPass = "";
+  if (!f)
+    return false;
+  outSsid = "";
+  outPass = "";
   while (f.available()) {
     String line = f.readStringUntil('\n');
     line.trim();
@@ -689,6 +866,135 @@ void saveWifiToNVS(String ssid, String pass) {
   Serial.println("[NVS] Wi-Fi credentials saved. SSID: '" + ssid + "'");
 }
 
+// =====================================================
+// 5. BLUETOOTH LOW ENERGY (BLE) PROVISIONING SUBSYSTEM
+// =====================================================
+void sendBleStatus(String status) {
+  if (pBleCharacteristic && bleClientConnected) {
+    pBleCharacteristic->setValue(status.c_str());
+    pBleCharacteristic->notify();
+    Serial.println("[BLE TX NOTIFY] " + status);
+  }
+}
+
+class BleServerCallbacks : public BLEServerCallbacks {
+  // Runs on the BLE stack task: only set flags, loop() handles LCD/buzzer.
+  void onConnect(BLEServer* pServer) {
+    bleClientConnected = true;
+    bleEvtConnected = true;
+  }
+
+  void onDisconnect(BLEServer* pServer) {
+    bleClientConnected = false;
+    bleEvtDisconnected = true;
+  }
+};
+
+class BleCharCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* pCharacteristic) {
+    String rxValue = pCharacteristic->getValue().c_str();
+    if (rxValue.length() > 0) {
+      Serial.println("[BLE RX] Raw data: " + rxValue);
+      DynamicJsonDocument doc(512);
+      DeserializationError err = deserializeJson(doc, rxValue);
+      String newSsid = "";
+      String newPass = "";
+      if (err == DeserializationError::Ok) {
+        newSsid = String(doc["ssid"] | "");
+        newPass = String(doc["pass"] | "");
+      } else {
+        int colon = rxValue.indexOf(':');
+        int comma = rxValue.indexOf(',');
+        if (colon != -1) {
+          newSsid = rxValue.substring(0, colon);
+          newPass = rxValue.substring(colon + 1);
+        } else if (comma != -1) {
+          newSsid = rxValue.substring(0, comma);
+          newPass = rxValue.substring(comma + 1);
+        } else {
+          newSsid = rxValue;
+        }
+      }
+      newSsid.trim();
+      newPass.trim();
+
+      if (newSsid.length() > 0 && !newWifiCredentialsReceived) {
+        pendingBleSsid = newSsid;
+        pendingBlePass = newPass;
+        // Set flag LAST so loop() never reads half-written credentials.
+        // LCD, buzzer, BLE ack and the Wi-Fi test all happen in loop().
+        newWifiCredentialsReceived = true;
+      }
+    }
+  }
+};
+
+void startBleServer() {
+  if (bleServerRunning) {
+    BLEDevice::startAdvertising();
+    return;
+  }
+
+  Serial.println("[BLE] Initializing Bluetooth Provisioning Server (" + String(BLE_DEVICE_NAME) + ")...");
+  lcdMsg("BLE SETUP MODE", "PAIR ON WEB/APP");
+
+  // Coexistence: Wi-Fi must be in modem-sleep before the BT controller starts
+  esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+
+  // We only use BLE, so give the Classic-BT memory (~30KB) back to the heap.
+  // This leaves more RAM for the HTTPS/TLS client talking to Supabase.
+  static bool classicBtReleased = false;
+  if (!classicBtReleased) {
+    esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
+    classicBtReleased = true;
+  }
+
+  BLEDevice::init(BLE_DEVICE_NAME);
+  BLEDevice::setMTU(517);
+  pBleServer = BLEDevice::createServer();
+  pBleServer->setCallbacks(new BleServerCallbacks());
+
+  BLEService* pService = pBleServer->createService(BLE_SERVICE_UUID);
+  pBleCharacteristic = pService->createCharacteristic(
+      BLE_CHAR_UUID,
+      BLECharacteristic::PROPERTY_READ |
+      BLECharacteristic::PROPERTY_WRITE |
+      BLECharacteristic::PROPERTY_WRITE_NR |
+      BLECharacteristic::PROPERTY_NOTIFY
+  );
+
+  pBleCharacteristic->setCallbacks(new BleCharCallbacks());
+  pBleCharacteristic->addDescriptor(new BLE2902());
+  pService->start();
+
+  BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(BLE_SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  pAdvertising->setMinPreferred(0x06);
+  pAdvertising->setMinPreferred(0x12);
+
+  BLEAdvertisementData oAdvertisementData = BLEAdvertisementData();
+  oAdvertisementData.setFlags(0x04);
+  oAdvertisementData.setCompleteServices(BLEUUID(BLE_SERVICE_UUID));
+  oAdvertisementData.setName(BLE_DEVICE_NAME);
+  pAdvertising->setAdvertisementData(oAdvertisementData);
+
+  BLEAdvertisementData oScanResponseData = BLEAdvertisementData();
+  oScanResponseData.setName(BLE_DEVICE_NAME);
+  pAdvertising->setScanResponseData(oScanResponseData);
+
+  BLEDevice::startAdvertising();
+  bleServerRunning = true;
+  Serial.println("[BLE] >>> BROADCASTING AS '" + String(BLE_DEVICE_NAME) + "' (Ready for Pairing) <<<");
+}
+
+void pauseBleAdvertising() {
+  if (bleServerRunning) {
+    BLEDevice::getAdvertising()->stop();
+    Serial.println("[BLE] Wi-Fi connected! Paused BLE advertising.");
+  }
+}
+
 // =======================
 // DIAGNOSTIC 2.4GHz WI-FI SCANNER
 // =======================
@@ -696,12 +1002,15 @@ void scanAndPrintNetworks() {
   Serial.println("\n[WIFI SCAN] Scanning for nearby 2.4GHz Wi-Fi networks...");
   int n = WiFi.scanNetworks(false, true);
   if (n <= 0) {
-    Serial.println("[WIFI SCAN] No networks found. (Make sure router is broadcasting on 2.4GHz)");
+    Serial.println("[WIFI SCAN] No networks found. (Make sure router is "
+                   "broadcasting on 2.4GHz)");
   } else {
     Serial.println("[WIFI SCAN] Discovered " + String(n) + " network(s):");
     for (int i = 0; i < n; ++i) {
-      String sec = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "OPEN" : "SECURED";
-      Serial.println("   [" + String(i + 1) + "] \"" + WiFi.SSID(i) + "\" | RSSI: " + String(WiFi.RSSI(i)) + " dBm | " + sec);
+      String sec =
+          (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "OPEN" : "SECURED";
+      Serial.println("   [" + String(i + 1) + "] \"" + WiFi.SSID(i) +
+                     "\" | RSSI: " + String(WiFi.RSSI(i)) + " dBm | " + sec);
     }
   }
   Serial.println();
@@ -710,41 +1019,50 @@ void scanAndPrintNetworks() {
 // =====================================================
 // 6. WI-FI CONNECTION CONTROLLER
 // =====================================================
-bool attemptWifiConnection(String testSsid, String testPass, int timeoutSeconds) {
-  if (testSsid.length() == 0) return false;
+bool attemptWifiConnection(String testSsid, String testPass,
+                           int timeoutSeconds) {
+  if (testSsid.length() == 0)
+    return false;
 
   Serial.println("\n===========================================");
   Serial.println("[WIFI] Target SSID: '" + testSsid + "'");
   if (testPass.length() > 0) {
-    Serial.println("[WIFI] Password:    [" + String(testPass.length()) + " characters]");
+    Serial.println("[WIFI] Password:    [" + String(testPass.length()) +
+                   " characters]");
   } else {
     Serial.println("[WIFI] Password:    (NONE / OPEN NETWORK)");
   }
   Serial.println("===========================================");
   lcdMsg("CONNECTING WIFI", testSsid.substring(0, 16));
 
-  // Pause BLE advertising while connecting to prevent 2.4GHz radio collisions
-  if (bleServerRunning && BLEDevice::getAdvertising()) {
-    BLEDevice::stopAdvertising();
-    delay(100);
+  // 1. Temporarily pause BLE advertising during Wi-Fi handshake to give 100% radio priority to Wi-Fi
+  if (bleServerRunning) {
+    BLEDevice::getAdvertising()->stop();
   }
 
-  // Proper WiFi initialization — DO NOT use WiFi.disconnect(true) which powers off radio!
+  // 2. Station mode. Power-save is coexistence-aware: full power when BLE is
+  // off, modem-sleep when BLE is on (required, otherwise the ESP32 aborts).
   WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-  delay(150);
+  applyWifiPowerSave();
+  delay(100);
+
+  // Always drop any previous association / pending background retry so the
+  // new credentials are used cleanly (fixes switching networks while retrying)
+  WiFi.disconnect(false, false);
+  delay(200);
 
   WiFi.setAutoReconnect(true);
 
   if (testPass.length() > 0) {
     WiFi.begin(testSsid.c_str(), testPass.c_str());
   } else {
-    WiFi.begin(testSsid.c_str(), NULL);
+    WiFi.begin(testSsid.c_str());
   }
 
   Serial.print("[WIFI] Connecting to '" + testSsid + "'");
+  int timeoutLoops = timeoutSeconds * 2; // Each loop is 500ms
   int elapsed = 0;
-  while (WiFi.status() != WL_CONNECTED && elapsed < timeoutSeconds * 2) {
+  while (WiFi.status() != WL_CONNECTED && elapsed < timeoutLoops) {
     delay(500);
     Serial.print(".");
     elapsed++;
@@ -757,9 +1075,11 @@ bool attemptWifiConnection(String testSsid, String testPass, int timeoutSeconds)
 
   if (WiFi.status() == WL_CONNECTED) {
     wifiConnected = true;
-    WiFi.setSleep(false); // Disable WiFi modem sleep only AFTER successful connection
+    lastWifiRetryMs = millis();
+    applyWifiPowerSave();
     configTime(0, 0, "pool.ntp.org", "time.google.com"); // UTC clock for offline timestamps
-    Serial.println("\n[OK] WiFi Connected! IP: " + WiFi.localIP().toString() + " | RSSI: " + String(WiFi.RSSI()) + " dBm");
+    Serial.println("\n[OK] WiFi Connected! IP: " + WiFi.localIP().toString() +
+                   " | RSSI: " + String(WiFi.RSSI()) + " dBm");
     lcdMsg("WIFI CONNECTED", WiFi.localIP().toString());
     delay(1000);
 
@@ -769,38 +1089,41 @@ bool attemptWifiConnection(String testSsid, String testPass, int timeoutSeconds)
     currentSsid = testSsid;
     currentPass = testPass;
 
-    String notifyMsg = "{\"event\":\"CONNECTED\",\"ssid\":\"" + testSsid + "\",\"ip\":\"" + WiFi.localIP().toString() + "\",\"rssi\":" + String(WiFi.RSSI()) + "}";
-    sendBleStatus(notifyMsg);
+    // Send positive acknowledgement to Web Bluetooth client
+    sendBleStatus("{\"event\":\"CONNECTED\",\"ip\":\"" + WiFi.localIP().toString() + "\",\"rssi\":" + String(WiFi.RSSI()) + "}");
+    pauseBleAdvertising();
 
     sendDeviceHeartbeat();
-    stopBleServer();
     return true;
   } else {
     wifiConnected = false;
     int st = WiFi.status();
-    Serial.println("\n[WARN] WiFi connection failed (Status: " + String(st) + ")");
+    String errDetail = "Connection timeout";
     if (st == WL_NO_SSID_AVAIL) {
-      Serial.println("       Reason: WL_NO_SSID_AVAIL (1) — SSID '" + testSsid + "' not found! Check spelling and ensure 2.4GHz is enabled.");
+      errDetail = "SSID not found. Make sure router is broadcasting on 2.4GHz!";
     } else if (st == WL_CONNECT_FAILED) {
-      Serial.println("       Reason: WL_CONNECT_FAILED (4) — Incorrect password.");
+      errDetail = "Incorrect password (Code 4)";
     } else if (st == WL_DISCONNECTED) {
-      Serial.println("       Reason: WL_DISCONNECTED (6) — Handshake timeout or radio contention.");
+      errDetail = "Handshake timeout / weak signal (Code 6)";
+    } else if (st == WL_IDLE_STATUS) {
+      errDetail = "Wi-Fi idle / Radio contention (Code 0)";
     }
-    Serial.println("[WARN] Credentials NOT saved (test-then-save policy).");
-    lcdMsg("WIFI FAILED", "Check SSID/Pass");
+
+    Serial.println("\n[WARN] WiFi connection failed (Status: " + String(st) + " - " + errDetail + ")");
+    lcdMsg("WIFI FAILED", "SD OFFLINE MODE");
 
     // Scan and list nearby 2.4GHz networks for diagnostics
     scanAndPrintNetworks();
 
-    String errMsg = (st == WL_NO_SSID_AVAIL) ? "SSID not found on 2.4GHz" : ((st == WL_CONNECT_FAILED) ? "Incorrect password" : "Connection failed");
-    String notifyMsg = "{\"event\":\"FAILED\",\"error\":\"" + errMsg + "\",\"code\":" + String(st) + "}";
-    sendBleStatus(notifyMsg);
+    // Send exact, informative failure notification to Web Bluetooth client
+    String failPayload = "{\"event\":\"FAILED\",\"error\":\"" + errDetail + "\",\"code\":" + String(st) + "}";
+    sendBleStatus(failPayload);
 
-    // Resume BLE advertising so user can re-provision
-    if (bleServerRunning && BLEDevice::getAdvertising()) {
+    // Resume BLE advertising so user can retry or reconfigure
+    if (bleServerRunning) {
       BLEDevice::startAdvertising();
-      Serial.println("[BLE] Advertising resumed for re-provisioning.");
     }
+
     delay(1000);
     return false;
   }
@@ -810,18 +1133,21 @@ bool attemptWifiConnection(String testSsid, String testPass, int timeoutSeconds)
 // 7. REAL CAMPUS PRESENCE STATE MACHINE
 // =====================================================
 bool isTagCurrentlyInsideOnline(String uid) {
-  String url = String(SUPABASE_URL) + "/rest/v1/transactions?rfid_uid=eq." +
-               urlEncode(uid) +
-               "&status=eq.AUTHORIZED&order=timestamp.desc&limit=1&select=direction";
+  String url =
+      String(SUPABASE_URL) + "/rest/v1/transactions?rfid_uid=eq." +
+      urlEncode(uid) +
+      "&status=eq.AUTHORIZED&order=timestamp.desc&limit=1&select=direction";
 
   HTTPClient http;
-  http.begin(url);
+  http.begin(secureClient, url);
+  http.setTimeout(4000);
   http.addHeader("apikey", SUPABASE_ANON);
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
 
   int code = http.GET();
   String body = "";
-  if (code == 200) body = http.getString();
+  if (code == 200)
+    body = http.getString();
   http.end();
 
   if (body.length() > 0 && body != "[]") {
@@ -838,9 +1164,11 @@ bool isTagCurrentlyInsideOnline(String uid) {
 }
 
 bool isTagCurrentlyInsideOffline(String uid) {
-  if (!sdCardReady || !SD.exists(INSIDE_LIST_FILE)) return false;
+  if (!sdCardReady || !SD.exists(INSIDE_LIST_FILE))
+    return false;
   File f = SD.open(INSIDE_LIST_FILE, FILE_READ);
-  if (!f) return false;
+  if (!f)
+    return false;
   bool inside = false;
   while (f.available()) {
     String line = f.readStringUntil('\n');
@@ -855,7 +1183,8 @@ bool isTagCurrentlyInsideOffline(String uid) {
 }
 
 void updateOfflinePresence(String uid, String newDirection) {
-  if (!sdCardReady) return;
+  if (!sdCardReady)
+    return;
   if (newDirection == "ENTRY") {
     File f = SD.open(INSIDE_LIST_FILE, FILE_APPEND);
     if (f) {
@@ -863,9 +1192,11 @@ void updateOfflinePresence(String uid, String newDirection) {
       f.close();
     }
   } else {
-    if (!SD.exists(INSIDE_LIST_FILE)) return;
+    if (!SD.exists(INSIDE_LIST_FILE))
+      return;
     File f = SD.open(INSIDE_LIST_FILE, FILE_READ);
-    if (!f) return;
+    if (!f)
+      return;
     String updatedContent = "";
     while (f.available()) {
       String line = f.readStringUntil('\n');
@@ -899,7 +1230,8 @@ bool checkAuthorizationOffline(String uid) {
   }
 
   File f = SD.open(WHITELIST_FILE, FILE_READ);
-  if (!f) return (uid.length() > 3);
+  if (!f)
+    return (uid.length() > 3);
 
   while (f.available()) {
     String line = f.readStringUntil('\n');
@@ -945,9 +1277,11 @@ bool checkAuthorizationOnline(String uid) {
 
   // 1. Check Special Tags (Visitor / Emergency)
   String specUrl = String(SUPABASE_URL) + "/rest/v1/special_tags?rfid_uid=eq." +
-                   urlEncode(uid) + "&select=type,label,description,rfid_type,user_type";
+                   urlEncode(uid) +
+                   "&select=type,label,description,rfid_type,user_type";
   HTTPClient httpSpec;
-  httpSpec.begin(specUrl);
+  httpSpec.begin(secureClient, specUrl);
+  httpSpec.setTimeout(4000);
   httpSpec.addHeader("apikey", SUPABASE_ANON);
   httpSpec.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
   int specCode = httpSpec.GET();
@@ -979,35 +1313,42 @@ bool checkAuthorizationOnline(String uid) {
   httpSpec.end();
 
   // 2. Query Registered Users & Vehicles
-  String url = String(SUPABASE_URL) + "/rest/v1/rfid_cards?rfid_uid=eq." +
-               urlEncode(uid) +
-               "&select=authorization_status,vehicle_id,user_id,rfid_type,user_type,"
-               "vehicles(plate_number,vehicle_type,vehicle_model),"
-               "users(full_name,role,role_detail,default_transit_mode,cpass_id,student_id)";
+  String url =
+      String(SUPABASE_URL) + "/rest/v1/rfid_cards?rfid_uid=eq." +
+      urlEncode(uid) +
+      "&select=authorization_status,vehicle_id,user_id,rfid_type,user_type,"
+      "vehicles(plate_number,vehicle_type,vehicle_model),"
+      "users(full_name,role,role_detail,default_transit_mode,cpass_id,student_"
+      "id)";
 
   HTTPClient http;
-  http.begin(url);
+  http.begin(secureClient, url);
+  http.setTimeout(4000);
   http.addHeader("apikey", SUPABASE_ANON);
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
 
   int code = http.GET();
   String body = "";
-  if (code == 200) body = http.getString();
+  if (code == 200)
+    body = http.getString();
   http.end();
 
   DynamicJsonDocument doc(1024);
-  if (deserializeJson(doc, body) != DeserializationError::Ok) return false;
+  if (deserializeJson(doc, body) != DeserializationError::Ok)
+    return false;
 
   JsonArray arr = doc.as<JsonArray>();
-  if (arr.size() == 0) return false;
+  if (arr.size() == 0)
+    return false;
 
   JsonObject card = arr[0];
   card_found = true;
-  card_authorized = (String(card["authorization_status"].as<const char*>()) == "AUTHORIZED");
-  card_vehicleId  = String(card["vehicle_id"] | "");
-  card_userId     = String(card["user_id"] | "");
-  card_userType   = String(card["user_type"] | "VEHICLE");
-  card_rfidType   = String(card["rfid_type"] | "LONG_RANGE");
+  card_authorized =
+      (String(card["authorization_status"].as<const char *>()) == "AUTHORIZED");
+  card_vehicleId = String(card["vehicle_id"] | "");
+  card_userId = String(card["user_id"] | "");
+  card_userType = String(card["user_type"] | "VEHICLE");
+  card_rfidType = String(card["rfid_type"] | "LONG_RANGE");
 
   if (!card["vehicles"].isNull()) {
     card_plate = String(card["vehicles"]["plate_number"] | "");
@@ -1029,7 +1370,8 @@ bool checkAuthorizationOnline(String uid) {
     if (card_cpassId.length() == 0 || card_cpassId == "null") {
       card_cpassId = String(card["users"]["student_id"] | "");
     }
-    if (card_cpassId == "null") card_cpassId = "";
+    if (card_cpassId == "null")
+      card_cpassId = "";
     String defMode = String(card["users"]["default_transit_mode"] | "");
     if (defMode == "PEDESTRIAN") {
       card_userType = "PEDESTRIAN";
@@ -1041,27 +1383,36 @@ bool checkAuthorizationOnline(String uid) {
 }
 
 void syncWhitelistToRam() {
-  if (!wifiConnected) return;
+  if (!wifiConnected)
+    return;
   Serial.println("\n[RAM CACHE] Syncing registered cards from Supabase...");
-  
+
   // 1. Fetch special tags (Visitors / Emergency)
-  String specUrl = String(SUPABASE_URL) + "/rest/v1/special_tags?select=rfid_uid,type,label,rfid_type,user_type";
+  String specUrl =
+      String(SUPABASE_URL) +
+      "/rest/v1/special_tags?select=rfid_uid,type,label,rfid_type,user_type";
   HTTPClient httpSpec;
-  httpSpec.begin(specUrl);
+  httpSpec.begin(secureClient, specUrl);
+  httpSpec.setTimeout(4000);
   httpSpec.addHeader("apikey", SUPABASE_ANON);
   httpSpec.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
   int sCode = httpSpec.GET();
   if (sCode == 200) {
     DynamicJsonDocument sDoc(2048);
-    if (deserializeJson(sDoc, httpSpec.getString()) == DeserializationError::Ok) {
+    if (deserializeJson(sDoc, httpSpec.getString()) ==
+        DeserializationError::Ok) {
       JsonArray arr = sDoc.as<JsonArray>();
       for (JsonObject item : arr) {
         String uid = String(item["rfid_uid"] | "");
         String sType = String(item["type"] | "VISITOR");
-        String lbl = String(item["label"] | (sType == "EMERGENCY" ? "Emergency Responder" : "Visitor Pass"));
+        String lbl =
+            String(item["label"] | (sType == "EMERGENCY" ? "Emergency Responder"
+                                                         : "Visitor Pass"));
         String uType = String(item["user_type"] | "VEHICLE");
         if (uid.length() > 0) {
-          addCardToRam(uid, lbl, (sType == "EMERGENCY" ? "EMERGENCY" : "VISITOR PASS"), sType, uType, "", "", true);
+          addCardToRam(uid, lbl,
+                       (sType == "EMERGENCY" ? "EMERGENCY" : "VISITOR PASS"),
+                       sType, uType, "", "", true);
         }
       }
     }
@@ -1069,9 +1420,15 @@ void syncWhitelistToRam() {
   httpSpec.end();
 
   // 2. Fetch registered vehicle and user cards
-  String url = String(SUPABASE_URL) + "/rest/v1/rfid_cards?select=rfid_uid,authorization_status,vehicle_id,user_id,rfid_type,user_type,vehicles(plate_number,vehicle_type,vehicle_model),users(full_name,role,role_detail,cpass_id,student_id)&limit=100";
+  String url =
+      String(SUPABASE_URL) +
+      "/rest/v1/"
+      "rfid_cards?select=rfid_uid,authorization_status,vehicle_id,user_id,rfid_"
+      "type,user_type,vehicles(plate_number,vehicle_type,vehicle_model),users("
+      "full_name,role,role_detail,cpass_id,student_id)&limit=100";
   HTTPClient http;
-  http.begin(url);
+  http.begin(secureClient, url);
+  http.setTimeout(4000);
   http.addHeader("apikey", SUPABASE_ANON);
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
   int code = http.GET();
@@ -1105,27 +1462,35 @@ void syncWhitelistToRam() {
           if (cpass.length() == 0 || cpass == "null") {
             cpass = String(item["users"]["student_id"] | "");
           }
-          if (cpass == "null") cpass = "";
+          if (cpass == "null")
+            cpass = "";
         }
 
         if (uid.length() > 0) {
-          addCardToRam(uid, name, plate, role, uType, vId, uId, auth, false, cpass);
+          addCardToRam(uid, name, plate, role, uType, vId, uId, auth, false,
+                       cpass);
         }
       }
     }
   }
   http.end();
 
-  // 3. Sync presence: query recent authorized transactions to know who is currently inside
-  String presUrl = String(SUPABASE_URL) + "/rest/v1/transactions?status=eq.AUTHORIZED&order=timestamp.desc&limit=100&select=rfid_uid,direction";
+  // 3. Sync presence: query recent authorized transactions to know who is
+  // currently inside
+  String presUrl = String(SUPABASE_URL) +
+                   "/rest/v1/"
+                   "transactions?status=eq.AUTHORIZED&order=timestamp.desc&"
+                   "limit=100&select=rfid_uid,direction";
   HTTPClient httpPres;
-  httpPres.begin(presUrl);
+  httpPres.begin(secureClient, presUrl);
+  httpPres.setTimeout(4000);
   httpPres.addHeader("apikey", SUPABASE_ANON);
   httpPres.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
   int pCode = httpPres.GET();
   if (pCode == 200) {
     DynamicJsonDocument pDoc(4096);
-    if (deserializeJson(pDoc, httpPres.getString()) == DeserializationError::Ok) {
+    if (deserializeJson(pDoc, httpPres.getString()) ==
+        DeserializationError::Ok) {
       JsonArray pArr = pDoc.as<JsonArray>();
       for (JsonObject pItem : pArr) {
         String pUid = String(pItem["rfid_uid"] | "");
@@ -1139,45 +1504,54 @@ void syncWhitelistToRam() {
         }
       }
       for (int i = 0; i < ramCardCount; i++) {
-        if (ramCards[i].lastActionTime == 1) ramCards[i].lastActionTime = 0;
+        if (ramCards[i].lastActionTime == 1)
+          ramCards[i].lastActionTime = 0;
       }
     }
   }
   httpPres.end();
 
-  Serial.printf("[RAM CACHE] Successfully loaded %d registered card(s) into high-speed memory!\n", ramCardCount);
+  Serial.printf("[RAM CACHE] Successfully loaded %d registered card(s) into "
+                "high-speed memory!\n",
+                ramCardCount);
 }
 
 void processCloudQueue() {
-  if (txQueueCount == 0 || !wifiConnected) return;
+  if (txQueueCount == 0 || !wifiConnected)
+    return;
   // If Wiegand is currently receiving pulses, NEVER interrupt the reader!
-  if (wiegandBitCount > 0) return;
+  if (wiegandBitCount > 0)
+    return;
 
   QueuedTransaction item = txQueue[txQueueHead];
   txQueueHead = (txQueueHead + 1) % MAX_TX_QUEUE;
   txQueueCount--;
 
-  insertTransactionOnline(item.uid, item.direction, item.status, item.remarks, item.vehicleId, item.userId, item.userType);
+  insertTransactionOnline(item.uid, item.direction, item.status, item.remarks,
+                          item.vehicleId, item.userId, item.userType);
 }
 
-void insertTransactionOnline(String uid, String direction, String status, String remarks, String vId, String uId, String uType) {
+void insertTransactionOnline(String uid, String direction, String status,
+                             String remarks, String vId, String uId,
+                             String uType) {
   String url = String(SUPABASE_URL) + "/rest/v1/transactions";
 
   HTTPClient http;
-  http.begin(url);
+  http.begin(secureClient, url);
+  http.setTimeout(4000);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("apikey", SUPABASE_ANON);
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
   http.addHeader("Prefer", "return=minimal");
 
   DynamicJsonDocument doc(512);
-  doc["rfid_uid"]   = uid;
-  doc["direction"]  = direction;
-  doc["gate"]       = GATE_ID;
-  doc["status"]     = status;
-  doc["remarks"]    = remarks;
-  doc["user_type"]  = (uType.length() > 0 ? uType : card_userType);
-  doc["rfid_type"]  = "LONG_RANGE";
+  doc["rfid_uid"] = uid;
+  doc["direction"] = direction;
+  doc["gate"] = GATE_ID;
+  doc["status"] = status;
+  doc["remarks"] = remarks;
+  doc["user_type"] = (uType.length() > 0 ? uType : card_userType);
+  doc["rfid_type"] = "LONG_RANGE";
 
   String targetVId = (vId.length() > 0 ? vId : card_vehicleId);
   String targetUId = (uId.length() > 0 ? uId : card_userId);
@@ -1189,7 +1563,14 @@ void insertTransactionOnline(String uid, String direction, String status, String
 
   String body;
   serializeJson(doc, body);
-  http.POST(body);
+  int httpCode = http.POST(body);
+  Serial.printf("[CLOUD TX] Transaction POST for UID '%s' (%s) -> HTTP %d\n", uid.c_str(), direction.c_str(), httpCode);
+  if (httpCode >= 200 && httpCode < 300) {
+    Serial.println("  [OK] Successfully pushed transaction to Supabase Cloud!");
+  } else {
+    Serial.printf("  [WARN] Supabase POST failed with code %d. Falling back to SD offline buffer.\n", httpCode);
+    saveOfflineTransactionSD(uid, direction, status, remarks, targetVId, targetUId, uType);
+  }
   http.end();
 }
 
@@ -1204,38 +1585,51 @@ static String cleanField(String s) {
   return s;
 }
 
-void saveOfflineTransactionSD(String uid, String dir, String status, String remarks, String vId, String uId, String uType) {
+void saveOfflineTransactionSD(String uid, String dir, String status,
+                              String remarks, String vId, String uId,
+                              String uType) {
   if (!sdCardReady) {
-    Serial.println("[OFFLINE BUFFER] SD card not ready - scan could not be stored!");
+    Serial.println(
+        "[OFFLINE BUFFER] SD card not ready - scan could not be stored!");
     return;
   }
   File f = SD.open(OFFLINE_TX_FILE, FILE_APPEND);
-  if (!f) return;
-  f.println(isoUtcNow() + "|" + cleanField(uid) + "|" + dir + "|" + status + "|" + cleanField(remarks) + "|" + cleanField(vId) + "|" + cleanField(uId) + "|" + cleanField(uType));
+  if (!f)
+    return;
+  f.println(isoUtcNow() + "|" + cleanField(uid) + "|" + dir + "|" + status +
+            "|" + cleanField(remarks) + "|" + cleanField(vId) + "|" +
+            cleanField(uId) + "|" + cleanField(uType));
   f.close();
   Serial.println("[OFFLINE BUFFER] Stored scan for " + uid + " (" + dir + ")");
 }
 
-// Same as insertTransactionOnline but returns success and can carry the original tap time.
-bool insertTransactionOnlineTs(String uid, String direction, String status, String remarks, String vId, String uId, String uType, String ts) {
+// Same as insertTransactionOnline but returns success and can carry the
+// original tap time.
+bool insertTransactionOnlineTs(String uid, String direction, String status,
+                               String remarks, String vId, String uId,
+                               String uType, String ts) {
   HTTPClient http;
-  http.begin(String(SUPABASE_URL) + "/rest/v1/transactions");
+  http.begin(secureClient, String(SUPABASE_URL) + "/rest/v1/transactions");
+  http.setTimeout(4000);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("apikey", SUPABASE_ANON);
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
   http.addHeader("Prefer", "return=minimal");
 
   DynamicJsonDocument doc(640);
-  doc["rfid_uid"]  = uid;
+  doc["rfid_uid"] = uid;
   doc["direction"] = direction;
-  doc["gate"]      = GATE_ID;
-  doc["status"]    = status;
-  doc["remarks"]   = remarks;
+  doc["gate"] = GATE_ID;
+  doc["status"] = status;
+  doc["remarks"] = remarks;
   doc["user_type"] = uType;
   doc["rfid_type"] = "LONG_RANGE";
-  if (ts.length() > 0) doc["timestamp"] = ts;
-  if (vId.length() > 0 && vId != "null") doc["vehicle_id"] = vId;
-  if (uId.length() > 0 && uId != "null") doc["user_id"] = uId;
+  if (ts.length() > 0)
+    doc["timestamp"] = ts;
+  if (vId.length() > 0 && vId != "null")
+    doc["vehicle_id"] = vId;
+  if (uId.length() > 0 && uId != "null")
+    doc["user_id"] = uId;
 
   String body;
   serializeJson(doc, body);
@@ -1247,8 +1641,13 @@ bool insertTransactionOnlineTs(String uid, String direction, String status, Stri
 static String nextField(String &line) {
   int p = line.indexOf('|');
   String f;
-  if (p < 0) { f = line; line = ""; }
-  else { f = line.substring(0, p); line = line.substring(p + 1); }
+  if (p < 0) {
+    f = line;
+    line = "";
+  } else {
+    f = line.substring(0, p);
+    line = line.substring(p + 1);
+  }
   return f;
 }
 
@@ -1256,32 +1655,49 @@ static String nextField(String &line) {
 // to upload stay on the card and are retried on the next pass.
 void flushOfflineTransactions() {
   static unsigned long lastFlush = 0;
-  if (!wifiConnected || !sdCardReady || !SD.exists(OFFLINE_TX_FILE)) return;
-  if (txQueueCount > 0 || wiegandBitCount > 0) return;
-  if (millis() - lastFlush < 3000) return;
+  if (!wifiConnected || !sdCardReady || !SD.exists(OFFLINE_TX_FILE))
+    return;
+  if (txQueueCount > 0 || wiegandBitCount > 0)
+    return;
+  if (millis() - lastFlush < 3000)
+    return;
   lastFlush = millis();
 
   File in = SD.open(OFFLINE_TX_FILE, FILE_READ);
-  if (!in) return;
-  if (in.size() == 0) { in.close(); SD.remove(OFFLINE_TX_FILE); return; }
+  if (!in)
+    return;
+  if (in.size() == 0) {
+    in.close();
+    SD.remove(OFFLINE_TX_FILE);
+    return;
+  }
 
-  if (SD.exists(OFFLINE_TX_TMP)) SD.remove(OFFLINE_TX_TMP);
+  if (SD.exists(OFFLINE_TX_TMP))
+    SD.remove(OFFLINE_TX_TMP);
   File out = SD.open(OFFLINE_TX_TMP, FILE_WRITE);
-  if (!out) { in.close(); return; }
+  if (!out) {
+    in.close();
+    return;
+  }
 
   int sent = 0, kept = 0;
   bool halt = false;
   while (in.available()) {
     String line = in.readStringUntil('\n');
     line.trim();
-    if (line.length() == 0) continue;
+    if (line.length() == 0)
+      continue;
 
     if (!halt && sent < OFFLINE_FLUSH_BATCH) {
       String rest = line;
-      String ts = nextField(rest), uid = nextField(rest), dir = nextField(rest), st = nextField(rest);
-      String rem = nextField(rest), vId = nextField(rest), uId = nextField(rest), uType = nextField(rest);
-      if (uType.length() == 0) uType = "VEHICLE";
-      if (insertTransactionOnlineTs(uid, dir, st, "[OFFLINE SYNC] " + rem, vId, uId, uType, ts)) {
+      String ts = nextField(rest), uid = nextField(rest), dir = nextField(rest),
+             st = nextField(rest);
+      String rem = nextField(rest), vId = nextField(rest),
+             uId = nextField(rest), uType = nextField(rest);
+      if (uType.length() == 0)
+        uType = "VEHICLE";
+      if (insertTransactionOnlineTs(uid, dir, st, "[OFFLINE SYNC] " + rem, vId,
+                                    uId, uType, ts)) {
         sent++;
         continue;
       }
@@ -1294,10 +1710,14 @@ void flushOfflineTransactions() {
   out.close();
 
   SD.remove(OFFLINE_TX_FILE);
-  if (kept > 0) SD.rename(OFFLINE_TX_TMP, OFFLINE_TX_FILE);
-  else SD.remove(OFFLINE_TX_TMP);
+  if (kept > 0)
+    SD.rename(OFFLINE_TX_TMP, OFFLINE_TX_FILE);
+  else
+    SD.remove(OFFLINE_TX_TMP);
 
-  if (sent > 0) Serial.println("[OFFLINE BUFFER] Uploaded " + String(sent) + " buffered scan(s), " + String(kept) + " remaining.");
+  if (sent > 0)
+    Serial.println("[OFFLINE BUFFER] Uploaded " + String(sent) +
+                   " buffered scan(s), " + String(kept) + " remaining.");
 }
 
 // Called when Wi-Fi drops: move anything still waiting in RAM onto the SD card.
@@ -1306,7 +1726,9 @@ void spillRamQueueToSd() {
     QueuedTransaction item = txQueue[txQueueHead];
     txQueueHead = (txQueueHead + 1) % MAX_TX_QUEUE;
     txQueueCount--;
-    saveOfflineTransactionSD(item.uid, item.direction, item.status, item.remarks, item.vehicleId, item.userId, item.userType);
+    saveOfflineTransactionSD(item.uid, item.direction, item.status,
+                             item.remarks, item.vehicleId, item.userId,
+                             item.userType);
   }
 }
 
@@ -1327,19 +1749,23 @@ void handleScannedTag(String uid, String altUid = "") {
 
   unsigned long scanStartUs = micros();
 
-  // Multi-Tag Anti-Spam Check: Ignore duplicate pulses for this tag within 4s window
-  if (isTagInCooldown(uid) || (altUid.length() > 0 && isTagInCooldown(altUid))) {
+  // Multi-Tag Anti-Spam Check: Ignore duplicate pulses for this tag within 4s
+  // window
+  if (isTagInCooldown(uid) ||
+      (altUid.length() > 0 && isTagInCooldown(altUid))) {
     return;
   }
 
-  // Optional: only act once the tag has been read enough times in a short window
+  // Optional: only act once the tag has been read enough times in a short
+  // window
   if (!uhfReadConfirmed(uid)) {
     return;
   }
 
   // 1. FAST IN-MEMORY RAM LOOKUP (0.05 ms)
   int cardIdx = findCardInRam(uid);
-  if (cardIdx == -1 && altUid.length() > 0) cardIdx = findCardInRam(altUid);
+  if (cardIdx == -1 && altUid.length() > 0)
+    cardIdx = findCardInRam(altUid);
 
   bool authorized = false;
   String finalUid = uid;
@@ -1368,22 +1794,20 @@ void handleScannedTag(String uid, String altUid = "") {
 
     if (authorized) {
       // 15-second Transit Anti-Passback Debounce:
-      // While vehicle is passing through beam, ignore repeat pulses that would flip-flop direction
-      if (ramCards[cardIdx].lastActionTime > 0 && (millis() - ramCards[cardIdx].lastActionTime < 15000)) {
-        Serial.printf("  ⏳ [TRANSIT LOCKOUT] %s already granted %s %lu ms ago. Suppressing flip.\n",
-                      plate.c_str(), isInside ? "ENTRY" : "EXIT", millis() - ramCards[cardIdx].lastActionTime);
+      // While vehicle is passing through beam, ignore repeat pulses that would
+      // log duplicate entry scans
+      if (ramCards[cardIdx].lastActionTime > 0 &&
+          (millis() - ramCards[cardIdx].lastActionTime < 15000)) {
+        Serial.printf("  ⏳ [TRANSIT LOCKOUT] %s already granted ENTRY %lu ms "
+                      "ago. Suppressing duplicate scan.\n",
+                      plate.c_str(),
+                      millis() - ramCards[cardIdx].lastActionTime);
         return;
       }
 
-      // If currently INSIDE -> must EXIT
-      // If currently OUTSIDE -> must ENTRY
-      if (isInside) {
-        direction = "EXIT";
-        ramCards[cardIdx].isInside = false;
-      } else {
-        direction = "ENTRY";
-        ramCards[cardIdx].isInside = true;
-      }
+      // Dedicated Vehicle Entry Gate: All reads are strictly logged as ENTRY
+      direction = "ENTRY";
+      ramCards[cardIdx].isInside = true;
       ramCards[cardIdx].lastActionTime = millis();
     } else {
       // Unapproved / Denied tag -> ALWAYS ENTRY attempt, NEVER EXIT!
@@ -1396,40 +1820,26 @@ void handleScannedTag(String uid, String altUid = "") {
       authorized = checkAuthorizationOnline(uid);
       if (!authorized && altUid.length() > 0) {
         authorized = checkAuthorizationOnline(altUid);
-        if (authorized) finalUid = altUid;
+        if (authorized)
+          finalUid = altUid;
       }
 
+      // Dedicated Vehicle Entry Gate: All reads are strictly logged as ENTRY
+      direction = "ENTRY";
       if (authorized) {
-        isInside = isTagCurrentlyInsideOnline(finalUid);
-        if (isInside) {
-          direction = "EXIT";
-          isInside = false;
-        } else {
-          direction = "ENTRY";
-          isInside = true;
-        }
-      } else {
-        // Unapproved/unregistered tag: ALWAYS ENTRY attempt, NEVER EXIT!
-        direction = "ENTRY";
+        isInside = true;
       }
     } else {
       authorized = checkAuthorizationOffline(uid);
       if (!authorized && altUid.length() > 0) {
         authorized = checkAuthorizationOffline(altUid);
-        if (authorized) finalUid = altUid;
+        if (authorized)
+          finalUid = altUid;
       }
 
+      direction = "ENTRY";
       if (authorized) {
-        isInside = isTagCurrentlyInsideOffline(finalUid);
-        if (isInside) {
-          direction = "EXIT";
-          isInside = false;
-        } else {
-          direction = "ENTRY";
-          isInside = true;
-        }
-      } else {
-        direction = "ENTRY";
+        isInside = true;
       }
     }
 
@@ -1443,15 +1853,18 @@ void handleScannedTag(String uid, String altUid = "") {
 
     // Cache in RAM ONLY if authorized so unregistered tags never flip to EXIT
     if (authorized) {
-      addCardToRam(finalUid, name, plate, role, uType, vId, uId, authorized, isInside, cpass);
+      addCardToRam(finalUid, name, plate, role, uType, vId, uId, authorized,
+                   isInside, cpass);
       int newIdx = findCardInRam(finalUid);
-      if (newIdx != -1) ramCards[newIdx].lastActionTime = millis();
+      if (newIdx != -1)
+        ramCards[newIdx].lastActionTime = millis();
     }
   }
 
   // Mark this tag in the cooldown history table
-  markTagInCooldown(uid);
-  if (altUid.length() > 0) markTagInCooldown(altUid);
+  markTagInCooldown(uid, plate);
+  if (altUid.length() > 0)
+    markTagInCooldown(altUid, plate);
 
   unsigned long processTimeUs = micros() - scanStartUs;
 
@@ -1470,18 +1883,24 @@ void handleScannedTag(String uid, String altUid = "") {
 
   // 3. INSTANT SERIAL OUTPUT
   Serial.println("\n⚡⚡⚡ [ULTRA-FAST MULTI-SCAN DETECTED] ⚡⚡⚡");
-  Serial.printf("  Card ID (Dec): %s%s\n", uid.c_str(), altUid.length() > 0 ? (" | Hex: " + altUid).c_str() : "");
+  Serial.printf("  Card ID (Dec): %s%s\n", uid.c_str(),
+                altUid.length() > 0 ? (" | Hex: " + altUid).c_str() : "");
   if (authorized) {
     Serial.printf("  Stakeholder:   %s (%s)\n", name.c_str(), role.c_str());
     if (cpass.length() > 0) {
       Serial.printf("  CPASS ID:      %s\n", cpass.c_str());
     }
     Serial.printf("  Vehicle:       %s [%s]\n", plate.c_str(), uType.c_str());
-    Serial.printf("  Action:        [%s] Recorded (Now %s)\n", direction.c_str(), isInside ? "INSIDE CAMPUS" : "OUTSIDE CAMPUS");
-    Serial.printf("  Status:        AUTHORIZED (Matched in %.2f ms)\n", processTimeUs / 1000.0);
+    Serial.printf("  Action:        [%s] Recorded (Now %s)\n",
+                  direction.c_str(),
+                  isInside ? "INSIDE CAMPUS" : "OUTSIDE CAMPUS");
+    Serial.printf("  Status:        AUTHORIZED (Matched in %.2f ms)\n",
+                  processTimeUs / 1000.0);
   } else {
     Serial.printf("  Action:        [ENTRY] ATTEMPT REJECTED (Unregistered)\n");
-    Serial.printf("  Status:        UNREGISTERED / DENIED (Checked in %.2f ms)\n", processTimeUs / 1000.0);
+    Serial.printf(
+        "  Status:        UNREGISTERED / DENIED (Checked in %.2f ms)\n",
+        processTimeUs / 1000.0);
   }
   Serial.println("────────────────────────────────────────────────");
 
@@ -1498,12 +1917,14 @@ void handleScannedTag(String uid, String altUid = "") {
 
   // 5. ENQUEUE FOR ASYNC CLOUD SYNC (< 1 us) - or buffer to SD when offline
   {
-    String remarks = authorized ? ("UHF Drive-Through (" + uType + ")") : "Unregistered UHF Tag";
+    String remarks = authorized ? ("UHF Vehicle Entry (" + uType + ")")
+                                : "Unregistered UHF Tag";
     String st = authorized ? "AUTHORIZED" : "DENIED";
     if (wifiConnected) {
       enqueueTransaction(finalUid, direction, st, remarks, vId, uId, uType);
     } else {
-      saveOfflineTransactionSD(finalUid, direction, st, remarks, vId, uId, uType);
+      saveOfflineTransactionSD(finalUid, direction, st, remarks, vId, uId,
+                               uType);
     }
   }
   if (authorized) {
@@ -1517,10 +1938,12 @@ void handleScannedTag(String uid, String altUid = "") {
 bool checkWiegandReader(String &outUid, String &outAltUid) {
   outUid = "";
   outAltUid = "";
-  if (wiegandBitCount == 0) return false;
+  if (wiegandBitCount == 0)
+    return false;
 
   // Wait until pulse transmission has completed (idle for > 15ms = 15,000us)
-  if (micros() - lastWiegandActivityUs < 15000) return false;
+  if (micros() - lastWiegandActivityUs < 15000)
+    return false;
 
   noInterrupts();
   uint64_t raw = wiegandRawBits;
@@ -1534,18 +1957,25 @@ bool checkWiegandReader(String &outUid, String &outAltUid) {
   interrupts();
 
   if (bits < 4 || raw == 0) {
-    if (bits >= 4) Serial.printf("[WIEGAND NOISE] Ignored all-zero raw pulse (%d bits)\n", bits);
+    if (bits >= 4)
+      Serial.printf("[WIEGAND NOISE] Ignored all-zero raw pulse (%d bits)\n",
+                    bits);
     return false;
   }
 
   Serial.println("\n========================================");
-  Serial.printf("[WIEGAND PULSE DETECTED] Total bits: %d | Raw Hex: 0x%llX\n", bits, (unsigned long long)raw);
-  Serial.printf("  Pulse Breakdown: D0 (Green) = %u pulses | D1 (White) = %u pulses\n", d0Pulses, d1Pulses);
+  Serial.printf("[WIEGAND PULSE DETECTED] Total bits: %d | Raw Hex: 0x%llX\n",
+                bits, (unsigned long long)raw);
+  Serial.printf(
+      "  Pulse Breakdown: D0 (Green) = %u pulses | D1 (White) = %u pulses\n",
+      d0Pulses, d1Pulses);
 
   if (d1Pulses == 0 && d0Pulses > 0) {
-    Serial.println("  ⚠️ [LINE ALERT] ZERO pulses on D1! The White wire is either loose or not connected to GPIO 33!");
+    Serial.println("  ⚠️ [LINE ALERT] ZERO pulses on D1! The White wire is "
+                   "either loose or not connected to GPIO 33!");
   } else if (d0Pulses == 0 && d1Pulses > 0) {
-    Serial.println("  ⚠️ [LINE ALERT] ZERO pulses on D0! The Green wire is either loose or not connected to GPIO 32!");
+    Serial.println("  ⚠️ [LINE ALERT] ZERO pulses on D0! The Green wire is "
+                   "either loose or not connected to GPIO 32!");
   }
 
   uint32_t cardNumber = 0;
@@ -1558,15 +1988,15 @@ bool checkWiegandReader(String &outUid, String &outAltUid) {
   if (bits == 26) {
     // WG26 format: 1 even parity + 8 facility + 16 card number + 1 odd parity
     facilityCode = (raw >> 17) & 0xFF;
-    cardNumber   = (raw >> 1) & 0xFFFF;
+    cardNumber = (raw >> 1) & 0xFFFF;
     snprintf(hexFormatted, sizeof(hexFormatted), "%02X %02X %02X",
-            (uint8_t)(facilityCode),
-            (uint8_t)(cardNumber >> 8),
-            (uint8_t)(cardNumber & 0xFF));
+             (uint8_t)(facilityCode), (uint8_t)(cardNumber >> 8),
+             (uint8_t)(cardNumber & 0xFF));
     snprintf(decPadded, sizeof(decPadded), "%010lu", (unsigned long)cardNumber);
     Serial.println("  Standard:      WG26 (26-bit)");
     Serial.println("  Facility:      " + String(facilityCode));
-    Serial.println("  Card ID (Dec): " + String(cardNumber) + " (Padded: " + String(decPadded) + ")");
+    Serial.println("  Card ID (Dec): " + String(cardNumber) +
+                   " (Padded: " + String(decPadded) + ")");
     Serial.println("  Hex UID:       " + String(hexFormatted));
 
     outUid = String(cardNumber);
@@ -1576,13 +2006,12 @@ bool checkWiegandReader(String &outUid, String &outAltUid) {
     // WG34 format: 1 even parity + 32 card number + 1 odd parity
     cardNumber = (raw >> 1) & 0xFFFFFFFF;
     snprintf(hexFormatted, sizeof(hexFormatted), "%02X %02X %02X %02X",
-            (uint8_t)(cardNumber >> 24),
-            (uint8_t)(cardNumber >> 16),
-            (uint8_t)(cardNumber >> 8),
-            (uint8_t)(cardNumber & 0xFF));
+             (uint8_t)(cardNumber >> 24), (uint8_t)(cardNumber >> 16),
+             (uint8_t)(cardNumber >> 8), (uint8_t)(cardNumber & 0xFF));
     snprintf(decPadded, sizeof(decPadded), "%010lu", (unsigned long)cardNumber);
     Serial.println("  Standard:      WG34 (34-bit)");
-    Serial.println("  Card ID (Dec): " + String(cardNumber) + " (10-Digit: " + String(decPadded) + ")");
+    Serial.println("  Card ID (Dec): " + String(cardNumber) +
+                   " (10-Digit: " + String(decPadded) + ")");
     Serial.println("  Hex UID:       " + String(hexFormatted));
 
     // Support both 10-digit zero-padded (e.g. 0419670354) and regular decimal
@@ -1593,13 +2022,12 @@ bool checkWiegandReader(String &outUid, String &outAltUid) {
     // Custom / other bit counts (e.g. 28, 32, 36)
     cardNumber = (uint32_t)(raw & 0xFFFFFFFF);
     snprintf(hexFormatted, sizeof(hexFormatted), "%02X %02X %02X %02X",
-            (uint8_t)(cardNumber >> 24),
-            (uint8_t)(cardNumber >> 16),
-            (uint8_t)(cardNumber >> 8),
-            (uint8_t)(cardNumber & 0xFF));
+             (uint8_t)(cardNumber >> 24), (uint8_t)(cardNumber >> 16),
+             (uint8_t)(cardNumber >> 8), (uint8_t)(cardNumber & 0xFF));
     snprintf(decPadded, sizeof(decPadded), "%010lu", (unsigned long)cardNumber);
     Serial.printf("  Standard:      %d-bit Wiegand\n", bits);
-    Serial.println("  Card ID (Dec): " + String(cardNumber) + " (Padded: " + String(decPadded) + ")");
+    Serial.println("  Card ID (Dec): " + String(cardNumber) +
+                   " (Padded: " + String(decPadded) + ")");
     Serial.println("  Hex UID:       " + String(hexFormatted));
 
     outUid = String(decPadded);
@@ -1614,10 +2042,16 @@ bool checkWiegandReader(String &outUid, String &outAltUid) {
 // 11. SETUP & INITIALIZATION
 // =====================================================
 void setup() {
+  WRITE_PERI_REG(
+      RTC_CNTL_BROWN_OUT_REG,
+      0); // Prevent false brownout reboots during simultaneous WiFi TX + buzzer
+  secureClient.setInsecure(); // Supabase HTTPS without root cert bundle (saves
+                              // 35KB RAM, eliminates cert validation failure)
   Serial.begin(115200);
   delay(500);
   Serial.println("\n\n================================================");
-  Serial.println("CHARRMPASS — ESP32 Single UHF Gate + BLE Setup");
+  Serial.println("CHARRMPASS — Automated Vehicle UHF Monitor (~860–960 MHz)");
+  Serial.println("Free-Flow Automated Drive-Through (No Mechanical Barrier)");
   Serial.println("================================================");
 
   // Peripherals
@@ -1625,7 +2059,7 @@ void setup() {
   pinMode(GREEN_LED, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(RELAY_PIN, OUTPUT);
-  pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP); // Onboard BOOT button (Hold 3s to reset Wi-Fi)
+  pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP); // Onboard BOOT button
 
   digitalWrite(RED_LED, HIGH);
   digitalWrite(GREEN_LED, LOW);
@@ -1637,21 +2071,26 @@ void setup() {
   lcdMsg("CHARRMPASS v4.5", "BOOTING GATE...");
   delay(1000);
 
-  // Wiegand UHF Reader Interrupt Init on GPIO 32 (GREEN = D0) and GPIO 33 (WHITE = D1)
-  #if ENABLE_WIEGAND
-    pinMode(WIEGAND_D0_PIN, INPUT_PULLUP);
-    pinMode(WIEGAND_D1_PIN, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(WIEGAND_D0_PIN), isrWiegandD0, FALLING);
-    attachInterrupt(digitalPinToInterrupt(WIEGAND_D1_PIN), isrWiegandD1, FALLING);
-    Serial.println("[WIEGAND] Boland UHF Reader initialized on GPIO 32 (GREEN=D0) and GPIO 33 (WHITE=D1) with pull-ups.");
-  #endif
+// Wiegand UHF Reader Interrupt Init on GPIO 32 (GREEN = D0) and GPIO 33 (WHITE
+// = D1)
+#if ENABLE_WIEGAND
+  pinMode(WIEGAND_D0_PIN, INPUT_PULLUP);
+  pinMode(WIEGAND_D1_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(WIEGAND_D0_PIN), isrWiegandD0, FALLING);
+  attachInterrupt(digitalPinToInterrupt(WIEGAND_D1_PIN), isrWiegandD1, FALLING);
+  Serial.println("[WIEGAND] Boland UHF Reader initialized on GPIO 32 "
+                 "(GREEN=D0) and GPIO 33 (WHITE=D1) with pull-ups.");
+#endif
 
-  // SPI Backup Reader Init
-  #if ENABLE_SPI_MFRC522
-    SPI.begin(18, 19, 23, 5);
-    rfid.PCD_Init();
-    Serial.println("[RFID] SPI MFRC522 Backup Reader initialized.");
-  #endif
+// SPI Backup Reader Init
+#if ENABLE_SPI_MFRC522
+  SPI.begin(18, 19, 23, 5);
+  rfid.PCD_Init();
+  Serial.println("[RFID] SPI MFRC522 Backup Reader initialized.");
+#endif
+
+  // MicroSD Memory Module Init on dedicated HSPI (CS 13, MOSI 12, MISO 14, SCK 26)
+  initSDCard();
 
   // 3. Load Saved Wi-Fi Credentials
   // Priority 1: NVS Flash
@@ -1663,25 +2102,38 @@ void setup() {
   // Priority 2: SD Card Backup (/config/wifi.cfg) if NVS is empty
   if (currentSsid.length() == 0) {
     if (loadWifiFromSD(currentSsid, currentPass)) {
-      Serial.println("[BOOT] Loaded Wi-Fi credentials from SD backup: '" + currentSsid + "'");
+      Serial.println("[BOOT] Loaded Wi-Fi credentials from SD backup: '" +
+                     currentSsid + "'");
     }
   }
 
+  // Priority 3: Default code constants (DEFAULT_WIFI_SSID) if NVS & SD are
+  // empty
+  if (currentSsid.length() == 0 &&
+      String(DEFAULT_WIFI_SSID) != "YOUR_WIFI_SSID" &&
+      strlen(DEFAULT_WIFI_SSID) > 0) {
+    currentSsid = DEFAULT_WIFI_SSID;
+    currentPass = DEFAULT_WIFI_PASS;
+    Serial.println(
+        "[BOOT] Loaded default Wi-Fi credentials from firmware code.");
+  }
+
   if (currentSsid.length() > 0) {
-    // 4a. Credentials found (NVS or SD) — attempt WiFi FIRST (BLE paused to avoid radio contention)
-    Serial.println("[BOOT] Wi-Fi credentials found: '" + currentSsid + "'. Attempting connection...");
+    Serial.println("[BOOT] Wi-Fi credentials found: '" + currentSsid +
+                   "'. Attempting connection...");
     bool ok = attemptWifiConnection(currentSsid, currentPass, 15);
     if (!ok) {
-      Serial.println("[BOOT] Wi-Fi connection failed. Starting BLE for re-provisioning.");
+      Serial.println("[BOOT] Wi-Fi connection failed. Starting BLE server & Operating in Offline Mode.");
       startBleServer();
     } else {
       syncWhitelistToRam();
     }
   } else {
-    // 4b. No credentials found anywhere — open BLE for initial provisioning
-    Serial.println("[BOOT] No saved Wi-Fi credentials found in NVS or SD. Starting BLE setup mode.");
-    lcdMsg("[NO WIFI SAVED]", "BLE SETUP MODE");
+    Serial.println(
+        "[BOOT] No saved Wi-Fi credentials found in NVS, SD, or code.");
+    Serial.println("[BOOT] Starting BLE server for wireless Web provisioning...");
     startBleServer();
+    scanAndPrintNetworks();
   }
 
   showReady();
@@ -1697,7 +2149,8 @@ void loop() {
     if (bootButtonPressStart == 0) {
       bootButtonPressStart = millis();
     } else if (millis() - bootButtonPressStart >= 3000) {
-      Serial.println("\n🔘 [HARDWARE BUTTON] BOOT button held for 3s -> Forcing Wi-Fi Reset & BLE Setup Mode!");
+      Serial.println("\n🔘 [HARDWARE BUTTON] BOOT button held for 3s -> "
+                     "Forcing Wi-Fi Reset & BLE Setup Mode!");
       lcdMsg("WIFI RESET", "BLE SETUP MODE");
       beep(150, 2);
       preferences.begin("charrm_wifi", false);
@@ -1715,31 +2168,75 @@ void loop() {
       startBleServer();
       showReady();
       bootButtonPressStart = 0;
-      while (digitalRead(BOOT_BUTTON_PIN) == LOW) { delay(10); } // Wait for button release
+      while (digitalRead(BOOT_BUTTON_PIN) == LOW) {
+        delay(10);
+      } // Wait for button release
     }
   } else {
     bootButtonPressStart = 0;
   }
 
-  // If new Wi-Fi credentials were sent from Web Bluetooth, connect now!
+  // ── BLE EVENTS (raised by BLE callbacks, handled safely here) ──
+  if (bleEvtConnected) {
+    bleEvtConnected = false;
+    Serial.println("\n[BLE] Web Client Connected via Bluetooth!");
+    lcdMsg("BLUETOOTH PAIRED", "WAITING WIFI...");
+    beep(100, 2);
+  }
+  if (bleEvtDisconnected) {
+    bleEvtDisconnected = false;
+    Serial.println("[BLE] Web Client Disconnected.");
+    // Only re-advertise if we still need provisioning (i.e. offline)
+    if (bleServerRunning && !wifiConnected) {
+      BLEDevice::startAdvertising();
+      Serial.println("[BLE] Advertising resumed (device still offline).");
+    }
+    showReady();
+  }
+
+  // ── BLE PROVISIONING: Handle new Wi-Fi credentials received over Bluetooth ──
   if (newWifiCredentialsReceived) {
+    String newSsid = pendingBleSsid;
+    String newPass = pendingBlePass;
     newWifiCredentialsReceived = false;
-    Serial.println("\n[PROVISION] Credentials saved to NVS Flash and SD Card!");
-    Serial.println("[PROVISION] Restarting ESP32 to connect cleanly with dedicated radio & RAM...");
-    lcdMsg("WIFI SAVED!", "RESTARTING...");
-    beep(200, 2);
-    delay(800);
-    ESP.restart();
+
+    Serial.println("\n[BLE PROVISION] Received SSID: '" + newSsid + "' (" +
+                   String(newPass.length()) + " char password)");
+    lcdMsg("RECEIVED WIFI", newSsid.substring(0, 16));
+    beep(150, 1);
+    sendBleStatus("{\"event\":\"SAVED\",\"ssid\":\"" + newSsid + "\"}");
+    delay(300); // let the notify reach the browser before radio switches
+
+    String prevSsid = currentSsid;
+    String prevPass = currentPass;
+    bool ok = attemptWifiConnection(newSsid, newPass, 25);
+    if (ok) {
+      syncWhitelistToRam();
+    } else if (prevSsid.length() > 0 && prevSsid != newSsid) {
+      // New credentials were wrong: fall back to the last working network so
+      // the gate does not stay offline because of a typo.
+      Serial.println("[BLE PROVISION] New Wi-Fi failed. Restoring previous "
+                     "network '" + prevSsid + "'...");
+      if (attemptWifiConnection(prevSsid, prevPass, 15)) {
+        syncWhitelistToRam();
+      }
+    }
+    lastWifiRetryMs = millis();
+    showReady();
   }
 
   // Periodic Wi-Fi watchdog & Heartbeat
   if (WiFi.status() == WL_CONNECTED) {
     if (!wifiConnected) {
       wifiConnected = true;
-      Serial.println("[WIFI] Reconnected to network!");
+      Serial.println("[WIFI] Reconnected to network! IP: " +
+                     WiFi.localIP().toString());
+      applyWifiPowerSave();
+      configTime(0, 0, "pool.ntp.org", "time.google.com");
+      pauseBleAdvertising();
       sendDeviceHeartbeat();
       syncWhitelistToRam();
-      stopBleServer();
+      lastHeartbeat = millis();
       showReady();
     }
     if (millis() - lastHeartbeat >= HEARTBEAT_INTERVAL) {
@@ -1749,19 +2246,42 @@ void loop() {
   } else {
     if (wifiConnected) {
       wifiConnected = false;
-      Serial.println("[WIFI] Lost Wi-Fi connection. BLE active for re-provisioning...");
+      lastWifiRetryMs = millis();
+      Serial.println("[WIFI] Lost Wi-Fi connection. Operating in Offline SD "
+                     "Cache Mode...");
       spillRamQueueToSd();
+      // Re-open BLE so the guard/admin can re-provision without a reboot.
+      // (startBleServer() just restarts advertising if BLE is already up.)
+      startBleServer();
+      showReady();
+    } else if (!bleServerRunning) {
       startBleServer();
       showReady();
     }
+
+    // Non-blocking background reconnect to the saved network every 30s.
+    // WiFi.begin() returns immediately, so UHF scanning is never paused.
+    if (currentSsid.length() > 0 && !bleClientConnected &&
+        millis() - lastWifiRetryMs >= WIFI_RETRY_INTERVAL) {
+      lastWifiRetryMs = millis();
+      Serial.println("[WIFI] Background retry -> '" + currentSsid + "'");
+      WiFi.disconnect(false, false);
+      if (currentPass.length() > 0) {
+        WiFi.begin(currentSsid.c_str(), currentPass.c_str());
+      } else {
+        WiFi.begin(currentSsid.c_str());
+      }
+    }
   }
 
-  // 1. Process asynchronous background cloud transactions whenever Wiegand is idle
+  // 1. Process asynchronous background cloud transactions whenever Wiegand is
+  // idle
   processCloudQueue();
   flushOfflineTransactions();
 
   // 2. Periodic RAM Whitelist Sync from Supabase (every 5 minutes)
-  if (wifiConnected && (millis() - lastWhitelistSync >= WHITELIST_SYNC_INTERVAL)) {
+  if (wifiConnected &&
+      (millis() - lastWhitelistSync >= WHITELIST_SYNC_INTERVAL)) {
     lastWhitelistSync = millis();
     syncWhitelistToRam();
   }
@@ -1792,17 +2312,20 @@ void loop() {
         currentSsid.trim();
         currentPass.trim();
 
-        Serial.println("\n[SERIAL PROVISION] Testing credentials for SSID: '" + currentSsid + "'...");
+        Serial.println("\n[SERIAL PROVISION] Testing credentials for SSID: '" +
+                       currentSsid + "'...");
         lcdMsg("TESTING WIFI...", currentSsid.substring(0, 16));
         beep(200, 1);
         bool ok = attemptWifiConnection(currentSsid, currentPass, 15);
-        if (ok) syncWhitelistToRam();
+        if (ok)
+          syncWhitelistToRam();
         showReady();
         return;
       }
 
-      // ── RESET: → Wipe NVS credentials and SD backup, then re-enter BLE provisioning mode ──
-      if (inputStr.equalsIgnoreCase("RESET:") || inputStr.equalsIgnoreCase("RESET")) {
+      // ── RESET: → Wipe NVS credentials and SD backup & start BLE ──
+      if (inputStr.equalsIgnoreCase("RESET:") ||
+          inputStr.equalsIgnoreCase("RESET")) {
         preferences.begin("charrm_wifi", false);
         preferences.remove("ssid");
         preferences.remove("pass");
@@ -1813,7 +2336,8 @@ void loop() {
         }
         currentSsid = "";
         currentPass = "";
-        Serial.println("[RESET] Wi-Fi credentials cleared from NVS & SD. Restarting BLE provisioning...");
+        Serial.println("[RESET] Wi-Fi credentials cleared from NVS & SD. "
+                       "Starting BLE Setup Mode...");
         lcdMsg("WIFI RESET", "BLE SETUP MODE");
         beep(400, 1);
         delay(500);
@@ -1832,31 +2356,32 @@ void loop() {
     }
   }
 
-  // 4. Poll Boland Long-Range UHF Wiegand Reader (High Priority)
-  #if ENABLE_WIEGAND
-    String wiegandUid = "";
-    String wiegandAlt = "";
-    if (checkWiegandReader(wiegandUid, wiegandAlt)) {
-      handleScannedTag(wiegandUid, wiegandAlt);
-    }
-  #endif
+// 4. Poll Boland Long-Range UHF Wiegand Reader (High Priority)
+#if ENABLE_WIEGAND
+  String wiegandUid = "";
+  String wiegandAlt = "";
+  if (checkWiegandReader(wiegandUid, wiegandAlt)) {
+    handleScannedTag(wiegandUid, wiegandAlt);
+  }
+#endif
 
-  // 5. Poll Backup SPI Reader
-  #if ENABLE_SPI_MFRC522
-    if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
-      String uid = "";
-      for (byte i = 0; i < rfid.uid.size; i++) {
-        char h[4];
-        sprintf(h, "%02X", rfid.uid.uidByte[i]);
-        uid += h;
-        if (i < rfid.uid.size - 1) uid += " ";
-      }
-      rfid.PICC_HaltA();
-      rfid.PCD_StopCrypto1();
-
-      handleScannedTag(uid);
+// 5. Poll Backup SPI Reader
+#if ENABLE_SPI_MFRC522
+  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+    String uid = "";
+    for (byte i = 0; i < rfid.uid.size; i++) {
+      char h[4];
+      sprintf(h, "%02X", rfid.uid.uidByte[i]);
+      uid += h;
+      if (i < rfid.uid.size - 1)
+        uid += " ";
     }
-  #endif
+    rfid.PICC_HaltA();
+    rfid.PCD_StopCrypto1();
+
+    handleScannedTag(uid);
+  }
+#endif
 
   // 6. Live Wiegand Hardware Diagnostics (Printed every 6 seconds)
   static unsigned long lastWiegandDiag = 0;
@@ -1864,10 +2389,10 @@ void loop() {
     lastWiegandDiag = millis();
     int d0_32 = digitalRead(WIEGAND_D0_PIN);
     int d1_33 = digitalRead(WIEGAND_D1_PIN);
-    Serial.printf("[WIEGAND HARDWARE MONITOR] Wire Levels: G32(Green D0)=%s | G33(White D1)=%s | Total Pulses Detected=%u\n",
+    Serial.printf("[WIEGAND HARDWARE MONITOR] Wire Levels: G32(Green D0)=%s | "
+                  "G33(White D1)=%s | Total Pulses Detected=%u\n",
                   d0_32 ? "HIGH" : "LOW (CHECK PULLUP)",
-                  d1_33 ? "HIGH" : "LOW (CHECK PULLUP)",
-                  wiegandTotalPulses);
+                  d1_33 ? "HIGH" : "LOW (CHECK PULLUP)", wiegandTotalPulses);
   }
 
   delayMicroseconds(200); // High-frequency polling (zero lag)

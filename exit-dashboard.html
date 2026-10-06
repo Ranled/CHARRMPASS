@@ -153,6 +153,31 @@
     .ready-title { font-family: 'Outfit', sans-serif; font-size: 20px; font-weight: 800; color: #fff; letter-spacing: 1px; }
     .ready-sub   { font-size: 13px; color: var(--muted); }
 
+    /* Traffic Light State Bar */
+    .traffic-light-bar {
+      position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 14px; border-radius: 999px;
+      background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(255,255,255,0.12);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.3); z-index: 5;
+    }
+    .tl-lamp {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 10px; font-weight: 800; letter-spacing: 0.5px;
+      color: rgba(255,255,255,0.35); transition: all 0.25s ease;
+    }
+    .tl-dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: rgba(255,255,255,0.15); transition: all 0.25s ease;
+    }
+    .tl-lamp.tl-red.active { color: #f87171; }
+    .tl-lamp.tl-red.active .tl-dot { background: #ef4444; box-shadow: 0 0 10px #ef4444; }
+    .tl-lamp.tl-yellow.active { color: #fbbf24; }
+    .tl-lamp.tl-yellow.active .tl-dot { background: #eab308; box-shadow: 0 0 10px #eab308; animation: tl-blink 0.6s infinite; }
+    .tl-lamp.tl-green.active { color: #4ade80; }
+    .tl-lamp.tl-green.active .tl-dot { background: #22c55e; box-shadow: 0 0 10px #22c55e; }
+    @keyframes tl-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
     .scan-result {
       width: 100%; height: 100%;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -241,7 +266,7 @@
     .scan-row-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
     .scan-row-dot.ok      { background: var(--ok);      box-shadow: 0 0 6px rgba(34,197,94,0.5); }
     .scan-row-dot.deny    { background: var(--denied); }
-    .scan-row-dot.warning { background: var(--warning); }
+    .scan-row-dot.warning, .scan-row-dot.pending { background: var(--warning); box-shadow: 0 0 6px rgba(245,158,11,0.5); }
     .scan-row-info { flex: 1; overflow: hidden; }
     .scan-row-name  { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .scan-row-plate { font-size: 11px; font-family: 'JetBrains Mono', monospace; color: var(--muted); }
@@ -347,6 +372,13 @@
 
     <!-- SCAN PANEL -->
     <section class="scan-panel" id="scanPanel">
+      <!-- Traffic Light State Bar -->
+      <div class="traffic-light-bar" id="trafficLightBar">
+        <div class="tl-lamp tl-red active" id="tlLampRed"><span class="tl-dot"></span> RED: STANDBY</div>
+        <div class="tl-lamp tl-yellow" id="tlLampYellow"><span class="tl-dot"></span> YELLOW: SCANNING</div>
+        <div class="tl-lamp tl-green" id="tlLampGreen"><span class="tl-dot"></span> GREEN: DONE</div>
+      </div>
+
       <div class="ready-state" id="readyState">
         <div class="radar-ring">
           <div class="radar-inner">

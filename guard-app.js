@@ -127,7 +127,7 @@ async function initState() {
                         name:     name,
                         role:     role,
                         plate:    plate,
-                        status:   l.status === 'DENIED' ? 'DENIED' : 'AUTHORIZED',
+                        status:   l.status || (l.status === 'DENIED' ? 'DENIED' : 'AUTHORIZED'),
                         event:    l.direction || 'ENTRY',
                         duration: '--',
                         time:     new Date(l.timestamp).toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit'}),
@@ -159,6 +159,8 @@ async function initState() {
 
     renderAll();
     loadGuardInfo();
+    updateTrafficLightWidget('Entry', 'standby');
+    updateTrafficLightWidget('Exit', 'standby');
 }
 
 // Auto-reload data on connection ready
@@ -167,22 +169,56 @@ window.addEventListener('supabase:connected', () => {
     initState();
 });
 
+let guardRealtimeSetup = false;
 function setupGuardRealtime() {
-    if (!isConnected || !supabaseClient) return;
+    if (!isConnected || !supabaseClient || guardRealtimeSetup) return;
+    guardRealtimeSetup = true;
 
     try {
+        console.log('🔌 Setting up Guard Supabase Realtime subscriptions...');
+
+        // Listen for new transactions (ESP32 ENTRY/EXIT and kiosk scans)
         supabaseClient.channel('guard-live-feed')
-            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'transactions' }, payload => {
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'transactions' }, async payload => {
                 const txn = payload.new;
                 console.log('⚡ [Guard RT] Inbound gate scan:', txn);
                 if (txn && txn.rfid_uid) {
-                    processRFIDScan(txn.rfid_uid, txn.id, txn, txn.direction);
+                    await processRFIDScan(txn.rfid_uid, txn.id, txn, txn.direction);
                 }
+            })
+            .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'transactions' }, async payload => {
+                console.log('📡 [Guard RT] Transaction UPDATE:', payload.new);
+                await initState();
             })
             .subscribe((status, err) => {
                 console.log('⚡ [Guard RT] Subscription status:', status);
                 if (err) console.error('Guard RT error:', err);
             });
+
+        // Listen for new user registrations
+        supabaseClient.channel('guard-users')
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'users' }, (payload) => {
+                console.log('👤 [Guard RT] New user registered:', payload.new.full_name);
+                appState.totalVehicles++;
+                renderAll();
+                showToast(`New registration: ${payload.new.full_name}`, 'info');
+            })
+            .subscribe();
+
+        // Listen for rfid_cards changes (authorization updates)
+        supabaseClient.channel('guard-rfid-cards')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'rfid_cards' }, async () => {
+                await initState();
+            })
+            .subscribe();
+
+        // Listen for special tags
+        supabaseClient.channel('guard-special')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'special_tags' }, async () => {
+                const { data: st } = await supabaseClient.from('special_tags').select('*');
+                if (st) appState.specialTags = st;
+            })
+            .subscribe();
     } catch(e) {
         console.warn('Realtime channel initialization error:', e);
     }
@@ -392,7 +428,7 @@ function renderLogsTable() {
                     <span class="px-2.5 py-1 rounded-full text-[10px] font-bold ${s.event === 'ENTRY' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}">${s.event || '--'}</span>
                 </td>
                 <td class="p-4 text-right">
-                    <span class="px-2 py-0.5 rounded text-[10px] font-bold ${s.status === 'AUTHORIZED' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}">${s.status || '--'}</span>
+                    <span class="px-2 py-0.5 rounded text-[10px] font-bold ${s.status === 'AUTHORIZED' ? 'bg-green-50 text-green-700 border border-green-200' : (s.status === 'PENDING_CONFIRMATION' ? 'bg-amber-50 text-amber-800 border border-amber-300' : 'bg-red-50 text-red-700 border border-red-200')}">${s.status || '--'}</span>
                 </td>
             </tr>
         `).join('');
@@ -443,9 +479,10 @@ function renderAll() {
 
 function renderRecentScanCard(s, type) {
     const isAuth = s.status === 'AUTHORIZED';
+    const isPending = s.status === 'PENDING_CONFIRMATION';
     const isEntry = type === 'ENTRY';
-    const icon = isAuth ? (isEntry ? 'log-in' : 'log-out') : 'x';
-    const badgeBg = isAuth ? (isEntry ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700') : 'bg-red-100 text-red-700';
+    const icon = isPending ? 'alert-triangle' : (isAuth ? (isEntry ? 'log-in' : 'log-out') : 'x');
+    const badgeBg = isPending ? 'bg-amber-100 text-amber-800 border border-amber-300' : (isAuth ? (isEntry ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700') : 'bg-red-100 text-red-700');
 
     return `
         <div class="bg-white/80 p-2.5 sm:p-3 rounded-2xl border border-white shadow-sm flex items-center gap-2.5 sm:gap-3">
@@ -501,6 +538,78 @@ window.processManualGateScan = function(direction) {
 // =====================
 const gateResetTimers = { Entry: null, Exit: null };
 
+// ─── TRAFFIC LIGHT STATE CONTROLLER ───────────────────────────
+function updateTrafficLightWidget(gateKey, state) {
+    // gateKey: 'Entry' | 'Exit'
+    // state: 'standby' (Red) | 'scanning' (Yellow) | 'done' (Green) | 'denied' (Red) | 'offline' (Blinking Yellow) | 'connected' (3 Green Blinks)
+    ['', 'Dual'].forEach(prefix => {
+        const dotRed = document.getElementById(`tlDotRed${prefix}${gateKey}`);
+        const dotYellow = document.getElementById(`tlDotYellow${prefix}${gateKey}`);
+        const dotGreen = document.getElementById(`tlDotGreen${prefix}${gateKey}`);
+        const text = document.getElementById(`tlText${prefix}${gateKey}`);
+        if (!dotRed || !dotYellow || !dotGreen || !text) return;
+
+        // Reset all dots to dimmed
+        dotRed.className = 'w-2.5 h-2.5 rounded-full bg-rose-500/20';
+        dotYellow.className = 'w-2.5 h-2.5 rounded-full bg-amber-500/20';
+        dotGreen.className = 'w-2.5 h-2.5 rounded-full bg-emerald-500/20';
+
+        if (state === 'offline') {
+            dotYellow.className = 'w-2.5 h-2.5 rounded-full bg-amber-500 shadow-[0_0_8px_#f59e0b] animate-pulse';
+            text.textContent = 'OFFLINE';
+            text.className = 'text-[9px] text-amber-400 font-bold ml-1';
+        } else if (state === 'connected') {
+            let count = 0;
+            const interval = setInterval(() => {
+                dotGreen.classList.toggle('bg-emerald-500');
+                dotGreen.classList.toggle('bg-emerald-500/20');
+                count++;
+                if (count >= 6) {
+                    clearInterval(interval);
+                    dotGreen.className = 'w-2.5 h-2.5 rounded-full bg-emerald-500/20';
+                    dotRed.className = 'w-2.5 h-2.5 rounded-full bg-rose-500 shadow-[0_0_8px_#f43f5e]';
+                    text.textContent = 'STANDBY';
+                    text.className = 'text-[9px] text-rose-400 font-bold ml-1';
+                }
+            }, 150);
+        } else if (state === 'scanning') {
+            dotYellow.className = 'w-2.5 h-2.5 rounded-full bg-amber-500 shadow-[0_0_8px_#f59e0b] animate-pulse';
+            text.textContent = 'SCANNING';
+            text.className = 'text-[9px] text-amber-400 font-bold ml-1';
+        } else if (state === 'done') {
+            dotGreen.className = 'w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_#10b981]';
+            text.textContent = 'DONE';
+            text.className = 'text-[9px] text-emerald-400 font-bold ml-1';
+        } else if (state === 'denied') {
+            dotRed.className = 'w-2.5 h-2.5 rounded-full bg-rose-500 shadow-[0_0_8px_#f43f5e] animate-ping';
+            text.textContent = 'DENIED';
+            text.className = 'text-[9px] text-rose-400 font-bold ml-1';
+        } else {
+            // Standby
+            dotRed.className = 'w-2.5 h-2.5 rounded-full bg-rose-500 shadow-[0_0_8px_#f43f5e]';
+            text.textContent = 'STANDBY';
+            text.className = 'text-[9px] text-rose-400 font-bold ml-1';
+        }
+    });
+}
+
+window.addEventListener('supabase:connected', () => {
+    updateTrafficLightWidget('Entry', 'connected');
+    updateTrafficLightWidget('Exit', 'connected');
+});
+window.addEventListener('supabase:disconnected', () => {
+    updateTrafficLightWidget('Entry', 'offline');
+    updateTrafficLightWidget('Exit', 'offline');
+});
+window.addEventListener('offline', () => {
+    updateTrafficLightWidget('Entry', 'offline');
+    updateTrafficLightWidget('Exit', 'offline');
+});
+window.addEventListener('online', () => {
+    updateTrafficLightWidget('Entry', 'connected');
+    updateTrafficLightWidget('Exit', 'connected');
+});
+
 async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, forcedDirection = null) {
     if (!uid) return;
     uid = uid.toUpperCase().trim();
@@ -526,6 +635,9 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
         clearTimeout(gateResetTimers[gateKey]);
         gateResetTimers[gateKey] = null;
     }
+
+    // Set Traffic Light to YELLOW SCANNING
+    updateTrafficLightWidget(gateKey, 'scanning');
 
     // Set UI to Scanning state for both single and dual view
     ['', 'Dual'].forEach(prefix => {
@@ -604,6 +716,9 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                     status:       card.authorization_status === 'AUTHORIZED' ? 'AUTHORIZED' : 'DENIED'
                 };
             }
+        } catch (e) {
+            console.error('RFID card lookup error:', e);
+        }
     }
 
     // Check Special Tags (Visitor & Emergency) - flexible space matching
@@ -781,6 +896,9 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                 appState.exitsToday++;
                 appState.vehiclesInside = Math.max(0, (appState.vehiclesInside || 0) - 1);
 
+                // Traffic Light: DONE (Green)
+                updateTrafficLightWidget('Exit', 'done');
+
                 // Populate Exit card
                 populateScanResultCard(result, 'Exit');
                 result.event = 'EXIT';
@@ -809,39 +927,107 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
         if (scanData) scanData.classList.remove('opacity-70');
     });
 
-    const isAuth = result.status === 'AUTHORIZED' || (fromRealtimeTxn && fromRealtimeTxn.status === 'AUTHORIZED');
+    const isPendingConfirm = fromRealtimeTxn && fromRealtimeTxn.status === 'PENDING_CONFIRMATION';
+    const isAuth = (result.status === 'AUTHORIZED' || (fromRealtimeTxn && fromRealtimeTxn.status === 'AUTHORIZED')) && !isPendingConfirm;
+
+    if (isPendingConfirm) {
+        const remarksMsg = fromRealtimeTxn.remarks || 'Awaiting guard verification';
+        const formattedDate = new Date(fromRealtimeTxn.timestamp).toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit' });
+        const conflictType = isEntry
+            ? 'RE_ENTRY_FORGOT_EXIT'
+            : (remarksMsg.includes('Duplicate') || remarksMsg.includes('already recorded') ? 'RE_EXIT_DUPLICATE' : 'EXIT_NO_ENTRY');
+
+        // Extract prior timestamp from remarks if present
+        let historyStamp = formattedDate;
+        const matchTime = remarksMsg.match(/(?:inside since|exited at|entry at)\s*([^\.]+)/i);
+        if (matchTime) historyStamp = matchTime[1].trim();
+
+        pendingDuplicate = {
+            uid,
+            result,
+            userId,
+            prevTimestamp: fromRealtimeTxn.timestamp,
+            gateKey,
+            direction,
+            conflictType,
+            historyDetails: historyStamp
+        };
+
+        result.historyNotice = isEntry
+            ? `User entered previously at ${historyStamp} (No exit logged — forgot to tap out)`
+            : (conflictType === 'EXIT_NO_ENTRY' ? 'No prior entry record on file (Forgot to tap in?)' : `Prior exit logged at ${historyStamp}`);
+        result.historyBadge = isEntry ? 'RE-LOGIN' : (conflictType === 'EXIT_NO_ENTRY' ? 'NO ENTRY' : 'RE-EXIT');
+
+        ['', 'Dual'].forEach(prefix => {
+            const radar = document.getElementById(`radarContainer${prefix}${gateKey}`);
+            const scanStatusText = document.getElementById(`scanStatusText${prefix}${gateKey}`);
+            const scanSubtext = document.getElementById(`scanSubtext${prefix}${gateKey}`);
+            const radarCenter = document.getElementById(`radarCenter${prefix}${gateKey}`);
+            const statusLabel = document.getElementById(`resStatusLabel${prefix}${gateKey}`);
+
+            if (radar) radar.parentElement.classList.add('status-authorized');
+            if (scanStatusText) {
+                scanStatusText.textContent = isEntry ? 'RE-LOGIN ATTEMPT' : (conflictType === 'EXIT_NO_ENTRY' ? 'NO ENTRY RECORD' : 'RE-EXIT ATTEMPT');
+                scanStatusText.className = 'text-sm sm:text-xl font-bold font-display text-amber-600 mb-1 sm:mb-2';
+            }
+            if (scanSubtext) scanSubtext.textContent = result.historyNotice;
+            if (radarCenter) radarCenter.innerHTML = '<i data-lucide="alert-triangle" class="w-6 h-6 sm:w-10 sm:h-10 text-amber-500"></i>';
+
+            if (statusLabel) {
+                statusLabel.className = 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-amber-50 border-amber-300 text-amber-800 animate-pulse';
+                statusLabel.innerHTML = isEntry ? '⚠️ RE-LOGIN (FORGOT EXIT)' : '⚠️ EXIT REQUIRES CHECK';
+            }
+        });
+
+        // Traffic Light: Keep YELLOW (Needs guard attention)
+        updateTrafficLightWidget(gateKey, 'scanning');
+
+        result.status = 'PENDING_CONFIRMATION';
+        result.event = direction;
+        populateScanResultCard(result, gateKey);
+        openDuplicateModal(result, historyStamp, uid, direction, conflictType);
+        return;
+    }
 
     if (isAuth) {
-        // Check for DUPLICATE ENTRY (User is already inside)
-        let lastEntryTxn = null;
-        if (isEntry && isConnected) {
-            const { data: lastTxn } = await supabaseClient
-                .from('transactions')
-                .select('id, direction, timestamp, status')
-                .eq('rfid_uid', uid)
-                .eq('status', 'AUTHORIZED')
-                .order('timestamp', { ascending: false })
-                .limit(1)
-                .maybeSingle();
-            if (lastTxn && lastTxn.direction === 'ENTRY') {
-                lastEntryTxn = lastTxn;
+        // Query the latest authorized transaction for this UID to verify state history
+        let lastTxn = null;
+        if (isConnected) {
+            try {
+                const { data: lt } = await supabaseClient
+                    .from('transactions')
+                    .select('id, direction, timestamp, status, remarks')
+                    .eq('rfid_uid', uid)
+                    .eq('status', 'AUTHORIZED')
+                    .order('timestamp', { ascending: false })
+                    .limit(1)
+                    .maybeSingle();
+                lastTxn = lt;
+            } catch(e) {
+                console.warn('Last txn fetch error:', e);
             }
         }
 
-        if (isEntry && lastEntryTxn && !fromRealtimeTxn) {
-            // DUPLICATE ENTRY DETECTED!
-            const prevTime = new Date(lastEntryTxn.timestamp);
-            const formattedDate = prevTime.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        if (isEntry && lastTxn && lastTxn.direction === 'ENTRY' && !fromRealtimeTxn) {
+            // USER IS RE-LOGGING IN AT ENTRY: Already entered previously, forgot to tap exit!
+            const prevTime = new Date(lastTxn.timestamp);
+            const formattedDate = prevTime.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
             const formattedTime = prevTime.toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit' });
-            const formattedString = `${formattedDate} at ${formattedTime}`;
+            const historyStamp = `${formattedDate} at ${formattedTime}`;
 
             pendingDuplicate = {
                 uid,
                 result,
                 userId,
-                prevTimestamp: lastEntryTxn.timestamp,
-                gateKey
+                prevTimestamp: lastTxn.timestamp,
+                gateKey,
+                direction: 'ENTRY',
+                conflictType: 'RE_ENTRY_FORGOT_EXIT',
+                historyDetails: historyStamp
             };
+
+            result.historyNotice = `Entered earlier on ${historyStamp} without exit record (Forgot to tap exit)`;
+            result.historyBadge = 'RE-LOGIN';
 
             ['', 'Dual'].forEach(prefix => {
                 const radar = document.getElementById(`radarContainer${prefix}${gateKey}`);
@@ -852,22 +1038,119 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
 
                 if (radar) radar.parentElement.classList.add('status-authorized');
                 if (scanStatusText) {
-                    scanStatusText.textContent = 'ALREADY ENTERED';
+                    scanStatusText.textContent = 'RE-LOGIN ATTEMPT';
                     scanStatusText.className = 'text-sm sm:text-xl font-bold font-display text-amber-600 mb-1 sm:mb-2';
                 }
-                if (scanSubtext) scanSubtext.textContent = `Entered ${formattedString}. Awaiting guard confirmation.`;
+                if (scanSubtext) scanSubtext.textContent = `Entered ${historyStamp}. User forgot to tap exit?`;
                 if (radarCenter) radarCenter.innerHTML = '<i data-lucide="alert-triangle" class="w-6 h-6 sm:w-10 sm:h-10 text-amber-500"></i>';
 
                 if (statusLabel) {
                     statusLabel.className = 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-amber-50 border-amber-300 text-amber-800 animate-pulse';
-                    statusLabel.innerHTML = '⚠️ ALREADY ENTERED';
+                    statusLabel.innerHTML = '⚠️ RE-LOGIN (ALREADY INSIDE)';
                 }
             });
 
-            // Populate data card
             populateScanResultCard(result, gateKey);
-            openDuplicateModal(result, formattedString, uid);
+            openDuplicateModal(result, historyStamp, uid, 'ENTRY', 'RE_ENTRY_FORGOT_EXIT');
             return;
+        }
+
+        if (!isEntry && !fromRealtimeTxn) {
+            // USER SCAN AT EXIT GATE
+            if (!lastTxn) {
+                // No prior entry recorded
+                pendingDuplicate = {
+                    uid,
+                    result,
+                    userId,
+                    prevTimestamp: null,
+                    gateKey,
+                    direction: 'EXIT',
+                    conflictType: 'EXIT_NO_ENTRY',
+                    historyDetails: 'None recorded'
+                };
+
+                result.historyNotice = 'No prior entry record on file (User may have entered without tapping)';
+                result.historyBadge = 'NO ENTRY RECORD';
+
+                ['', 'Dual'].forEach(prefix => {
+                    const radar = document.getElementById(`radarContainer${prefix}${gateKey}`);
+                    const scanStatusText = document.getElementById(`scanStatusText${prefix}${gateKey}`);
+                    const scanSubtext = document.getElementById(`scanSubtext${prefix}${gateKey}`);
+                    const radarCenter = document.getElementById(`radarCenter${prefix}${gateKey}`);
+                    const statusLabel = document.getElementById(`resStatusLabel${prefix}${gateKey}`);
+
+                    if (radar) radar.parentElement.classList.add('status-authorized');
+                    if (scanStatusText) {
+                        scanStatusText.textContent = 'NO ENTRY RECORDED';
+                        scanStatusText.className = 'text-sm sm:text-xl font-bold font-display text-amber-600 mb-1 sm:mb-2';
+                    }
+                    if (scanSubtext) scanSubtext.textContent = 'No entry scan found for this card. Forgot to tap in?';
+                    if (radarCenter) radarCenter.innerHTML = '<i data-lucide="alert-triangle" class="w-6 h-6 sm:w-10 sm:h-10 text-amber-500"></i>';
+
+                    if (statusLabel) {
+                        statusLabel.className = 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-amber-50 border-amber-300 text-amber-800 animate-pulse';
+                        statusLabel.innerHTML = '⚠️ NO PRIOR ENTRY';
+                    }
+                });
+
+                populateScanResultCard(result, gateKey);
+                openDuplicateModal(result, 'No Entry Record', uid, 'EXIT', 'EXIT_NO_ENTRY');
+                return;
+            } else if (lastTxn.direction === 'EXIT') {
+                // Already recorded exit
+                const prevTime = new Date(lastTxn.timestamp);
+                const formattedDate = prevTime.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                const formattedTime = prevTime.toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit' });
+                const historyStamp = `${formattedDate} at ${formattedTime}`;
+
+                pendingDuplicate = {
+                    uid,
+                    result,
+                    userId,
+                    prevTimestamp: lastTxn.timestamp,
+                    gateKey,
+                    direction: 'EXIT',
+                    conflictType: 'RE_EXIT_DUPLICATE',
+                    historyDetails: historyStamp
+                };
+
+                result.historyNotice = `Already logged exit on ${historyStamp} (Double exit scan)`;
+                result.historyBadge = 'RE-EXIT';
+
+                ['', 'Dual'].forEach(prefix => {
+                    const radar = document.getElementById(`radarContainer${prefix}${gateKey}`);
+                    const scanStatusText = document.getElementById(`scanStatusText${prefix}${gateKey}`);
+                    const scanSubtext = document.getElementById(`scanSubtext${prefix}${gateKey}`);
+                    const radarCenter = document.getElementById(`radarCenter${prefix}${gateKey}`);
+                    const statusLabel = document.getElementById(`resStatusLabel${prefix}${gateKey}`);
+
+                    if (radar) radar.parentElement.classList.add('status-authorized');
+                    if (scanStatusText) {
+                        scanStatusText.textContent = 'RE-EXIT / DUPLICATE';
+                        scanStatusText.className = 'text-sm sm:text-xl font-bold font-display text-amber-600 mb-1 sm:mb-2';
+                    }
+                    if (scanSubtext) scanSubtext.textContent = `User already recorded exit at ${historyStamp}.`;
+                    if (radarCenter) radarCenter.innerHTML = '<i data-lucide="alert-triangle" class="w-6 h-6 sm:w-10 sm:h-10 text-amber-500"></i>';
+
+                    if (statusLabel) {
+                        statusLabel.className = 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-amber-50 border-amber-300 text-amber-800 animate-pulse';
+                        statusLabel.innerHTML = '⚠️ DUPLICATE EXIT';
+                    }
+                });
+
+                populateScanResultCard(result, gateKey);
+                openDuplicateModal(result, historyStamp, uid, 'EXIT', 'RE_EXIT_DUPLICATE');
+                return;
+            }
+        }
+
+        // Normal Authorized Pass: attach history notice if prior transaction exists
+        if (lastTxn) {
+            const prevTime = new Date(lastTxn.timestamp);
+            const historyStamp = prevTime.toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit' });
+            result.historyNotice = isEntry ? `Previous exit logged at ${historyStamp}` : `Entry logged at ${historyStamp}`;
+            result.historyBadge = 'VERIFIED';
         }
 
         ['', 'Dual'].forEach(prefix => {
@@ -893,6 +1176,9 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
 
             if (scanSubtext) scanSubtext.textContent = isEntry ? 'Welcome to campus! Entry logged.' : 'Vehicle departure recorded. Safe travels!';
         });
+
+        // Traffic Light: DONE (Green)
+        updateTrafficLightWidget(gateKey, 'done');
 
         // Log transaction if manual scan
         if (!fromRealtimeTxn && isConnected) {
@@ -941,6 +1227,9 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                 statusLabel.innerHTML = '✗ ACCESS DENIED';
             }
         });
+
+        // Traffic Light: DENIED (Red Alert)
+        updateTrafficLightWidget(gateKey, 'denied');
 
         if (!fromRealtimeTxn && isConnected) {
             await supabaseClient.from('transactions').insert({
@@ -996,29 +1285,95 @@ function populateScanResultCard(result, gateKey) {
         if(el(`resVehModel${prefix}${gateKey}`)) el(`resVehModel${prefix}${gateKey}`).textContent = result.model;
         if(el(`resColor${prefix}${gateKey}`))    el(`resColor${prefix}${gateKey}`).textContent = result.color;
 
+        // Re-login / Scan History Notice Banner
+        const banner = el(`resHistoryBanner${prefix}${gateKey}`);
+        const text = el(`resHistoryText${prefix}${gateKey}`);
+        const badge = el(`resHistoryBadge${prefix}${gateKey}`);
+        if (banner && text) {
+            if (result.historyNotice) {
+                text.textContent = result.historyNotice;
+                if (badge) {
+                    badge.textContent = result.historyBadge || 'HISTORY';
+                    if (result.historyBadge === 'RE-LOGIN' || result.status === 'PENDING_CONFIRMATION') {
+                        badge.className = 'shrink-0 px-2 py-0.5 rounded font-mono font-bold bg-amber-200 text-amber-900 text-[10px] uppercase';
+                    } else if (result.historyBadge === 'VERIFIED') {
+                        badge.className = 'shrink-0 px-2 py-0.5 rounded font-mono font-bold bg-emerald-100 text-emerald-800 text-[10px] uppercase';
+                    } else {
+                        badge.className = 'shrink-0 px-2 py-0.5 rounded font-mono font-bold bg-blue-100 text-blue-800 text-[10px] uppercase';
+                    }
+                }
+                banner.classList.remove('hidden');
+            } else {
+                banner.classList.add('hidden');
+            }
+        }
+
         if(el(`scanResultEmpty${prefix}${gateKey}`)) el(`scanResultEmpty${prefix}${gateKey}`).classList.add('hidden');
         if(el(`scanResultData${prefix}${gateKey}`))  el(`scanResultData${prefix}${gateKey}`).classList.remove('hidden');
     });
 }
 
 // =====================
-// DUPLICATE ENTRY CONFIRMATION
+// DUPLICATE ENTRY / RE-LOGIN CONFIRMATION
 // =====================
 let pendingDuplicate = null;
 
-window.openDuplicateModal = function(result, formattedTime, uid) {
+window.openDuplicateModal = function(result, formattedTime, uid, direction = 'ENTRY', conflictType = 'RE_ENTRY_FORGOT_EXIT') {
     const m = document.getElementById('duplicateEntryModal');
     if (!m) return;
-    document.getElementById('dupModalDriver').textContent = result.name || '--';
-    document.getElementById('dupModalPlate').textContent = result.plate || '--';
-    document.getElementById('dupModalUid').textContent = uid || '--';
-    document.getElementById('dupModalPrevTime').textContent = formattedTime;
-    document.getElementById('dupModalMessage').textContent = `This user (${result.name}) has already been granted entry on ${formattedTime}.`;
+
+    const el = (id) => document.getElementById(id);
+    const isEntry = direction === 'ENTRY';
+
+    if (el('dupModalDriver')) el('dupModalDriver').textContent = result.name || '--';
+    if (el('dupModalPlate')) el('dupModalPlate').textContent = result.plate || result.cpass_id || '--';
+    if (el('dupModalUid')) el('dupModalUid').textContent = uid || result.uid || '--';
+    if (el('dupModalPrevTime')) el('dupModalPrevTime').textContent = formattedTime || '--:--';
+
+    const header = el('dupModalHeader');
+    const title = el('dupModalTitle');
+    const sub = el('dupModalSub');
+    const msg = el('dupModalMessage');
+    const histLabel = el('dupModalHistoryLabel');
+    const prompt = el('dupModalPrompt');
+    const confirmBtn = el('dupModalConfirmBtn');
+    const confirmText = el('dupModalConfirmText');
+
+    if (isEntry) {
+        if (header) header.className = 'p-6 bg-gradient-to-r from-amber-500 to-orange-500 text-white flex items-center gap-4';
+        if (title) title.textContent = 'Re-Login Detected (Inside Campus)';
+        if (sub) sub.textContent = 'User entered earlier & forgot to tap exit';
+        if (msg) msg.textContent = `This user (${result.name}) already entered campus on ${formattedTime} and has no logged departure. They likely forgot to tap exit.`;
+        if (histLabel) histLabel.textContent = 'Previous Entry:';
+        if (prompt) prompt.textContent = 'Allow re-login and record a new campus entry?';
+        if (confirmText) confirmText.textContent = 'Allow Re-Login';
+        if (confirmBtn) confirmBtn.className = 'flex-1 px-4 py-3 rounded-xl bg-amber-600 text-white text-sm font-bold hover:bg-amber-700 shadow-md transition-all flex items-center justify-center gap-1.5';
+    } else {
+        if (conflictType === 'EXIT_NO_ENTRY') {
+            if (header) header.className = 'p-6 bg-gradient-to-r from-blue-600 to-indigo-600 text-white flex items-center gap-4';
+            if (title) title.textContent = 'No Prior Entry Record';
+            if (sub) sub.textContent = 'Vehicle exiting without entry scan';
+            if (msg) msg.textContent = `No entry transaction was recorded for this RFID card today. The user may have entered without scanning in.`;
+            if (histLabel) histLabel.textContent = 'Status:';
+            if (prompt) prompt.textContent = 'Verify user identity and permit exit departure?';
+            if (confirmText) confirmText.textContent = 'Permit Exit';
+            if (confirmBtn) confirmBtn.className = 'flex-1 px-4 py-3 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 shadow-md transition-all flex items-center justify-center gap-1.5';
+        } else {
+            if (header) header.className = 'p-6 bg-gradient-to-r from-amber-600 to-rose-600 text-white flex items-center gap-4';
+            if (title) title.textContent = 'Duplicate Exit Attempt';
+            if (sub) sub.textContent = 'Exit departure already recorded';
+            if (msg) msg.textContent = `This RFID card already recorded an exit on ${formattedTime}. Duplicate exit scan detected.`;
+            if (histLabel) histLabel.textContent = 'Previous Exit:';
+            if (prompt) prompt.textContent = 'Allow secondary departure record?';
+            if (confirmText) confirmText.textContent = 'Allow Departure';
+            if (confirmBtn) confirmBtn.className = 'flex-1 px-4 py-3 rounded-xl bg-rose-600 text-white text-sm font-bold hover:bg-rose-700 shadow-md transition-all flex items-center justify-center gap-1.5';
+        }
+    }
 
     m.classList.remove('hidden');
     setTimeout(() => {
         m.classList.remove('opacity-0');
-        m.firstElementChild.classList.remove('scale-95');
+        if (m.firstElementChild) m.firstElementChild.classList.remove('scale-95');
     }, 10);
     lucide.createIcons();
 };
@@ -1027,12 +1382,13 @@ window.closeDuplicateModal = function(isConfirmed = false) {
     const m = document.getElementById('duplicateEntryModal');
     if (!m) return;
     m.classList.add('opacity-0');
-    m.firstElementChild.classList.add('scale-95');
+    if (m.firstElementChild) m.firstElementChild.classList.add('scale-95');
     setTimeout(() => {
         m.classList.add('hidden');
-        if (!isConfirmed) {
-            showToast('Duplicate entry cancelled.', 'info');
-            resetGateScanner('Entry');
+        if (!isConfirmed && pendingDuplicate) {
+            const gateKey = pendingDuplicate.gateKey || (pendingDuplicate.direction === 'ENTRY' ? 'Entry' : 'Exit');
+            showToast('Scan conflict cancelled/denied by guard.', 'info');
+            resetGateScanner(gateKey);
             pendingDuplicate = null;
         }
     }, 300);
@@ -1040,33 +1396,95 @@ window.closeDuplicateModal = function(isConfirmed = false) {
 
 window.confirmDuplicateEntry = async function() {
     if (!pendingDuplicate) return;
-    const { uid, result, userId, gateKey } = pendingDuplicate;
+    const { uid, result, userId, gateKey, direction, conflictType, historyDetails } = pendingDuplicate;
+    const isEntry = (direction || 'ENTRY') === 'ENTRY';
+    const effectiveGateKey = gateKey || (isEntry ? 'Entry' : 'Exit');
 
     try {
+        const isPed = result.type === 'None' || result.plate === 'PEDESTRIAN' || result.type === 'Walking / Pedestrian' || result.role === 'PEDESTRIAN';
+        const userType = isPed ? 'PEDESTRIAN' : 'VEHICLE';
+        const rfidType = isPed ? 'CLOSE_RANGE' : 'LONG_RANGE';
+        const gate = isEntry ? (isPed ? 'PEDESTRIAN_ENTRY' : 'ENTRY_GATE') : (isPed ? 'PEDESTRIAN_EXIT' : 'EXIT_GATE');
+
+        const remarks = isEntry
+            ? `Re-login confirmed by guard (User entered previously at ${historyDetails || 'prior time'} & forgot to tap exit)`
+            : (conflictType === 'EXIT_NO_ENTRY'
+                ? `Exit confirmed by guard (No prior entry record on file)`
+                : `Secondary exit confirmed by guard (Prior exit was ${historyDetails || 'prior time'})`);
+
         if (isConnected) {
             await supabaseClient.from('transactions').insert({
                 rfid_uid: uid,
-                direction: 'ENTRY',
-                gate: 'ENTRY_GATE',
+                direction: isEntry ? 'ENTRY' : 'EXIT',
+                gate: gate,
                 vehicle_id: result.vehicle_id || null,
                 user_id: userId || null,
+                user_type: userType,
+                rfid_type: rfidType,
                 status: 'AUTHORIZED',
-                remarks: 'Re-entry confirmed by guard'
+                remarks: remarks
             });
         }
 
-        appState.entriesToday++;
-        result.event = 'ENTRY';
+        if (isEntry) {
+            appState.entriesToday++;
+            appState.vehiclesInside = (appState.vehiclesInside || 0) + 1;
+        } else {
+            appState.exitsToday++;
+            appState.vehiclesInside = Math.max(0, (appState.vehiclesInside || 0) - 1);
+        }
+
+        result.event = isEntry ? 'ENTRY' : 'EXIT';
+        result.status = 'AUTHORIZED';
         result.time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+        result.historyNotice = isEntry
+            ? `Re-login allowed (Prior entry: ${historyDetails || 'earlier'})`
+            : `Exit allowed (${conflictType === 'EXIT_NO_ENTRY' ? 'Manual override' : 'Prior: ' + historyDetails})`;
+        result.historyBadge = 'RE-LOGGED';
         appState.recentScans.unshift(result);
 
-        showToast(`Re-entry stored and allowed for ${result.name}!`, 'success');
+        // Update scanner visual to green/blue authorized state
+        ['', 'Dual'].forEach(prefix => {
+            const radar = document.getElementById(`radarContainer${prefix}${effectiveGateKey}`);
+            const scanStatusText = document.getElementById(`scanStatusText${prefix}${effectiveGateKey}`);
+            const radarCenter = document.getElementById(`radarCenter${prefix}${effectiveGateKey}`);
+            const scanSubtext = document.getElementById(`scanSubtext${prefix}${effectiveGateKey}`);
+            const statusLabel = document.getElementById(`resStatusLabel${prefix}${effectiveGateKey}`);
+
+            if (radar) {
+                radar.parentElement.classList.remove('status-denied');
+                radar.parentElement.classList.add('status-authorized');
+            }
+            if (scanStatusText) {
+                scanStatusText.textContent = isEntry ? 'RE-LOGIN AUTHORIZED' : 'EXIT AUTHORIZED';
+                scanStatusText.className = `text-sm sm:text-xl font-bold font-display ${isEntry ? 'text-green-600' : 'text-blue-600'} mb-1 sm:mb-2`;
+            }
+            if (radarCenter) radarCenter.innerHTML = '<i data-lucide="check" class="w-6 h-6 sm:w-10 sm:h-10 text-white"></i>';
+            if (scanSubtext) scanSubtext.textContent = remarks;
+
+            if (statusLabel) {
+                statusLabel.className = isEntry
+                    ? 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-green-50 border-green-200 text-green-700'
+                    : 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-blue-50 border-blue-200 text-blue-700';
+                statusLabel.innerHTML = isEntry ? '✓ RE-LOGIN ALLOWED' : '✓ EXIT ALLOWED';
+            }
+        });
+
+        populateScanResultCard(result, effectiveGateKey);
+
+        showToast(`${isEntry ? 'Re-login' : 'Exit'} recorded and allowed for ${result.name}!`, 'success');
         closeDuplicateModal(true);
-        renderAll();
-        setTimeout(() => resetGateScanner('Entry'), 5000);
         pendingDuplicate = null;
+        renderAll();
+        lucide.createIcons();
+
+        if (gateResetTimers[effectiveGateKey]) clearTimeout(gateResetTimers[effectiveGateKey]);
+        gateResetTimers[effectiveGateKey] = setTimeout(() => {
+            resetGateScanner(effectiveGateKey);
+            gateResetTimers[effectiveGateKey] = null;
+        }, 7000);
     } catch(err) {
-        showToast('Error storing re-entry: ' + err.message, 'error');
+        showToast('Error saving re-login: ' + err.message, 'error');
     }
 };
 
@@ -1088,7 +1506,14 @@ function resetGateScanner(gateKey) {
         const scanData = document.getElementById(`scanResultData${prefix}${gateKey}`);
         if (scanEmpty) scanEmpty.classList.remove('hidden');
         if (scanData) scanData.classList.add('hidden');
+
+        const banner = document.getElementById(`resHistoryBanner${prefix}${gateKey}`);
+        if (banner) banner.classList.add('hidden');
     });
+
+    // Reset Traffic Light back to RED STANDBY
+    updateTrafficLightWidget(gateKey, 'standby');
+
     lucide.createIcons();
 }
 
@@ -1134,58 +1559,7 @@ document.getElementById('btnDeny')?.addEventListener('click', () => {
     lucide.createIcons();
 });
 
-// =====================
-// SUPABASE REALTIME — Listen for new scans from ESP32
-// =====================
-if (isConnected) {
-    console.log('🔌 Setting up Supabase Realtime subscriptions...');
 
-    // Listen for new transactions (ESP32 ENTRY/EXIT events)
-    supabaseClient.channel('guard-txn-insert')
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'transactions' }, async (payload) => {
-            console.log('📡 New transaction INSERT from DB:', payload.new);
-            const txn = payload.new;
-            if (txn && txn.rfid_uid) {
-                // Instantly update the Live Scan monitor with what was scanned
-                await processRFIDScan(txn.rfid_uid, txn.id, txn);
-            }
-            await initState();
-        })
-        .subscribe((status) => console.log('Realtime transactions INSERT:', status));
-
-    // Listen for transaction UPDATES
-    supabaseClient.channel('guard-txn-update')
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'transactions' }, async (payload) => {
-            console.log('📡 Transaction UPDATE from DB:', payload.new);
-            await initState();
-        })
-        .subscribe((status) => console.log('Realtime transactions UPDATE:', status));
-
-    // Listen for new user registrations
-    supabaseClient.channel('guard-users')
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'users' }, (payload) => {
-            console.log('👤 New user registered:', payload.new.full_name);
-            appState.totalVehicles++;
-            renderAll();
-            showToast(`New registration: ${payload.new.full_name}`, 'info');
-        })
-        .subscribe();
-
-    // Listen for rfid_cards changes (authorization updates)
-    supabaseClient.channel('guard-rfid-cards')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'rfid_cards' }, async () => {
-            await initState();
-        })
-        .subscribe();
-
-    // Listen for special tags
-    supabaseClient.channel('guard-special')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'special_tags' }, async () => {
-            const { data: st } = await supabaseClient.from('special_tags').select('*');
-            if (st) appState.specialTags = st;
-        })
-        .subscribe();
-}
 
 // =====================
 // VISITOR ACTIONS

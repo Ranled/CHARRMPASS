@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Dashboard - CHARRMPASS</title>
+    <title>CHARRMPASS: A Web-Based Smart Entry and Exit Monitoring System Using RFID Technology for Aklan State University - Ibajay Campus</title>
     <link rel="icon" type="image/png" href="logocharrmpark.png">
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -187,7 +187,10 @@
                             <h2 class="text-3xl font-display font-extrabold text-slate-800">User Management</h2>
                             <p class="text-slate-500 font-medium mt-1">Manage registered walking pedestrians (Close-Range) and vehicle drivers (Long-Range UHF).</p>
                         </div>
-                        <div class="flex items-center gap-2">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <button id="btnRefreshUsers" onclick="refreshUsersData()" class="bg-white border border-slate-200 text-slate-700 px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-slate-50 shadow-sm flex items-center gap-2 transition-all" title="Refresh User List">
+                                <i data-lucide="rotate-cw" id="iconRefreshUsers" class="w-4 h-4 text-emerald-600"></i> Refresh
+                            </button>
                             <button onclick="openBulkUploadModal()" class="bg-emerald-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-emerald-700 shadow-md flex items-center gap-2 transition-all">
                                 <i data-lucide="upload-cloud" class="w-4 h-4"></i> Bulk Upload
                             </button>
@@ -1227,7 +1230,7 @@
                                     <i data-lucide="bluetooth" class="w-4 h-4 text-blue-600"></i> Bluetooth BLE Provisioning
                                 </span>
                             </h2>
-                            <p class="text-slate-500 font-medium mt-1">Configure Wi-Fi credentials on ESP32 boom barrier units, pedestrian turnstiles, and IoT hardware nodes wirelessly through Bluetooth Low Energy (BLE).</p>
+                            <p class="text-slate-500 font-medium mt-1">Configure Wi-Fi credentials on ESP32 gate monitoring units, pedestrian turnstiles, and IoT hardware nodes wirelessly through Bluetooth Low Energy (BLE).</p>
                         </div>
                         <div class="flex items-center gap-2">
                             <span id="bleBrowserSupportBadge" class="px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 shadow-sm">
@@ -1295,7 +1298,7 @@
                                         <i data-lucide="radio-receiver" class="w-4 h-4 text-emerald-700"></i> Long-Range RFID Reader / Windshield Tag
                                     </div>
                                     <p class="text-xs text-emerald-800/80 leading-relaxed">
-                                        Motorcycles, cars, SUVs, and delivery vans with windshield/headlight UHF tags are automatically detected at a distance at boom barrier gates.
+                                        Motorcycles, cars, SUVs, and delivery vans with windshield/headlight UHF tags are automatically detected at a distance for automated campus gate monitoring (no barrier required).
                                     </p>
                                 </div>
                                 <div class="p-3 bg-white/90 rounded-xl border border-emerald-100 text-[11px] text-emerald-900 font-medium space-y-1">
@@ -1514,10 +1517,10 @@
                             </div>
                         </div>
 
-                        <!-- Right: Live BLE Provisioning Terminal & Device Health Status -->
-                        <div class="lg:col-span-6 space-y-6">
+                        <!-- Right: Live BLE Provisioning Terminal -->
+                        <div class="lg:col-span-6 flex flex-col">
                             <!-- Provisioning Terminal Stream -->
-                            <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col h-[320px]">
+                            <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass flex flex-col h-full min-h-[480px]">
                                 <div class="flex items-center justify-between border-b border-slate-100 pb-3 mb-3">
                                     <div class="flex items-center gap-2">
                                         <i data-lucide="terminal" class="w-4 h-4 text-slate-600"></i>
@@ -1530,58 +1533,203 @@
                                     <div class="text-slate-400">// Select a target ESP32 gate unit and click "Scan &amp; Connect via Bluetooth"</div>
                                 </div>
                             </div>
+                        </div>
+                    </div> <!-- /#bleProvisioningCard -->
 
-                                     <!-- Gate Status & Live Connectivity Card -->
-                            <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass space-y-4">
-                                <div class="flex items-center justify-between border-b border-slate-100 pb-3">
-                                    <div class="flex items-center gap-2">
-                                        <i data-lucide="shield-check" class="w-4 h-4 text-emerald-600"></i>
-                                        <h3 class="font-display font-bold text-sm text-slate-800">Gate Network Health &amp; Cloud Ping</h3>
-                                    </div>
-                                    <button onclick="pingAllGates()" class="text-xs font-bold text-charm-dark hover:underline flex items-center gap-1">
-                                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Test Gate Ping
-                                    </button>
+                    <!-- Hardware & Component Status Matrix (Full-Width Dashboard Subsystem) -->
+                    <div class="glass-card rounded-3xl p-6 border border-white/60 shadow-glass space-y-5 mt-6">
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                            <div class="flex items-center gap-2.5">
+                                <div class="w-8 h-8 rounded-xl bg-charm-dark/10 flex items-center justify-center text-charm-dark">
+                                    <i data-lucide="cpu" class="w-4 h-4"></i>
                                 </div>
-
-                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3" id="gateHealthCardsContainer">
-                                    <div class="p-3.5 rounded-2xl bg-white border border-slate-200/80 shadow-sm flex flex-col justify-between" id="entryGateCard">
-                                        <div>
-                                            <div class="flex items-center justify-between">
-                                                <div class="text-[10px] font-bold text-slate-400 uppercase">Entry Gate (ESP32)</div>
-                                                <button onclick="openChangeGateWifiModal(null, 'CHARRMPASS Entry Unit', 'CHARRMPASS_GATE_ENTRY')" class="text-[10px] font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 bg-emerald-50 px-2 py-0.5 rounded-md hover:bg-emerald-100 transition-colors" title="Change Wi-Fi for Entry Gate">
-                                                    <i data-lucide="wifi" class="w-3 h-3"></i> Change Wi-Fi
-                                                </button>
-                                            </div>
-                                            <div class="text-sm font-black text-slate-800 mt-1 flex items-center gap-1.5" id="entryGateStatusBadge">
-                                                <span class="w-2 h-2 rounded-full bg-slate-300"></span> CHECKING...
-                                            </div>
-                                        </div>
-                                        <div class="text-[10px] text-slate-500 font-mono mt-1" id="entryGateIpText">Checking Cloud Sync...</div>
-                                    </div>
-                                    <div class="p-3.5 rounded-2xl bg-white border border-slate-200/80 shadow-sm flex flex-col justify-between" id="exitGateCard">
-                                        <div>
-                                            <div class="flex items-center justify-between">
-                                                <div class="text-[10px] font-bold text-slate-400 uppercase">Exit Gate (ESP32)</div>
-                                                <button onclick="openChangeGateWifiModal(null, 'CHARRMPASS Exit Unit', 'CHARRMPASS_GATE_EXIT')" class="text-[10px] font-bold text-blue-700 hover:text-blue-800 flex items-center gap-1 bg-blue-50 px-2 py-0.5 rounded-md hover:bg-blue-100 transition-colors" title="Change Wi-Fi for Exit Gate">
-                                                    <i data-lucide="wifi" class="w-3 h-3"></i> Change Wi-Fi
-                                                </button>
-                                            </div>
-                                            <div class="text-sm font-black text-slate-800 mt-1 flex items-center gap-1.5" id="exitGateStatusBadge">
-                                                <span class="w-2 h-2 rounded-full bg-slate-300"></span> CHECKING...
-                                            </div>
-                                        </div>
-                                        <div class="text-[10px] text-slate-500 font-mono mt-1" id="exitGateIpText">Checking Cloud Sync...</div>
-                                    </div>
-                                </div>
-
-                                <div class="flex items-center justify-between p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 font-semibold">
-                                    <span class="flex items-center gap-2">
-                                        <i data-lucide="check-circle-2" class="w-4 h-4 text-emerald-600"></i>
-                                        <span>Supabase Realtime Channel: Active &amp; Listening</span>
-                                    </span>
-                                    <span class="font-mono font-bold text-[11px]" id="syncedGatesCount">Syncing Gates...</span>
+                                <div>
+                                    <h3 class="font-display font-bold text-sm text-slate-900">Hardware &amp; Component Status Matrix</h3>
+                                    <p class="text-[11px] text-slate-500">Live operational diagnostics of ESP32 MCUs, MicroSD memory, RFID readers, traffic light LEDs, buzzers, and gate relays.</p>
                                 </div>
                             </div>
+                            <button onclick="pingAllGates()" class="text-xs font-bold text-charm-dark hover:text-charm-mid flex items-center gap-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-xl transition-all self-start sm:self-auto shadow-sm">
+                                <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Refresh Diagnostics
+                            </button>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5" id="gateHealthCardsContainer">
+                            <!-- 1. CHARRMPASS Entry Unit -->
+                            <div class="p-5 rounded-2xl bg-white border border-slate-200/80 shadow-sm flex flex-col justify-between space-y-3 hover:shadow-md transition-shadow" id="entryGateCard">
+                                <div>
+                                    <div class="flex items-start justify-between gap-2 border-b border-slate-100 pb-3">
+                                        <div>
+                                            <span class="text-[10px] font-black text-emerald-700 uppercase bg-emerald-50 px-2.5 py-0.5 rounded border border-emerald-200 tracking-wider">13.56 MHz HF</span>
+                                            <div class="text-sm font-black text-slate-900 mt-1">CHARRMPASS Entry Unit</div>
+                                            <div class="text-[11px] font-bold text-emerald-700">PEDESTRIAN (ENTRY) • Pedestrian Gate</div>
+                                            <div class="text-[10px] text-slate-400 font-mono mt-0.5">CHARRMPASS_GATE_ENTRY</div>
+                                        </div>
+                                        <button onclick="openChangeGateWifiModal(null, 'CHARRMPASS Entry Unit', 'CHARRMPASS_GATE_ENTRY')" class="text-xs font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-xl border border-emerald-200 transition-all shadow-sm shrink-0" title="Change Wi-Fi for Entry Unit">
+                                            <i data-lucide="wifi" class="w-3.5 h-3.5"></i> Wi-Fi
+                                        </button>
+                                    </div>
+
+                                    <!-- Microcontroller State -->
+                                    <div class="mt-3 flex items-center justify-between bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                                        <span class="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                                            <i data-lucide="cpu" class="w-3.5 h-3.5 text-slate-500"></i> ESP32 Controller
+                                        </span>
+                                        <span class="text-xs font-black" id="entryGateStatusBadge">
+                                            <span class="w-2 h-2 rounded-full bg-slate-300 inline-block mr-1"></span> CHECKING...
+                                        </span>
+                                    </div>
+                                    <div class="text-[10px] text-slate-500 font-mono mt-1 px-1" id="entryGateIpText">Checking Cloud Sync...</div>
+
+                                    <!-- Component Telemetry Breakdown -->
+                                    <div class="mt-3.5 space-y-2 border-t border-slate-100 pt-3 text-xs">
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="hard-drive" class="w-3.5 h-3.5 text-indigo-500"></i> MicroSD Memory:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="entrySdStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> MOUNTED (HSPI)</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="radio" class="w-3.5 h-3.5 text-blue-500"></i> RFID HF Reader:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="entryRfidStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> MFRC522 READY</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="traffic-cone" class="w-3.5 h-3.5 text-amber-500"></i> Traffic Light LEDs:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="entryLedStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> 🔴 🟡 🟢 ACTIVE</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="volume-2" class="w-3.5 h-3.5 text-purple-500"></i> Active Buzzer:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="entryBuzzerStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> PWM READY</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="monitor" class="w-3.5 h-3.5 text-cyan-500"></i> 16x2 I2C LCD:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="entryLcdStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> INITIALIZED</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="toggle-right" class="w-3.5 h-3.5 text-slate-500"></i> Actuator Relay:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="entryRelayStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> ARMED</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 2. CHARRMPASS Exit Unit -->
+                            <div class="p-5 rounded-2xl bg-white border border-slate-200/80 shadow-sm flex flex-col justify-between space-y-3 hover:shadow-md transition-shadow" id="exitGateCard">
+                                <div>
+                                    <div class="flex items-start justify-between gap-2 border-b border-slate-100 pb-3">
+                                        <div>
+                                            <span class="text-[10px] font-black text-blue-700 uppercase bg-blue-50 px-2.5 py-0.5 rounded border border-blue-200 tracking-wider">13.56 MHz HF</span>
+                                            <div class="text-sm font-black text-slate-900 mt-1">CHARRMPASS Exit Unit</div>
+                                            <div class="text-[11px] font-bold text-blue-700">PEDESTRIAN (EXIT) • Pedestrian Gate</div>
+                                            <div class="text-[10px] text-slate-400 font-mono mt-0.5">CHARRMPASS_GATE_EXIT</div>
+                                        </div>
+                                        <button onclick="openChangeGateWifiModal(null, 'CHARRMPASS Exit Unit', 'CHARRMPASS_GATE_EXIT')" class="text-xs font-bold text-blue-700 hover:text-blue-800 flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-xl border border-blue-200 transition-all shadow-sm shrink-0" title="Change Wi-Fi for Exit Unit">
+                                            <i data-lucide="wifi" class="w-3.5 h-3.5"></i> Wi-Fi
+                                        </button>
+                                    </div>
+
+                                    <!-- Microcontroller State -->
+                                    <div class="mt-3 flex items-center justify-between bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                                        <span class="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                                            <i data-lucide="cpu" class="w-3.5 h-3.5 text-slate-500"></i> ESP32 Controller
+                                        </span>
+                                        <span class="text-xs font-black" id="exitGateStatusBadge">
+                                            <span class="w-2 h-2 rounded-full bg-slate-300 inline-block mr-1"></span> CHECKING...
+                                        </span>
+                                    </div>
+                                    <div class="text-[10px] text-slate-500 font-mono mt-1 px-1" id="exitGateIpText">Checking Cloud Sync...</div>
+
+                                    <!-- Component Telemetry Breakdown -->
+                                    <div class="mt-3.5 space-y-2 border-t border-slate-100 pt-3 text-xs">
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="hard-drive" class="w-3.5 h-3.5 text-indigo-500"></i> MicroSD Memory:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="exitSdStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> MOUNTED (HSPI)</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="radio" class="w-3.5 h-3.5 text-blue-500"></i> RFID HF Reader:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="exitRfidStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> MFRC522 READY</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="traffic-cone" class="w-3.5 h-3.5 text-amber-500"></i> Traffic Light LEDs:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="exitLedStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> 🔴 🟡 🟢 ACTIVE</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="volume-2" class="w-3.5 h-3.5 text-purple-500"></i> Active Buzzer:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="exitBuzzerStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> PWM READY</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="monitor" class="w-3.5 h-3.5 text-cyan-500"></i> 16x2 I2C LCD:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="exitLcdStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> INITIALIZED</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="toggle-right" class="w-3.5 h-3.5 text-slate-500"></i> Actuator Relay:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="exitRelayStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> ARMED</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 3. CHARRMPASS Gate Unit 1 (Long-Range UHF Vehicle Entry) -->
+                            <div class="p-5 rounded-2xl bg-white border border-amber-200/80 shadow-sm flex flex-col justify-between space-y-3 hover:shadow-md transition-shadow" id="uhfGateCard">
+                                <div>
+                                    <div class="flex items-start justify-between gap-2 border-b border-amber-100 pb-3">
+                                        <div>
+                                            <span class="text-[10px] font-black text-amber-700 uppercase bg-amber-50 px-2.5 py-0.5 rounded border border-amber-200 tracking-wider whitespace-nowrap">~860–960 MHz UHF</span>
+                                            <div class="text-sm font-black text-slate-900 mt-1">CHARRMPASS Gate Unit 1</div>
+                                            <div class="text-[11px] font-bold text-amber-800">VEHICLE (ENTRY) • Main Gate</div>
+                                            <div class="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 mt-1 inline-block">Free-Flow Automated Pass (No Barrier)</div>
+                                            <div class="text-[10px] text-slate-400 font-mono mt-0.5">CHARRMPASS_GATE_01</div>
+                                        </div>
+                                        <button onclick="openChangeGateWifiModal(null, 'CHARRMPASS Gate Unit 1', 'CHARRMPASS_GATE_01')" class="text-xs font-bold text-amber-800 hover:text-amber-900 flex items-center gap-1.5 bg-amber-50 hover:bg-amber-100 px-3 py-1.5 rounded-xl border border-amber-200 transition-all shadow-sm shrink-0" title="Change Wi-Fi for Gate Unit 1">
+                                            <i data-lucide="wifi" class="w-3.5 h-3.5"></i> Wi-Fi
+                                        </button>
+                                    </div>
+
+                                    <!-- Microcontroller State -->
+                                    <div class="mt-3 flex items-center justify-between bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                                        <span class="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                                            <i data-lucide="cpu" class="w-3.5 h-3.5 text-slate-500"></i> ESP32 Controller
+                                        </span>
+                                        <span class="text-xs font-black" id="uhfGateStatusBadge">
+                                            <span class="w-2 h-2 rounded-full bg-slate-300 inline-block mr-1"></span> CHECKING...
+                                        </span>
+                                    </div>
+                                    <div class="text-[10px] text-slate-500 font-mono mt-1 px-1" id="uhfGateIpText">Checking Cloud Sync...</div>
+
+                                    <!-- Component Telemetry Breakdown -->
+                                    <div class="mt-3.5 space-y-2 border-t border-slate-100 pt-3 text-xs">
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="hard-drive" class="w-3.5 h-3.5 text-indigo-500"></i> MicroSD Memory:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="uhfSdStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> MOUNTED (HSPI)</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="radio" class="w-3.5 h-3.5 text-amber-600"></i> Boland UHF Reader:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="uhfRfidStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> WIEGAND 26/34</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="traffic-cone" class="w-3.5 h-3.5 text-amber-500"></i> Status &amp; Pass LEDs:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="uhfLedStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> 🔴 🟢 OPERATIONAL</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="volume-2" class="w-3.5 h-3.5 text-purple-500"></i> Audio Buzzer:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="uhfBuzzerStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> 3/3 MATCH BEEP</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="monitor" class="w-3.5 h-3.5 text-cyan-500"></i> 16x2 I2C LCD:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="uhfLcdStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> INITIALIZED</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="toggle-right" class="w-3.5 h-3.5 text-slate-500"></i> Pass Signal / Relay:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="uhfRelayStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> SIGNAL ARMED</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col sm:flex-row items-center justify-between p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 font-semibold gap-2">
+                            <span class="flex items-center gap-2">
+                                <i data-lucide="check-circle-2" class="w-4 h-4 text-emerald-600"></i>
+                                <span>Hardware Subsystem Architecture: All 3 Core ESP32 Gate Nodes Monitored</span>
+                            </span>
+                            <span class="font-mono font-bold text-[11px] bg-white px-3 py-1 rounded-lg border border-emerald-200 shadow-sm" id="syncedGatesCount">Syncing Component Diagnostics...</span>
                         </div>
                     </div>
 
@@ -1595,9 +1743,6 @@
                             <div class="flex items-center gap-2">
                                 <button onclick="openDeviceModal()" class="px-3.5 py-2 rounded-xl bg-charm-dark text-white hover:opacity-90 text-xs font-bold shadow-sm flex items-center gap-1.5 transition-all">
                                     <i data-lucide="plus-circle" class="w-4 h-4 text-charm-yellow"></i> Register Gate Unit
-                                </button>
-                                <button onclick="toggleArduinoSketchDrawer()" class="px-3.5 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 hover:text-charm-dark text-xs font-bold shadow-sm flex items-center gap-1.5 transition-all">
-                                    <i data-lucide="code-2" class="w-4 h-4 text-blue-600"></i> View ESP32 BLE Code
                                 </button>
                             </div>
                         </div>
@@ -1626,141 +1771,9 @@
                                 </tbody>
                             </table>
                         </div>
-                    </div>
-
-                    <!-- ESP32 Arduino BLE Provisioning Code Helper Drawer -->
-                    <div id="arduinoBleDrawer" class="hidden glass-card rounded-3xl p-6 border border-white/60 shadow-glass space-y-4 animate-slide-up">
-                        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
-                            <div class="flex items-center gap-2">
-                                <i data-lucide="code" class="w-5 h-5 text-blue-600"></i>
-                                <h3 class="font-display font-bold text-base text-slate-800">ESP32 Bluetooth Low Energy (BLE) Wi-Fi Provisioning Firmware Snippet (.ino)</h3>
-                            </div>
-                            <button onclick="copyArduinoBleSnippet()" class="px-3.5 py-1.5 bg-charm-dark text-white rounded-xl text-xs font-bold hover:opacity-90 flex items-center gap-1.5 shadow-sm">
-                                <i data-lucide="copy" class="w-3.5 h-3.5"></i> Copy Code
-                            </button>
-                        </div>
-                        <p class="text-xs text-slate-500">Flash this production code snippet onto your ESP32 board to enable <strong>100% Bluetooth Low Energy (BLE) Wi-Fi provisioning</strong>. <strong class="text-red-600">No hardcoded credentials</strong> — SSID &amp; password stored exclusively in ESP32 NVS Flash (Preferences). Credentials survive power cycles; send <code class="bg-slate-100 text-slate-700 px-1 rounded font-bold">RESET</code> via Serial Monitor to wipe and re-enter setup mode at any time.</p>
-                        <pre class="bg-slate-900 text-slate-200 font-mono text-xs p-4 rounded-2xl overflow-x-auto custom-scrollbar border border-slate-800"><code id="arduinoBleCodeBlock">#include &lt;WiFi.h&gt;
-#include &lt;HTTPClient.h&gt;
-#include &lt;Preferences.h&gt;
-#include &lt;BLEDevice.h&gt;
-#include &lt;BLEServer.h&gt;
-#include &lt;BLEUtils.h&gt;
-#include &lt;BLE2902.h&gt;
-
-#define GATE_ID             "CHARRMPASS_GATE_ENTRY"
-#define GATE_TYPE           "ENTRY"
-#define BLE_DEVICE_NAME     "CHARRMPASS_ENTRY_BLE"
-#define BLE_SERVICE_UUID    "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
-#define BLE_CHAR_UUID       "beb5483e-36e1-4688-b7f5-ea07361b26a8"
-
-const char* SUPABASE_URL  = "https://sdwjkgtxrpeajuymgpxp.supabase.co";
-const char* SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...";
-
-Preferences preferences;
-BLEServer* pBleServer = NULL;
-BLECharacteristic* pBleCharacteristic = NULL;
-bool bleClientConnected = false;
-bool bleServerRunning = false;
-bool newWifiCredentialsReceived = false;
-String currentSsid = "";
-String currentPass = "";
-
-class BleServerCallbacks : public BLEServerCallbacks {
-  void onConnect(BLEServer* pServer) {
-    bleClientConnected = true;
-    Serial.println("[BLE] Web Bluetooth Admin Connected!");
-  }
-  void onDisconnect(BLEServer* pServer) {
-    bleClientConnected = false;
-    Serial.println("[BLE] Bluetooth Client Disconnected.");
-    if (bleServerRunning) BLEDevice::startAdvertising();
-  }
-};
-
-class BleCharCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic *pCharacteristic) override {
-    String rxValue = pCharacteristic->getValue().c_str();
-    if (rxValue.length() == 0) return;
-    Serial.println("[BLE RX] " + rxValue);
-
-    // Parse SSID and Password (JSON: {"ssid":"...","pass":"..."} or "SSID:PASS")
-    String newSsid = "", newPass = "";
-    int sIndex = rxValue.indexOf("\"ssid\"");
-    if (sIndex != -1) {
-      int c = rxValue.indexOf(':', sIndex);
-      int q1 = rxValue.indexOf('"', c);
-      int q2 = rxValue.indexOf('"', q1 + 1);
-      newSsid = rxValue.substring(q1 + 1, q2);
-    }
-    int pIndex = rxValue.indexOf("\"pass\"");
-    if (pIndex != -1) {
-      int c = rxValue.indexOf(':', pIndex);
-      int q1 = rxValue.indexOf('"', c);
-      int q2 = rxValue.indexOf('"', q1 + 1);
-      newPass = rxValue.substring(q1 + 1, q2);
-    }
-    if (newSsid.length() == 0) {
-      int sep = rxValue.indexOf(':');
-      if (sep != -1) {
-        newSsid = rxValue.substring(0, sep);
-        newPass = rxValue.substring(sep + 1);
-      }
-    }
-    if (newSsid.length() > 0) {
-      currentSsid = newSsid; currentPass = newPass;
-      preferences.begin("charrm_wifi", false);
-      preferences.putString("ssid", currentSsid);
-      preferences.putString("pass", currentPass);
-      preferences.end();
-      
-      // Notify Admin Phone / Web Browser of Saved Credentials
-      if (pBleCharacteristic) {
-        pBleCharacteristic->setValue("{\"event\":\"SAVED\",\"ssid\":\"" + currentSsid + "\"}");
-        pBleCharacteristic->notify();
-      }
-      newWifiCredentialsReceived = true;
-    }
-  }
-};
-
-void sendDeviceHeartbeat() {
-  if (WiFi.status() != WL_CONNECTED) return;
-  HTTPClient http;
-  String url = String(SUPABASE_URL) + "/rest/v1/devices?esp32_identifier=eq." + String(GATE_ID);
-  http.begin(url);
-  http.addHeader("apikey", SUPABASE_ANON);
-  http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON);
-  http.addHeader("Content-Type", "application/json");
-  String payload = "{\"status\":\"ONLINE\",\"last_online\":\"now()\"}";
-  int code = http.PATCH(payload);
-  http.end();
-}
-
-void startBleServer() {
-  if (bleServerRunning) return;
-  BLEDevice::init(BLE_DEVICE_NAME);
-  pBleServer = BLEDevice::createServer();
-  pBleServer->setCallbacks(new BleServerCallbacks());
-  BLEService *pService = pBleServer->createService(BLE_SERVICE_UUID);
-  pBleCharacteristic = pService->createCharacteristic(
-      BLE_CHAR_UUID,
-      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY
-  );
-  pBleCharacteristic->setCallbacks(new BleCharCallbacks());
-  pBleCharacteristic->addDescriptor(new BLE2902());
-  pService->start();
-  BLEAdvertising *pAdv = BLEDevice::getAdvertising();
-  pAdv->addServiceUUID(BLE_SERVICE_UUID);
-  pAdv->start();
-  bleServerRunning = true;
-}</code></pre>
-                    </div>
-                </div>
-            </div>
-        </main> </div>
-                </div>
-            </div>
+                    </div> <!-- /.glass-card -->
+                </div> <!-- /#aview-wifi -->
+            </div> <!-- /.flex-1.overflow-y-auto -->
         </main>
     </div>
 
@@ -1779,13 +1792,61 @@ void startBleServer() {
                     <div class="space-y-1 md:col-span-2"><label class="form-label">Address</label><input type="text" id="formAddress" class="form-input"></div>
                     <div class="space-y-1"><label class="form-label">Program</label><input type="text" id="formProgram" class="form-input"></div>
                     <div class="space-y-1"><label class="form-label">Section</label><input type="text" id="formSection" class="form-input"></div>
-                    <div class="space-y-1"><label class="form-label">RFID Tag UID (UHF Sticker or ID Card) *</label><input type="text" id="formUid" required placeholder="e.g. 0419670354 or B7 78 96 31" class="form-input font-mono uppercase"></div>
                     <div class="space-y-1"><label class="form-label">Role *</label><select id="formRole" required class="form-input" onchange="toggleFormRoleDetail()"><option value="Student">Student</option><option value="Faculty">Faculty</option><option value="Staff">Staff</option><option value="Others">Others (Vendor / Visitor)</option></select></div>
                     <div class="space-y-1 hidden" id="boxFormRoleDetail"><label class="form-label">Specify Role / Detail *</label><input type="text" id="formRoleDetail" placeholder="e.g. Canteen Vendor, Contractor" class="form-input"></div>
+
+                    <!-- RFID Credential Assignment Card -->
+                    <div class="md:col-span-2 p-4 rounded-2xl bg-slate-50/80 border border-slate-200 space-y-3">
+                        <div class="flex items-center justify-between border-b border-slate-200/60 pb-2">
+                            <div class="flex items-center gap-2">
+                                <div class="w-7 h-7 rounded-lg bg-charm-dark text-charm-yellow flex items-center justify-center font-bold text-xs shadow-xs">
+                                    <i data-lucide="nfc" class="w-4 h-4"></i>
+                                </div>
+                                <div>
+                                    <h4 class="text-xs font-black uppercase tracking-wider text-slate-800">RFID Credentials Assignment</h4>
+                                    <p class="text-[11px] text-slate-400">Assign Close-Range tap card, Long-Range UHF vehicle sticker, or both.</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                            <div class="space-y-1.5">
+                                <label class="text-xs font-bold text-slate-700 flex items-center justify-between">
+                                    <span class="flex items-center gap-1.5 text-blue-700">
+                                        <i data-lucide="credit-card" class="w-3.5 h-3.5"></i> Close-Range RFID UID
+                                    </span>
+                                    <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">13.56MHz Card</span>
+                                </label>
+                                <div class="flex gap-2">
+                                    <input type="text" id="formUidClose" placeholder="e.g. 04 19 67 03 54" class="w-full text-xs font-mono font-bold uppercase px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all">
+                                    <button type="button" id="btnScanCloseUserModal" onclick="startModalRfidScanListener('CLOSE_RANGE')" class="px-3 py-2 bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-600 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1 shrink-0 cursor-pointer" title="Scan card on Entry RFID">
+                                        <i data-lucide="radio" class="w-3.5 h-3.5"></i> <span id="btnScanCloseUserModalText">Scan</span>
+                                    </button>
+                                </div>
+                                <p class="text-[10px] text-slate-400">Mifare tap card for walking pedestrian gates</p>
+                            </div>
+                            <div class="space-y-1.5">
+                                <label class="text-xs font-bold text-slate-700 flex items-center justify-between">
+                                    <span class="flex items-center gap-1.5 text-purple-700">
+                                        <i data-lucide="radio" class="w-3.5 h-3.5"></i> Long-Range UHF UID
+                                    </span>
+                                    <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-800">900MHz UHF</span>
+                                </label>
+                                <div class="flex gap-2">
+                                    <input type="text" id="formUidLong" placeholder="e.g. 93 8B A7 FE" class="w-full text-xs font-mono font-bold uppercase px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition-all">
+                                    <button type="button" id="btnScanLongUserModal" onclick="startModalRfidScanListener('LONG_RANGE')" class="px-3 py-2 bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-600 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1 shrink-0 cursor-pointer" title="Scan sticker on Long-Range UHF">
+                                        <i data-lucide="radio" class="w-3.5 h-3.5"></i> <span id="btnScanLongUserModalText">Scan</span>
+                                    </button>
+                                </div>
+                                <p class="text-[10px] text-slate-400">Windshield sticker for vehicle drive-through</p>
+                            </div>
+                            <input type="hidden" id="formUid">
+                        </div>
+                    </div>
+
                     <div class="md:col-span-2 mt-2 pt-4 border-t border-slate-100 flex items-center justify-between">
                         <div>
-                            <h4 class="text-sm font-bold text-slate-800">Vehicle Information (For Long-Range UHF Access)</h4>
-                            <p class="text-[11px] text-slate-400">If registered with a vehicle, the RFID tag above is automatically linked as a Long-Range UHF Vehicle pass.</p>
+                            <h4 class="text-sm font-bold text-slate-800">Vehicle Information (Optional)</h4>
+                            <p class="text-[11px] text-slate-400">Fill in vehicle details if this stakeholder drives a registered motorcycle or car on campus.</p>
                         </div>
                     </div>
                     <div class="space-y-1"><label class="form-label">Vehicle Type</label><select id="formVehType" class="form-input"><option value="Motorcycle">Motorcycle</option><option value="Car">Car</option><option value="SUV">SUV</option><option value="Van">Van</option><option value="None">None (Pedestrian Only)</option></select></div>
@@ -1955,7 +2016,14 @@ void startBleServer() {
                             </div>
                         </div>
 
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-200/60">
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-200/60">
+                            <div class="space-y-1">
+                                <label class="text-[11px] font-bold text-slate-600">Full Name Format / Order</label>
+                                <select id="bulkStudentNameOrder" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white">
+                                    <option value="FIRST_FIRST" selected>👤 First Name First (e.g. Juan M. Dela Cruz)</option>
+                                    <option value="LAST_FIRST">📋 Last Name First (e.g. Dela Cruz, Juan M.)</option>
+                                </select>
+                            </div>
                             <div class="space-y-1">
                                 <label class="text-[11px] font-bold text-slate-600">Default Access / Transit Mode</label>
                                 <select id="bulkStudentTransit" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white">
@@ -2065,7 +2133,7 @@ void startBleServer() {
 
                     <!-- STEP 2: FACULTY SETTINGS -->
                     <div class="bg-slate-50 p-5 rounded-2xl border border-slate-200/80 space-y-4">
-                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                             <div class="space-y-1">
                                 <label class="text-[11px] font-bold text-slate-600">Department / College *</label>
                                 <select id="bulkFacultyDept" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white"></select>
@@ -2076,6 +2144,13 @@ void startBleServer() {
                                     <option value="Faculty">Faculty (Instructor / Professor)</option>
                                     <option value="Staff">Staff (Admin / Maintenance)</option>
                                     <option value="Others">Others (Vendor / Visitor)</option>
+                                </select>
+                            </div>
+                            <div class="space-y-1">
+                                <label class="text-[11px] font-bold text-slate-600">Full Name Format / Order</label>
+                                <select id="bulkFacultyNameOrder" class="w-full text-xs font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-white">
+                                    <option value="FIRST_FIRST" selected>👤 First Name First (e.g. Alan M. Turing)</option>
+                                    <option value="LAST_FIRST">📋 Last Name First (e.g. Turing, Alan M.)</option>
                                 </select>
                             </div>
                             <div class="space-y-1">
@@ -2181,7 +2256,16 @@ void startBleServer() {
 
                     <!-- Active Programs & Sections Badge Grid -->
                     <div class="space-y-3">
-                        <h4 class="text-xs font-black uppercase tracking-wider text-slate-500">Configured Programs &amp; Active Sections</h4>
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                            <h4 class="text-xs font-black uppercase tracking-wider text-slate-500">Configured Programs &amp; Active Sections</h4>
+                            <span class="text-[11px] font-medium text-slate-400 flex items-center gap-1.5">
+                                <span>Click</span>
+                                <span class="inline-flex items-center text-red-500 font-bold gap-0.5"><i data-lucide="trash-2" class="w-3 h-3"></i> delete</span>
+                                <span>on program card or</span>
+                                <span class="inline-flex items-center text-red-500 font-black px-1 rounded bg-red-50">×</span>
+                                <span>on section badge</span>
+                            </span>
+                        </div>
                         <div id="academicProgramsBadgesList" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
                     </div>
                 </div>
@@ -2269,6 +2353,35 @@ void startBleServer() {
                         <span id="btnExecuteBulkImportText">Import to CHARRMPASS</span>
                     </button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- ACADEMIC PROGRAM / SECTION DELETE CONFIRM MODAL -->
+    <!-- ========================================== -->
+    <div id="academicConfirmModal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4 opacity-0 transition-opacity duration-200">
+        <div id="academicConfirmModalContent" class="bg-white rounded-3xl w-full max-w-md shadow-2xl border border-slate-100 p-6 transform scale-95 transition-transform duration-200 space-y-4">
+            <div class="flex items-start gap-4">
+                <div class="w-12 h-12 rounded-2xl bg-red-50 text-red-600 border border-red-100 flex items-center justify-center shrink-0 shadow-sm">
+                    <i data-lucide="alert-triangle" class="w-6 h-6"></i>
+                </div>
+                <div class="flex-1">
+                    <h3 id="academicConfirmTitle" class="font-display font-black text-base text-slate-800">Confirm Deletion</h3>
+                    <p id="academicConfirmMessage" class="text-xs text-slate-500 mt-1 leading-relaxed">Are you sure you want to delete this academic item?</p>
+                </div>
+            </div>
+
+            <div id="academicConfirmDetails" class="p-3.5 rounded-2xl bg-slate-50 border border-slate-100 text-xs"></div>
+
+            <div class="flex items-center gap-2.5 pt-2">
+                <button type="button" onclick="closeAcademicConfirmModal()" class="flex-1 py-2.5 px-4 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all">
+                    Cancel
+                </button>
+                <button type="button" id="academicConfirmBtn" onclick="executeAcademicConfirmedDelete()" class="flex-1 py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold shadow-md shadow-red-600/20 flex items-center justify-center gap-1.5 transition-all">
+                    <i data-lucide="trash-2" class="w-4 h-4"></i>
+                    <span>Confirm Delete</span>
+                </button>
             </div>
         </div>
     </div>
@@ -2477,7 +2590,7 @@ void startBleServer() {
                                 </div>
                                 <div>
                                     <h5 id="revRfidStationTitle" class="text-sm font-display font-extrabold text-charm-dark uppercase tracking-wider">Physical RFID Card Assignment Station</h5>
-                                    <p id="revRfidStationSubtitle" class="text-xs text-slate-500">Assign a physical 13.56MHz RFID card UID or Long-Range UHF Sticker to authorize gate boom barriers.</p>
+                                    <p id="revRfidStationSubtitle" class="text-xs text-slate-500">Assign a physical 13.56MHz RFID card UID or Long-Range UHF Sticker to authorize campus gate entry & exit.</p>
                                 </div>
                             </div>
                             <div class="flex items-center gap-2">
@@ -2487,16 +2600,26 @@ void startBleServer() {
                             </div>
                         </div>
 
+                        <!-- Range Type Selector in Review Modal -->
+                        <div class="flex flex-wrap items-center gap-2 bg-white/90 p-1.5 rounded-2xl border border-slate-200 w-fit">
+                            <button type="button" id="revTypeBtnClose" onclick="switchReviewRfidType('CLOSE_RANGE')" class="px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 bg-blue-600 text-white shadow-xs">
+                                <i data-lucide="credit-card" class="w-3.5 h-3.5"></i> Close-Range (13.56MHz Card)
+                            </button>
+                            <button type="button" id="revTypeBtnLong" onclick="switchReviewRfidType('LONG_RANGE')" class="px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 text-slate-600 hover:text-slate-900">
+                                <i data-lucide="radio" class="w-3.5 h-3.5"></i> Long-Range (900MHz UHF Sticker)
+                            </button>
+                        </div>
+
                         <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
-                            <div class="md:col-span-8 relative">
+                            <div class="md:col-span-7 relative">
                                 <div class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-mono text-xs font-bold">UID:</div>
                                 <input type="text" id="revRfidUid" placeholder="e.g. A1 B2 C3 D4" class="w-full text-base font-mono font-black uppercase pl-14 pr-4 py-3 rounded-2xl border-2 border-slate-300 focus:border-charm-dark focus:ring-4 focus:ring-charm-dark/10 outline-none bg-white shadow-inner tracking-widest" oninput="handleRfidInputCheck(this.value)">
                             </div>
-                            <div class="md:col-span-4 flex items-center gap-2">
-                                <div id="revUidStatusChip" class="w-full py-3 px-4 rounded-2xl bg-white border border-slate-200 text-xs font-bold text-slate-600 flex items-center justify-center gap-2 shadow-sm">
-                                    <i data-lucide="radio" class="w-4 h-4 text-emerald-600 animate-pulse"></i>
-                                    <span>Ready for Scan / Input</span>
-                                </div>
+                            <div class="md:col-span-5 flex items-center gap-2">
+                                <button type="button" id="revUidStatusChip" onclick="toggleRfidScanListener()" class="w-full py-3 px-4 rounded-2xl bg-white border-2 border-slate-200 text-xs font-bold text-slate-600 flex items-center justify-center gap-2 shadow-sm hover:border-emerald-500 hover:bg-emerald-50/50 hover:text-emerald-800 transition-all cursor-pointer group" title="Click to wait and capture scan from Entry RFID or Long-Range UHF scanner">
+                                    <i data-lucide="radio" class="w-4 h-4 text-emerald-600 animate-pulse group-hover:scale-110 transition-transform"></i>
+                                    <span id="revUidStatusChipText">Awaiting UID Input (Click to Listen)</span>
+                                </button>
                             </div>
                         </div>
 
@@ -2965,7 +3088,7 @@ void startBleServer() {
                         <div class="space-y-1">
                             <label class="form-label font-bold text-xs">Category</label>
                             <select id="formDevCategory" class="form-input text-xs font-semibold">
-                                <option value="VEHICLE_BARRIER">Vehicle Barrier (Boom Gate)</option>
+                                <option value="VEHICLE_BARRIER">Main Gate</option>
                                 <option value="PEDESTRIAN_TURNSTILE">Pedestrian Turnstile</option>
                                 <option value="PORTABLE_SCANNER">Portable Scanner</option>
                                 <option value="ADMIN_STATION">Admin Station</option>

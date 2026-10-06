@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Guard Dashboard - CHARRMPASS</title>
+    <title>CHARRMPASS: A Web-Based Smart Entry and Exit Monitoring System Using RFID Technology for Aklan State University - Ibajay Campus</title>
     <link rel="icon" type="image/png" href="logocharrmpark.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -176,9 +176,17 @@
                                         <p class="text-[10px] text-slate-500 font-medium">Inbound Access Control</p>
                                     </div>
                                 </div>
-                                <span class="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
-                                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> LIVE
-                                </span>
+                                <div class="flex items-center gap-2">
+                                    <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900 border border-slate-700 shadow-sm" id="tlIndicatorDualEntry">
+                                        <span class="w-2.5 h-2.5 rounded-full bg-rose-500 shadow-[0_0_8px_#f43f5e]" id="tlDotRedDualEntry" title="Standby"></span>
+                                        <span class="w-2.5 h-2.5 rounded-full bg-amber-500/20" id="tlDotYellowDualEntry" title="Scanning"></span>
+                                        <span class="w-2.5 h-2.5 rounded-full bg-emerald-500/20" id="tlDotGreenDualEntry" title="Done"></span>
+                                        <span class="text-[9px] text-rose-400 font-bold ml-1" id="tlTextDualEntry">STANDBY</span>
+                                    </div>
+                                    <span class="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
+                                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> LIVE
+                                    </span>
+                                </div>
                             </div>
 
                             <!-- Gate Content Area -->
@@ -248,6 +256,15 @@
                                                 <span id="resColorDualEntry" class="font-bold text-slate-700 block truncate">--</span>
                                             </div>
                                         </div>
+
+                                        <!-- Re-Login / Scan History Banner -->
+                                        <div id="resHistoryBannerDualEntry" class="hidden mt-2 p-2 rounded-xl bg-amber-50 border border-amber-300 flex items-center justify-between text-[11px] text-amber-900">
+                                            <div class="flex items-center gap-1.5 overflow-hidden">
+                                                <i data-lucide="history" class="w-4 h-4 text-amber-600 shrink-0"></i>
+                                                <span id="resHistoryTextDualEntry" class="truncate font-semibold">--</span>
+                                            </div>
+                                            <span id="resHistoryBadgeDualEntry" class="shrink-0 px-1.5 py-0.5 rounded font-mono font-bold bg-amber-200 text-amber-900 text-[9px] uppercase">RE-LOGIN</span>
+                                        </div>
                                     </div>
                                 </div>
 
@@ -285,9 +302,17 @@
                                         <p class="text-[10px] text-slate-500 font-medium">Outbound Departure &amp; Logout</p>
                                     </div>
                                 </div>
-                                <span class="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-blue-100 text-blue-800 border border-blue-300 flex items-center gap-1">
-                                    <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span> LIVE
-                                </span>
+                                <div class="flex items-center gap-2">
+                                    <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900 border border-slate-700 shadow-sm" id="tlIndicatorDualExit">
+                                        <span class="w-2.5 h-2.5 rounded-full bg-rose-500 shadow-[0_0_8px_#f43f5e]" id="tlDotRedDualExit" title="Standby"></span>
+                                        <span class="w-2.5 h-2.5 rounded-full bg-amber-500/20" id="tlDotYellowDualExit" title="Scanning"></span>
+                                        <span class="w-2.5 h-2.5 rounded-full bg-emerald-500/20" id="tlDotGreenDualExit" title="Done"></span>
+                                        <span class="text-[9px] text-rose-400 font-bold ml-1" id="tlTextDualExit">STANDBY</span>
+                                    </div>
+                                    <span class="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-blue-100 text-blue-800 border border-blue-300 flex items-center gap-1">
+                                        <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span> LIVE
+                                    </span>
+                                </div>
                             </div>
 
                             <!-- Gate Content Area -->
@@ -357,6 +382,15 @@
                                                 <span id="resColorDualExit" class="font-bold text-slate-700 block truncate">--</span>
                                             </div>
                                         </div>
+
+                                        <!-- Re-Login / Scan History Banner -->
+                                        <div id="resHistoryBannerDualExit" class="hidden mt-2 p-2 rounded-xl bg-amber-50 border border-amber-300 flex items-center justify-between text-[11px] text-amber-900">
+                                            <div class="flex items-center gap-1.5 overflow-hidden">
+                                                <i data-lucide="history" class="w-4 h-4 text-amber-600 shrink-0"></i>
+                                                <span id="resHistoryTextDualExit" class="truncate font-semibold">--</span>
+                                            </div>
+                                            <span id="resHistoryBadgeDualExit" class="shrink-0 px-1.5 py-0.5 rounded font-mono font-bold bg-amber-200 text-amber-900 text-[9px] uppercase">RE-LOGIN</span>
+                                        </div>
                                     </div>
                                 </div>
 
@@ -402,8 +436,14 @@
                             <div id="scanGlowEntry"
                                 class="absolute inset-0 bg-slate-100 opacity-50 transition-colors duration-500"></div>
                             <div class="relative z-10 flex flex-col items-center w-full">
-                                <h3 class="font-display font-bold text-slate-700 tracking-wide mb-6 uppercase text-sm flex items-center gap-2">
+                                <h3 class="font-display font-bold text-slate-700 tracking-wide mb-3 uppercase text-sm flex items-center gap-2">
                                     <i data-lucide="log-in" class="w-4 h-4 text-green-600"></i> Entry Scanner Status</h3>
+                                <div class="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900 border border-slate-700 shadow-sm mb-4" id="tlIndicatorEntry">
+                                    <span class="w-2.5 h-2.5 rounded-full bg-rose-500 shadow-[0_0_8px_#f43f5e]" id="tlDotRedEntry" title="Standby"></span>
+                                    <span class="w-2.5 h-2.5 rounded-full bg-amber-500/20" id="tlDotYellowEntry" title="Scanning"></span>
+                                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-500/20" id="tlDotGreenEntry" title="Done"></span>
+                                    <span class="text-[10px] text-rose-400 font-bold ml-1" id="tlTextEntry">STANDBY</span>
+                                </div>
                                 <div id="radarContainerEntry"
                                     class="relative w-40 h-40 mb-6 flex items-center justify-center">
                                     <div class="absolute inset-0 rounded-full border-2 border-slate-300 wave-1"></div>
@@ -513,6 +553,15 @@
                                             </div>
                                         </div>
                                     </div>
+
+                                    <!-- Single Entry History Notice Banner -->
+                                    <div id="resHistoryBannerEntry" class="hidden p-3 rounded-xl bg-amber-50 border border-amber-300 flex items-center justify-between text-xs text-amber-900 mt-3">
+                                        <div class="flex items-center gap-2 overflow-hidden">
+                                            <i data-lucide="history" class="w-5 h-5 text-amber-600 shrink-0"></i>
+                                            <span id="resHistoryTextEntry" class="truncate font-semibold">--</span>
+                                        </div>
+                                        <span id="resHistoryBadgeEntry" class="shrink-0 px-2 py-0.5 rounded font-mono font-bold bg-amber-200 text-amber-900 text-[10px] uppercase">RE-LOGIN</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -549,8 +598,14 @@
                             <div id="scanGlowExit"
                                 class="absolute inset-0 bg-slate-100 opacity-50 transition-colors duration-500"></div>
                             <div class="relative z-10 flex flex-col items-center w-full">
-                                <h3 class="font-display font-bold text-slate-700 tracking-wide mb-6 uppercase text-sm flex items-center gap-2">
+                                <h3 class="font-display font-bold text-slate-700 tracking-wide mb-3 uppercase text-sm flex items-center gap-2">
                                     <i data-lucide="log-out" class="w-4 h-4 text-blue-600"></i> Exit Scanner Status</h3>
+                                <div class="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900 border border-slate-700 shadow-sm mb-4" id="tlIndicatorExit">
+                                    <span class="w-2.5 h-2.5 rounded-full bg-rose-500 shadow-[0_0_8px_#f43f5e]" id="tlDotRedExit" title="Standby"></span>
+                                    <span class="w-2.5 h-2.5 rounded-full bg-amber-500/20" id="tlDotYellowExit" title="Scanning"></span>
+                                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-500/20" id="tlDotGreenExit" title="Done"></span>
+                                    <span class="text-[10px] text-rose-400 font-bold ml-1" id="tlTextExit">STANDBY</span>
+                                </div>
                                 <div id="radarContainerExit"
                                     class="relative w-40 h-40 mb-6 flex items-center justify-center">
                                     <div class="absolute inset-0 rounded-full border-2 border-slate-300 wave-1"></div>
@@ -659,6 +714,15 @@
                                             <div class="text-sm font-medium text-slate-700">Vehicle logged out and exited campus safely.
                                             </div>
                                         </div>
+                                    </div>
+
+                                    <!-- Single Exit History Notice Banner -->
+                                    <div id="resHistoryBannerExit" class="hidden p-3 rounded-xl bg-amber-50 border border-amber-300 flex items-center justify-between text-xs text-amber-900 mt-3">
+                                        <div class="flex items-center gap-2 overflow-hidden">
+                                            <i data-lucide="history" class="w-5 h-5 text-amber-600 shrink-0"></i>
+                                            <span id="resHistoryTextExit" class="truncate font-semibold">--</span>
+                                        </div>
+                                        <span id="resHistoryBadgeExit" class="shrink-0 px-2 py-0.5 rounded font-mono font-bold bg-amber-200 text-amber-900 text-[10px] uppercase">RE-LOGIN</span>
                                     </div>
                                 </div>
                             </div>
@@ -947,38 +1011,38 @@
         </div>
     </div>
 
-    <!-- DUPLICATE ENTRY CONFIRMATION MODAL -->
+    <!-- DUPLICATE ENTRY / RE-LOGIN CONFIRMATION MODAL -->
     <div id="duplicateEntryModal"
         class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 opacity-0 transition-opacity duration-300">
         <div
             class="bg-white rounded-[2rem] w-full max-w-md shadow-2xl overflow-hidden transform scale-95 transition-transform duration-300 border border-amber-200">
-            <div class="p-6 bg-gradient-to-r from-amber-500 to-orange-500 text-white flex items-center gap-4">
+            <div id="dupModalHeader" class="p-6 bg-gradient-to-r from-amber-500 to-orange-500 text-white flex items-center gap-4">
                 <div class="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center shrink-0">
-                    <i data-lucide="alert-triangle" class="w-7 h-7 text-white"></i>
+                    <i data-lucide="alert-triangle" class="w-7 h-7 text-white" id="dupModalIcon"></i>
                 </div>
                 <div>
-                    <h3 class="text-lg font-display font-bold leading-tight">Already Entered Campus</h3>
-                    <p class="text-xs text-amber-100 font-medium mt-0.5">Guard Confirmation Required</p>
+                    <h3 class="text-lg font-display font-bold leading-tight" id="dupModalTitle">Re-Login Detected</h3>
+                    <p class="text-xs text-amber-100 font-medium mt-0.5" id="dupModalSub">Prior Scan History Found</p>
                 </div>
             </div>
             <div class="p-6 space-y-4 bg-white">
                 <div class="p-4 rounded-2xl bg-amber-50 border border-amber-200">
                     <p class="text-sm font-medium text-amber-900 leading-relaxed" id="dupModalMessage">
-                        This user has already entered campus.
+                        This user previously entered and never logged an exit (forgot to tap out).
                     </p>
                     <div class="mt-3 pt-3 border-t border-amber-200/60 flex items-center justify-between text-xs">
-                        <span class="text-slate-500 font-bold uppercase tracking-wider">Previous Entry:</span>
+                        <span class="text-slate-500 font-bold uppercase tracking-wider" id="dupModalHistoryLabel">Previous Scan:</span>
                         <span class="font-mono font-bold text-amber-800" id="dupModalPrevTime">--:--</span>
                     </div>
                 </div>
 
                 <div class="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-2">
                     <div class="flex justify-between text-xs">
-                        <span class="text-slate-400 font-bold uppercase">Driver:</span>
+                        <span class="text-slate-400 font-bold uppercase">User:</span>
                         <span class="font-bold text-slate-800" id="dupModalDriver">--</span>
                     </div>
                     <div class="flex justify-between text-xs">
-                        <span class="text-slate-400 font-bold uppercase">Vehicle Plate:</span>
+                        <span class="text-slate-400 font-bold uppercase">Vehicle / ID:</span>
                         <span class="font-mono font-bold text-charm-dark" id="dupModalPlate">--</span>
                     </div>
                     <div class="flex justify-between text-xs">
@@ -987,16 +1051,16 @@
                     </div>
                 </div>
 
-                <p class="text-xs text-slate-500 text-center font-medium">Do you want to store and allow this re-entry?</p>
+                <p class="text-xs text-slate-500 text-center font-medium" id="dupModalPrompt">Allow re-login and record in campus history?</p>
 
                 <div class="flex gap-3 pt-2">
                     <button onclick="closeDuplicateModal(false)"
                         class="flex-1 px-4 py-3 rounded-xl bg-slate-100 text-slate-600 text-sm font-bold hover:bg-slate-200 transition-colors">
                         Cancel / Deny
                     </button>
-                    <button onclick="confirmDuplicateEntry()"
+                    <button onclick="confirmDuplicateEntry()" id="dupModalConfirmBtn"
                         class="flex-1 px-4 py-3 rounded-xl bg-charm-green text-white text-sm font-bold hover:bg-green-600 shadow-md transition-all flex items-center justify-center gap-1.5">
-                        <i data-lucide="check" class="w-4 h-4"></i> Allow Re-Entry
+                        <i data-lucide="check" class="w-4 h-4"></i> <span id="dupModalConfirmText">Allow Re-Login</span>
                     </button>
                 </div>
             </div>

@@ -83,7 +83,7 @@ async function loadData() {
                     const firstVeh = vehList[0];
                     const pedCard = cardList.find(c => !c.vehicle_id);
                     const firstCard = pedCard || cardList[0];
-                    const isPed = usr.default_transit_mode === 'PEDESTRIAN' || firstVeh?.vehicle_type === 'None' || firstVeh?.plate_number === 'PEDESTRIAN' || firstCard?.user_type === 'PEDESTRIAN';
+                    const isPed = usr.default_transit_mode === 'PEDESTRIAN' || firstVeh?.vehicle_type === 'None' || firstVeh?.plate_number === 'PEDESTRIAN' || firstCard?.user_type === 'PEDESTRIAN' || (vehList.length === 0 && usr.default_transit_mode !== 'VEHICLE');
                     const userType = isPed ? 'PEDESTRIAN' : 'VEHICLE';
                     const rfidType = firstCard?.rfid_type || (isPed ? 'CLOSE_RANGE' : 'LONG_RANGE');
 
@@ -102,7 +102,7 @@ async function loadData() {
                         vehicle_id:       firstVeh?.id               || null,
                         rfid_uid:         firstCard?.rfid_uid        || null,
                         rfid_card_id:     firstCard?.id              || null,
-                        authorization_status: usr.approval_status || firstCard?.authorization_status || 'PENDING',
+                        authorization_status: usr.approval_status === 'REJECTED' ? 'DENIED' : (usr.approval_status || firstCard?.authorization_status || 'PENDING'),
                     };
                 });
 
@@ -567,7 +567,7 @@ function renderAdmin() {
             const isAuth = u.authorization_status === 'AUTHORIZED' || u.approval_status === 'APPROVED';
             const isPending = !isAuth && (u.authorization_status === 'PENDING' || u.approval_status === 'PENDING' || !u.authorization_status);
             const statusClass = isAuth ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : (isPending ? 'bg-yellow-100 text-yellow-800 border-yellow-300' : 'bg-red-100 text-red-800 border-red-300');
-            const statusLabel = isAuth ? 'AUTHORIZED' : (isPending ? 'PENDING' : 'DENIED');
+            const statusLabel = isAuth ? 'AUTHORIZED' : (isPending ? 'PENDING' : 'DENIED / SUSPENDED');
             const onCampus = isUserOnCampus(u);
             const avatar = u.profile_image || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.full_name)}&background=random`;
             const roleBadgeClass = u.role === 'Student' ? 'bg-blue-100 text-blue-800' : (u.role === 'Faculty' ? 'bg-purple-100 text-purple-800' : (u.role === 'Others' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'));
@@ -577,6 +577,14 @@ function renderAdmin() {
             // Transit passes summary
             const hasPed = (u.rfid_cards || []).some(c => !c.vehicle_id);
             const vehCount = (u.vehicles || []).length;
+            const isPedMode = u.default_transit_mode === 'PEDESTRIAN' || u.user_type === 'PEDESTRIAN';
+            const isVehMode = u.default_transit_mode === 'VEHICLE' || u.user_type === 'VEHICLE';
+            const isHybrid = (isPedMode || hasPed) && (vehCount > 0 || isVehMode) && vehCount > 0;
+            const transitDisplay = isHybrid 
+                ? '<span>🚶+🚗</span> Hybrid' 
+                : ((vehCount > 0 || (isVehMode && !isPedMode)) 
+                    ? '<span>🚗</span> Vehicle' 
+                    : '<span>🚶</span> Pedestrian');
 
             return `
             <tr class="hover:bg-slate-50/80 transition-colors border-b border-slate-100">
@@ -599,7 +607,7 @@ function renderAdmin() {
                     <div class="flex flex-col items-start gap-1">
                         <span class="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${roleBadgeClass}">${roleDisplay}</span>
                         <span class="text-[10px] font-bold text-slate-600 flex items-center gap-1">
-                            ${hasPed && vehCount > 0 ? '<span>🚶+🚗</span> Hybrid' : (hasPed ? '<span>🚶</span> Pedestrian' : '<span>🚗</span> Vehicle')}
+                            ${transitDisplay}
                         </span>
                     </div>
                 </td>
@@ -622,27 +630,35 @@ function renderAdmin() {
 
                 <!-- 4. RFID UID Tag -->
                 <td class="p-3.5">
-                    <div class="space-y-1">
+                    <div class="flex flex-col gap-1 items-start">
                         ${(() => {
                             const cards = u.rfid_cards || [];
                             if (!cards.length) {
-                                return `<span class="px-2 py-0.5 rounded-lg bg-yellow-50 text-yellow-700 border border-yellow-200 text-[11px] font-bold inline-flex items-center gap-1"><i data-lucide="alert-circle" class="w-3 h-3"></i> Unassigned</span>`;
+                                return `
+                                    <div class="flex flex-wrap gap-1">
+                                        <span class="px-2 py-0.5 rounded-lg bg-yellow-50 text-yellow-700 border border-yellow-200 text-[10px] font-bold inline-flex items-center gap-1 cursor-pointer hover:bg-yellow-100" title="Click to assign RFID UID" onclick="openReviewModal('${u.id}', 'PEDESTRIAN')">
+                                            <i data-lucide="alert-circle" class="w-3 h-3"></i> Unassigned
+                                        </span>
+                                    </div>
+                                `;
                             }
                             return cards.map(c => {
-                                const isVehCard = !!c.vehicle_id;
-                                const v = isVehCard ? (u.vehicles||[]).find(veh => veh.id === c.vehicle_id) : null;
-                                const tagLabel = isVehCard ? (v ? v.plate_number : 'UHF') : 'Card';
+                                const isLongRange = c.rfid_type === 'LONG_RANGE' || !!c.vehicle_id;
+                                const v = isLongRange ? (u.vehicles||[]).find(veh => veh.id === c.vehicle_id) : null;
+                                const tagLabel = isLongRange ? (v ? `UHF (${v.plate_number})` : 'UHF Tag') : 'Close-Range Card';
                                 const uidVal = (c.rfid_uid && !c.rfid_uid.startsWith('UNASSIGNED_')) ? c.rfid_uid : null;
                                 if (!uidVal) {
                                     return `
-                                        <div class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-yellow-50 text-yellow-700 border border-yellow-200 cursor-pointer hover:bg-yellow-100 inline-block mr-1" title="Click to assign UID" onclick="openReviewModal('${u.id}', '${isVehCard ? 'VEHICLE' : 'PEDESTRIAN'}', '${c.vehicle_id || ''}')">
-                                            ${tagLabel}: Unassigned
+                                        <div class="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-yellow-50 text-yellow-700 border border-yellow-200 cursor-pointer hover:bg-yellow-100 inline-flex items-center gap-1" title="Click to assign ${tagLabel} UID" onclick="openReviewModal('${u.id}', '${isLongRange ? 'VEHICLE' : 'PEDESTRIAN'}', '${c.vehicle_id || ''}')">
+                                            <i data-lucide="${isLongRange ? 'radio' : 'credit-card'}" class="w-3 h-3 text-yellow-600"></i>
+                                            <span>${isLongRange ? 'UHF' : 'Close'}: Unassigned</span>
                                         </div>
                                     `;
                                 }
                                 return `
-                                    <div class="inline-flex items-center gap-1 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-2 py-0.5 rounded-lg text-xs font-mono font-bold text-slate-800 cursor-pointer transition-colors mr-1" onclick="copyToClipboard('${uidVal}', '${tagLabel} UID')" title="Click to copy UID: ${uidVal}">
-                                        <i data-lucide="${isVehCard ? 'radio' : 'nfc'}" class="w-3 h-3 text-emerald-600"></i>
+                                    <div class="inline-flex items-center gap-1.5 ${isLongRange ? 'bg-purple-50 hover:bg-purple-100 border-purple-200 text-purple-900' : 'bg-blue-50 hover:bg-blue-100 border-blue-200 text-blue-900'} border px-2 py-0.5 rounded-lg text-xs font-mono font-bold cursor-pointer transition-colors shadow-2xs" onclick="copyToClipboard('${uidVal}', '${tagLabel} UID')" title="Click to copy UID: ${uidVal} (${tagLabel})">
+                                        <i data-lucide="${isLongRange ? 'radio' : 'credit-card'}" class="w-3 h-3 ${isLongRange ? 'text-purple-600' : 'text-blue-600'}"></i>
+                                        <span class="text-[9px] font-black uppercase tracking-wider ${isLongRange ? 'text-purple-700' : 'text-blue-700'}">${isLongRange ? 'UHF' : 'CARD'}:</span>
                                         <span>${uidVal}</span>
                                     </div>
                                 `;
@@ -901,6 +917,80 @@ function renderAdmin() {
 }
 
 // =====================
+// FILE PREVIEW & REFRESH UTILITIES
+// =====================
+window.previewFile = function(input, targetImgId) {
+    if (!input || !input.files || !input.files[0]) return;
+    const file = input.files[0];
+    if (!file.type.startsWith('image/')) {
+        showToast('Please select a valid image file (PNG/JPG)', 'warning');
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const rawData = e.target.result;
+        // Efficient client-side thumbnail compression (max 400x400 JPEG)
+        const img = new Image();
+        img.onload = function() {
+            const canvas = document.createElement('canvas');
+            const maxDim = 400;
+            let width = img.width;
+            let height = img.height;
+            if (width > height) {
+                if (width > maxDim) {
+                    height = Math.round((height * maxDim) / width);
+                    width = maxDim;
+                }
+            } else {
+                if (height > maxDim) {
+                    width = Math.round((width * maxDim) / height);
+                    height = maxDim;
+                }
+            }
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+            const optimizedDataUrl = canvas.toDataURL('image/jpeg', 0.82);
+
+            const targetImg = el(targetImgId);
+            if (targetImg) {
+                targetImg.src = optimizedDataUrl;
+                targetImg.dataset.dataUrl = optimizedDataUrl;
+                targetImg.dataset.hasNewFile = 'true';
+            }
+            showToast('Photo selected and loaded into preview!', 'info');
+        };
+        img.onerror = function() {
+            const targetImg = el(targetImgId);
+            if (targetImg) {
+                targetImg.src = rawData;
+                targetImg.dataset.dataUrl = rawData;
+                targetImg.dataset.hasNewFile = 'true';
+            }
+        };
+        img.src = rawData;
+    };
+    reader.readAsDataURL(file);
+};
+
+window.refreshUsersData = async function() {
+    const icon = el('iconRefreshUsers');
+    if (icon) icon.classList.add('animate-spin');
+    showToast('Refreshing user records from database...', 'info');
+    try {
+        await loadData();
+        renderAdmin();
+        showToast(`User directory up to date (${adminState.users.length} users)`, 'success');
+    } catch (err) {
+        console.error('Refresh users failed:', err);
+        showToast('Failed to refresh users: ' + (err.message || 'Network error'), 'error');
+    } finally {
+        if (icon) setTimeout(() => icon.classList.remove('animate-spin'), 600);
+    }
+};
+
+// =====================
 // USER ACTIONS
 // =====================
 window.openUserModal = function(id = null) {
@@ -910,6 +1000,13 @@ window.openUserModal = function(id = null) {
     el('formUserId').value = '';
     el('modalTitle').textContent = id ? 'Edit User' : 'Add New User';
     
+    if (el('formUidClose')) el('formUidClose').value = '';
+    if (el('formUidLong')) el('formUidLong').value = '';
+    if (el('formUid')) el('formUid').value = '';
+
+    const prevProf = el('prevProfile');
+    const prevMoto = el('prevMotor');
+
     if (id) {
         const u = adminState.users.find(x => x.id === id);
         if (u) {
@@ -920,18 +1017,60 @@ window.openUserModal = function(id = null) {
             el('formAddress').value = u.address || '';
             el('formProgram').value = u.program || '';
             el('formSection').value = u.section || '';
-            el('formUid').value = u.rfid_uid || '';
             el('formRole').value = u.role || 'Student';
             if (el('formRoleDetail')) el('formRoleDetail').value = u.role_detail || '';
             el('formVehType').value = u.vehicle_type || 'None';
-            el('formPlate').value = u.plate_number || '';
-            el('formVehModel').value = u.vehicle_model || '';
-            el('formVehColor').value = u.vehicle_color || '';
-            el('prevProfile').src = u.profile_image || 'https://ui-avatars.com/api/?name=' + u.full_name;
-            el('prevMotor').src = u.motorcycle_image || 'https://images.unsplash.com/photo-1558981403-c5f91cbba527?auto=format&fit=crop&q=80&w=200';
+            el('formPlate').value = (u.plate_number && u.plate_number !== 'PEDESTRIAN' && u.plate_number !== 'NO-PLATE') ? u.plate_number : '';
+            el('formVehModel').value = (u.vehicle_model && u.vehicle_model !== 'Walking' && u.vehicle_model !== '--') ? u.vehicle_model : '';
+            el('formVehColor').value = (u.vehicle_color && u.vehicle_color !== '--') ? u.vehicle_color : '';
+            
+            const profSrc = u.profile_image || ('https://ui-avatars.com/api/?name=' + encodeURIComponent(u.full_name || 'User') + '&background=random');
+            if (prevProf) {
+                prevProf.src = profSrc;
+                prevProf.dataset.currentUrl = u.profile_image || '';
+                prevProf.dataset.dataUrl = '';
+                prevProf.dataset.hasNewFile = 'false';
+            }
+            if (el('uploadProfile')) el('uploadProfile').value = '';
+
+            const motorSrc = u.motorcycle_image || 'https://images.unsplash.com/photo-1558981403-c5f91cbba527?auto=format&fit=crop&q=80&w=200';
+            if (prevMoto) {
+                prevMoto.src = motorSrc;
+                prevMoto.dataset.currentUrl = u.motorcycle_image || '';
+                prevMoto.dataset.dataUrl = '';
+                prevMoto.dataset.hasNewFile = 'false';
+            }
+            if (el('uploadMotor')) el('uploadMotor').value = '';
+
+            // Find Close-Range and Long-Range cards from rfid_cards
+            const cards = u.rfid_cards || [];
+            const closeCard = cards.find(c => c.rfid_type === 'CLOSE_RANGE' || (!c.vehicle_id && c.rfid_type !== 'LONG_RANGE'));
+            const longCard = cards.find(c => c.rfid_type === 'LONG_RANGE' || !!c.vehicle_id);
+
+            const closeVal = (closeCard && !closeCard.rfid_uid.startsWith('UNASSIGNED_')) ? closeCard.rfid_uid : '';
+            const longVal = (longCard && !longCard.rfid_uid.startsWith('UNASSIGNED_')) ? longCard.rfid_uid : '';
+
+            if (el('formUidClose')) el('formUidClose').value = closeVal;
+            if (el('formUidLong')) el('formUidLong').value = longVal;
+            if (el('formUid')) el('formUid').value = closeVal || longVal || u.rfid_uid || '';
         }
     } else {
         if (el('formRoleDetail')) el('formRoleDetail').value = '';
+        if (prevProf) {
+            prevProf.src = 'https://ui-avatars.com/api/?name=User&background=random';
+            prevProf.dataset.currentUrl = '';
+            prevProf.dataset.dataUrl = '';
+            prevProf.dataset.hasNewFile = 'false';
+        }
+        if (el('uploadProfile')) el('uploadProfile').value = '';
+
+        if (prevMoto) {
+            prevMoto.src = 'https://images.unsplash.com/photo-1558981403-c5f91cbba527?auto=format&fit=crop&q=80&w=200';
+            prevMoto.dataset.currentUrl = '';
+            prevMoto.dataset.dataUrl = '';
+            prevMoto.dataset.hasNewFile = 'false';
+        }
+        if (el('uploadMotor')) el('uploadMotor').value = '';
     }
     toggleFormRoleDetail();
 
@@ -976,12 +1115,57 @@ window.saveUser = function() {
 el('userForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const userId = el('formUserId').value;
-    const newUid = el('formUid').value.trim().toUpperCase();
+    const closeUid = (el('formUidClose')?.value || '').trim().toUpperCase();
+    const longUid = (el('formUidLong')?.value || '').trim().toUpperCase();
+    const legacyUid = (el('formUid')?.value || '').trim().toUpperCase();
 
-    if (!newUid) {
-        showToast('Please enter an RFID UID.', 'error');
-        el('formUid').focus();
+    const finalCloseUid = closeUid || (legacyUid && !longUid ? legacyUid : '');
+    const finalLongUid = longUid;
+
+    if (!finalCloseUid && !finalLongUid) {
+        showToast('Please enter at least one RFID UID (Close-Range Card or Long-Range UHF Sticker).', 'error');
+        if (el('formUidClose')) el('formUidClose').focus();
         return;
+    }
+
+    const hasVehicle = el('formVehType').value !== 'None' && el('formPlate').value.trim() !== '';
+
+    // Handle Profile Image (Upload or keep existing)
+    let finalProfileImg = null;
+    const prevProf = el('prevProfile');
+    if (prevProf) {
+        if (prevProf.dataset.hasNewFile === 'true' && prevProf.dataset.dataUrl) {
+            finalProfileImg = prevProf.dataset.dataUrl;
+            if (typeof uploadImageToStorage === 'function') {
+                const slug = 'profile_' + (userId || Date.now());
+                try {
+                    finalProfileImg = await uploadImageToStorage(finalProfileImg, 'avatars', slug);
+                } catch (e) {
+                    console.warn('Storage avatar upload fallback:', e);
+                }
+            }
+        } else if (prevProf.dataset.currentUrl) {
+            finalProfileImg = prevProf.dataset.currentUrl;
+        }
+    }
+
+    // Handle Vehicle Photo
+    let finalMotorImg = null;
+    const prevMoto = el('prevMotor');
+    if (prevMoto) {
+        if (prevMoto.dataset.hasNewFile === 'true' && prevMoto.dataset.dataUrl) {
+            finalMotorImg = prevMoto.dataset.dataUrl;
+            if (typeof uploadImageToStorage === 'function') {
+                const slug = 'vehicle_' + Date.now();
+                try {
+                    finalMotorImg = await uploadImageToStorage(finalMotorImg, 'vehicles', slug);
+                } catch (e) {
+                    console.warn('Storage vehicle photo upload fallback:', e);
+                }
+            }
+        } else if (prevMoto.dataset.currentUrl) {
+            finalMotorImg = prevMoto.dataset.currentUrl;
+        }
     }
 
     const userData = {
@@ -993,285 +1177,267 @@ el('userForm')?.addEventListener('submit', async (e) => {
         section: el('formSection').value.trim() || null,
         role: el('formRole').value,
         role_detail: el('formRole').value === 'Others' ? (el('formRoleDetail')?.value.trim() || 'Vendor') : null,
-        default_transit_mode: (el('formVehType').value !== 'None' && el('formPlate').value.trim() !== '') ? 'VEHICLE' : 'PEDESTRIAN',
+        default_transit_mode: hasVehicle ? 'VEHICLE' : 'PEDESTRIAN',
+        approval_status: 'APPROVED',
+        profile_image: finalProfileImg,
         updated_at: new Date().toISOString()
     };
-    const hasVehicle = el('formVehType').value !== 'None' && el('formPlate').value.trim() !== '';
     const vehicleData = {
         vehicle_type: el('formVehType').value || 'None',
         plate_number: el('formPlate').value.trim().toUpperCase() || 'NO-PLATE',
         vehicle_model: el('formVehModel').value.trim() || '--',
         vehicle_color: el('formVehColor').value.trim() || '--',
+        motorcycle_image: finalMotorImg,
+        approval_status: 'APPROVED'
     };
-    const rfidType = hasVehicle ? 'LONG_RANGE' : 'CLOSE_RANGE';
-    const userType = hasVehicle ? 'VEHICLE' : 'PEDESTRIAN';
 
     try {
-        showToast('Saving stakeholder & RFID assignment...', 'info');
+        showToast('Saving stakeholder & assigning RFID...', 'info');
 
-        if (userId) {
-            // ─── EDIT EXISTING USER ───
-            const user = adminState.users.find(u => u.id === userId);
-            
-            // 1. Update user
-            const { error: uErr } = await supabaseClient.from('users').update(userData).eq('id', userId);
+        let targetUserId = userId;
+        if (targetUserId) {
+            // Update existing user
+            const { error: uErr } = await supabaseClient.from('users').update(userData).eq('id', targetUserId);
             if (uErr) throw uErr;
+        } else {
+            // Insert brand new user
+            const { data: newUser, error: uErr } = await supabaseClient.from('users').insert([userData]).select().single();
+            if (uErr) throw uErr;
+            targetUserId = newUser.id;
+        }
 
-            // 2. Update or insert vehicle
-            let targetVehicleId = user?.vehicle_id || null;
+        // Handle Vehicle
+        let targetVehicleId = null;
+        if (targetUserId) {
+            const user = adminState.users.find(u => u.id === targetUserId);
+            targetVehicleId = user?.vehicle_id || null;
             if (hasVehicle) {
-                if (user?.vehicle_id) {
-                    const { error: vErr } = await supabaseClient.from('vehicles').update(vehicleData).eq('id', user.vehicle_id);
+                if (targetVehicleId) {
+                    const { error: vErr } = await supabaseClient.from('vehicles').update(vehicleData).eq('id', targetVehicleId);
                     if (vErr) throw vErr;
                 } else {
-                    const { data: newV, error: vErr } = await supabaseClient.from('vehicles').insert([{ user_id: userId, ...vehicleData }]).select().single();
+                    const { data: newV, error: vErr } = await supabaseClient.from('vehicles').insert([{ user_id: targetUserId, ...vehicleData }]).select().single();
                     if (vErr) throw vErr;
                     targetVehicleId = newV.id;
                 }
             }
+        }
 
-            // 3. Update or upsert RFID Card UID
-            if (user?.rfid_card_id) {
+        // Handle Close-Range RFID Card (13.56MHz Card)
+        if (finalCloseUid) {
+            const { data: existingCloseCard } = await supabaseClient
+                .from('rfid_cards')
+                .select('id')
+                .eq('user_id', targetUserId)
+                .eq('rfid_type', 'CLOSE_RANGE')
+                .maybeSingle();
+
+            if (existingCloseCard) {
                 const { error: cErr } = await supabaseClient.from('rfid_cards').update({
-                    rfid_uid: newUid,
-                    rfid_type: rfidType,
-                    user_type: userType,
-                    vehicle_id: targetVehicleId,
+                    rfid_uid: finalCloseUid,
                     authorization_status: 'AUTHORIZED',
+                    rfid_type: 'CLOSE_RANGE',
+                    user_type: 'PEDESTRIAN',
+                    vehicle_id: null,
                     updated_at: new Date().toISOString()
-                }).eq('id', user.rfid_card_id);
+                }).eq('id', existingCloseCard.id);
                 if (cErr) throw cErr;
             } else {
                 const { error: cErr } = await supabaseClient.from('rfid_cards').insert([{
-                    rfid_uid: newUid,
-                    user_id: userId,
-                    vehicle_id: targetVehicleId,
-                    rfid_type: rfidType,
-                    user_type: userType,
+                    rfid_uid: finalCloseUid,
+                    user_id: targetUserId,
+                    vehicle_id: null,
+                    rfid_type: 'CLOSE_RANGE',
+                    user_type: 'PEDESTRIAN',
                     authorization_status: 'AUTHORIZED'
                 }]);
                 if (cErr) throw cErr;
             }
-
-            showToast(`User updated! ${rfidType} RFID UID ${newUid} assigned.`, 'success');
-        } else {
-            // ─── ADD BRAND NEW USER ───
-            // 1. Insert user
-            const { data: newUser, error: uErr } = await supabaseClient.from('users').insert([userData]).select().single();
-            if (uErr) throw uErr;
-
-            // 2. Insert vehicle if applicable
-            let targetVehicleId = null;
-            if (hasVehicle) {
-                const { data: newV, error: vErr } = await supabaseClient.from('vehicles').insert([{ user_id: newUser.id, ...vehicleData }]).select().single();
-                if (vErr) throw vErr;
-                targetVehicleId = newV.id;
-            }
-
-            // 3. Insert RFID Card
-            const { error: cErr } = await supabaseClient.from('rfid_cards').insert([{
-                rfid_uid: newUid,
-                user_id: newUser.id,
-                vehicle_id: targetVehicleId,
-                rfid_type: rfidType,
-                user_type: userType,
-                authorization_status: 'AUTHORIZED'
-            }]);
-            if (cErr) throw cErr;
-
-            showToast(`Stakeholder created! ${rfidType} RFID UID ${newUid} assigned.`, 'success');
         }
+
+        // Handle Long-Range UHF Sticker (900MHz UHF)
+        if (finalLongUid) {
+            const { data: existingLongCard } = await supabaseClient
+                .from('rfid_cards')
+                .select('id')
+                .eq('user_id', targetUserId)
+                .eq('rfid_type', 'LONG_RANGE')
+                .maybeSingle();
+
+            if (existingLongCard) {
+                const { error: cErr } = await supabaseClient.from('rfid_cards').update({
+                    rfid_uid: finalLongUid,
+                    authorization_status: 'AUTHORIZED',
+                    rfid_type: 'LONG_RANGE',
+                    user_type: 'VEHICLE',
+                    vehicle_id: targetVehicleId,
+                    updated_at: new Date().toISOString()
+                }).eq('id', existingLongCard.id);
+                if (cErr) throw cErr;
+            } else {
+                const { error: cErr } = await supabaseClient.from('rfid_cards').insert([{
+                    rfid_uid: finalLongUid,
+                    user_id: targetUserId,
+                    vehicle_id: targetVehicleId,
+                    rfid_type: 'LONG_RANGE',
+                    user_type: 'VEHICLE',
+                    authorization_status: 'AUTHORIZED'
+                }]);
+                if (cErr) throw cErr;
+            }
+        }
+
+        const msgList = [];
+        if (finalCloseUid) msgList.push(`Close-Range: ${finalCloseUid}`);
+        if (finalLongUid) msgList.push(`Long-Range: ${finalLongUid}`);
+        showToast(`Stakeholder saved! Assigned: ${msgList.join(' & ')}`, 'success');
 
         closeUserModal();
         await loadData();
+        renderAdmin();
     } catch (err) {
         showToast('Error saving user: ' + err.message, 'error');
     }
 });
 
-window.approveUser = async function(targetId, targetType = 'PEDESTRIAN', vehicleId = null) {
-    const userId = targetId || currentReviewUserId;
-    const type = targetType || currentReviewTargetType || 'PEDESTRIAN';
-    const vId = vehicleId || currentReviewVehicleId;
+window.currentReviewRfidType = 'CLOSE_RANGE';
 
+window.approveUser = async function(targetId, targetType = null, vehicleId = null) {
+    const userId = targetId || currentReviewUserId;
+    const rfidType = window.currentReviewRfidType || (targetType === 'VEHICLE' ? 'LONG_RANGE' : 'CLOSE_RANGE');
     const u = adminState.users.find(x => x.id === userId) || (adminState.pendingItems||[]).find(x => x.userId === userId)?.user;
     if (!u) return;
 
-    // Check if review modal input has a UID entered
     let assignedUid = '';
     const revInput = el('revRfidUid');
     if (revInput && revInput.value) {
         assignedUid = revInput.value.trim().toUpperCase();
     } else {
-        // Find existing assigned UID if any
-        if (type === 'VEHICLE' && vId) {
-            const c = (u.rfid_cards||[]).find(x => x.vehicle_id === vId);
-            if (c?.rfid_uid && !c.rfid_uid.startsWith('UNASSIGNED_')) assignedUid = c.rfid_uid;
-        } else {
-            const c = (u.rfid_cards||[]).find(x => !x.vehicle_id);
-            if (c?.rfid_uid && !c.rfid_uid.startsWith('UNASSIGNED_')) assignedUid = c.rfid_uid;
-        }
+        const c = (u.rfid_cards||[]).find(x => x.rfid_type === rfidType);
+        if (c?.rfid_uid && !c.rfid_uid.startsWith('UNASSIGNED_')) assignedUid = c.rfid_uid;
     }
 
     if (!assignedUid) {
-        openReviewModal(userId, type, vId);
+        openReviewModal(userId, targetType, vehicleId);
         setTimeout(() => {
             if (el('revRfidUid')) {
                 el('revRfidUid').focus();
-                showToast(`Please enter or scan the physical ${type === 'VEHICLE' ? 'Long-Range UHF Sticker' : 'Close-Range RFID Card'} UID to issue.`, 'info');
+                showToast(`Please enter or scan the physical ${rfidType === 'LONG_RANGE' ? 'Long-Range UHF Sticker' : 'Close-Range RFID Card'} UID.`, 'info');
             }
         }, 350);
         return;
     }
 
-    const isVeh = (type === 'VEHICLE' && vId);
-    const rfidType = isVeh ? 'LONG_RANGE' : 'CLOSE_RANGE';
+    const isVeh = (rfidType === 'LONG_RANGE');
     const userType = isVeh ? 'VEHICLE' : 'PEDESTRIAN';
+    const vId = vehicleId || currentReviewVehicleId || (u.vehicles?.[0]?.id || null);
 
     try {
         showToast(`Approving & issuing ${rfidType === 'CLOSE_RANGE' ? 'Close-Range Card' : 'Long-Range UHF Sticker'} ${assignedUid}...`, 'info');
 
-        if (isVeh) {
-            // Find card record for this specific vehicle
-            const { data: existingCard } = await supabaseClient
+        // Look for existing card of this specific rfid_type
+        const { data: existingCard } = await supabaseClient
+            .from('rfid_cards')
+            .select('id')
+            .eq('user_id', userId)
+            .eq('rfid_type', rfidType)
+            .maybeSingle();
+
+        if (existingCard) {
+            const { error: cardErr } = await supabaseClient
                 .from('rfid_cards')
-                .select('id')
-                .eq('vehicle_id', vId)
-                .maybeSingle();
-
-            if (existingCard) {
-                const { error: cardErr } = await supabaseClient
-                    .from('rfid_cards')
-                    .update({
-                        rfid_uid: assignedUid,
-                        authorization_status: 'AUTHORIZED',
-                        rfid_type: 'LONG_RANGE',
-                        user_type: 'VEHICLE',
-                        user_id: userId,
-                        updated_at: new Date().toISOString()
-                    })
-                    .eq('id', existingCard.id);
-                if (cardErr) throw cardErr;
-            } else {
-                const { error: cardErr } = await supabaseClient
-                    .from('rfid_cards')
-                    .insert([{
-                        rfid_uid: assignedUid,
-                        user_id: userId,
-                        vehicle_id: vId,
-                        rfid_type: 'LONG_RANGE',
-                        user_type: 'VEHICLE',
-                        authorization_status: 'AUTHORIZED'
-                    }]);
-                if (cardErr) throw cardErr;
-            }
-
-            // Mark vehicle approved
-            const { error: vehErr } = await supabaseClient
-                .from('vehicles')
-                .update({ approval_status: 'APPROVED' })
-                .eq('id', vId);
-            if (vehErr) console.warn('Vehicle approval_status update warning:', vehErr.message);
-
-            // Ensure parent user has approval_status = 'APPROVED'
-            await supabaseClient
-                .from('users')
-                .update({ approval_status: 'APPROVED' })
-                .eq('id', userId);
-
-            showToast(`Approved! UHF Sticker ${assignedUid} issued for vehicle.`, 'success');
+                .update({
+                    rfid_uid: assignedUid,
+                    authorization_status: 'AUTHORIZED',
+                    rfid_type: rfidType,
+                    user_type: userType,
+                    vehicle_id: isVeh ? vId : null,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', existingCard.id);
+            if (cardErr) throw cardErr;
         } else {
-            // Pedestrian Card: find card where user_id == userId AND vehicle_id IS NULL
-            const { data: existingCard } = await supabaseClient
+            const { error: cardErr } = await supabaseClient
                 .from('rfid_cards')
-                .select('id')
-                .eq('user_id', userId)
-                .is('vehicle_id', null)
-                .maybeSingle();
-
-            if (existingCard) {
-                const { error: cardErr } = await supabaseClient
-                    .from('rfid_cards')
-                    .update({
-                        rfid_uid: assignedUid,
-                        authorization_status: 'AUTHORIZED',
-                        rfid_type: 'CLOSE_RANGE',
-                        user_type: 'PEDESTRIAN',
-                        updated_at: new Date().toISOString()
-                    })
-                    .eq('id', existingCard.id);
-                if (cardErr) throw cardErr;
-            } else {
-                const { error: cardErr } = await supabaseClient
-                    .from('rfid_cards')
-                    .insert([{
-                        rfid_uid: assignedUid,
-                        user_id: userId,
-                        vehicle_id: null,
-                        rfid_type: 'CLOSE_RANGE',
-                        user_type: 'PEDESTRIAN',
-                        authorization_status: 'AUTHORIZED'
-                    }]);
-                if (cardErr) throw cardErr;
-            }
-
-            // Mark user approved
-            const { error: usrErr } = await supabaseClient
-                .from('users')
-                .update({ approval_status: 'APPROVED' })
-                .eq('id', userId);
-            if (usrErr) console.warn('User approval_status update warning:', usrErr.message);
-
-            showToast(`Approved! Close-Range Card ${assignedUid} issued to ${u.full_name} (${u.cpass_id || u.student_id || 'CPASS'}).`, 'success');
+                .insert([{
+                    rfid_uid: assignedUid,
+                    user_id: userId,
+                    vehicle_id: isVeh ? vId : null,
+                    rfid_type: rfidType,
+                    user_type: userType,
+                    authorization_status: 'AUTHORIZED'
+                }]);
+            if (cardErr) throw cardErr;
         }
 
+        // If vehicle associated, approve vehicle too
+        if (isVeh && vId) {
+            await supabaseClient.from('vehicles').update({ approval_status: 'APPROVED' }).eq('id', vId);
+        }
+
+        // Approve user
+        await supabaseClient.from('users').update({ approval_status: 'APPROVED' }).eq('id', userId);
+
+        showToast(`Approved! ${rfidType === 'CLOSE_RANGE' ? 'Close-Range Card' : 'Long-Range UHF Sticker'} issued: ${assignedUid}`, 'success');
         closeReviewModal();
         await loadData();
     } catch (err) {
-        console.error('Approval error:', err);
-        showToast('Error approving registration: ' + err.message, 'error');
+        showToast('Error approving pass: ' + err.message, 'error');
     }
 };
 
 window.denyRegistration = async function(targetId, targetType = 'PEDESTRIAN', vehicleId = null) {
-    if (!confirm('Are you sure you want to deny this registration?')) return;
+    if (!confirm('Are you sure you want to deny this registration or revoke campus access?')) return;
     const userId = targetId || currentReviewUserId;
     const type = targetType || currentReviewTargetType || 'PEDESTRIAN';
     const vId = vehicleId || currentReviewVehicleId;
     const isVeh = (type === 'VEHICLE' && vId);
 
     try {
-        showToast('Denying registration...', 'info');
+        showToast('Revoking access / denying application...', 'info');
 
-        if (isVeh) {
-            await supabaseClient
-                .from('rfid_cards')
-                .update({ authorization_status: 'DENIED', updated_at: new Date().toISOString() })
-                .eq('vehicle_id', vId);
-
-            await supabaseClient
-                .from('vehicles')
-                .update({ approval_status: 'REJECTED' })
-                .eq('id', vId);
-
-            showToast('Vehicle registration denied.', 'success');
-        } else {
-            await supabaseClient
-                .from('rfid_cards')
-                .update({ authorization_status: 'DENIED', updated_at: new Date().toISOString() })
-                .eq('user_id', userId)
-                .is('vehicle_id', null);
-
+        if (isConnected && supabaseClient) {
+            // Update user profile status directly to REJECTED so profile is DENIED / SUSPENDED
             await supabaseClient
                 .from('users')
                 .update({ approval_status: 'REJECTED' })
                 .eq('id', userId);
 
-            showToast('Pedestrian registration denied.', 'success');
+            if (isVeh) {
+                await supabaseClient
+                    .from('rfid_cards')
+                    .update({ authorization_status: 'DENIED', updated_at: new Date().toISOString() })
+                    .eq('vehicle_id', vId);
+
+                await supabaseClient
+                    .from('vehicles')
+                    .update({ approval_status: 'REJECTED' })
+                    .eq('id', vId);
+            } else {
+                await supabaseClient
+                    .from('rfid_cards')
+                    .update({ authorization_status: 'DENIED', updated_at: new Date().toISOString() })
+                    .eq('user_id', userId);
+            }
         }
 
+        // Update local memory state immediately for instant UI responsiveness
+        const userObj = adminState.users.find(u => u.id === userId);
+        if (userObj) {
+            userObj.approval_status = 'REJECTED';
+            userObj.authorization_status = 'DENIED';
+            (userObj.rfid_cards || []).forEach(c => {
+                if (!isVeh || c.vehicle_id === vId) c.authorization_status = 'DENIED';
+            });
+            (userObj.vehicles || []).forEach(v => {
+                if (!isVeh || v.id === vId) v.approval_status = 'REJECTED';
+            });
+        }
+
+        showToast('Application denied. User status set to DENIED / SUSPENDED.', 'success');
         closeReviewModal();
         await loadData();
+        renderAdmin();
     } catch (err) {
         console.error('Deny error:', err);
         showToast('Error: ' + err.message, 'error');
@@ -3595,7 +3761,7 @@ window.openReviewModal = function(id, targetType = 'PEDESTRIAN', vehicleId = nul
             el('revHeaderStatus').innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-yellow-500 animate-ping"></span> PENDING REVIEW';
             el('revHeaderStatus').className = 'px-3 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-yellow-100 text-yellow-800 border border-yellow-300 flex items-center gap-1.5';
         } else {
-            el('revHeaderStatus').innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> ACCESS DENIED';
+            el('revHeaderStatus').innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> DENIED / SUSPENDED';
             el('revHeaderStatus').className = 'px-3 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-red-100 text-red-800 border border-red-300 flex items-center gap-1.5';
         }
     }
@@ -3707,29 +3873,63 @@ window.openReviewModal = function(id, targetType = 'PEDESTRIAN', vehicleId = nul
         };
     }
 
-    // RFID UID Input Station (dynamic according to pedestrian vs vehicle)
-    if (el('revRfidStationTitle')) {
-        el('revRfidStationTitle').textContent = isVehTarget 
-            ? 'Long-Range UHF RFID Sticker Assignment Station' 
-            : 'Close-Range 13.56MHz RFID Card Assignment Station';
-    }
-    if (el('revRfidStationSubtitle')) {
-        el('revRfidStationSubtitle').textContent = isVehTarget 
-            ? `Assign a physical UHF sticker (860-960MHz) to vehicle plate ${veh?.plate_number || ''} for automated barrier pass.` 
-            : 'Assign a physical 13.56MHz Mifare RFID card for pedestrian turnstiles and gates.';
-    }
+    // RFID Range Switcher in Review Dossier Modal
+    window.switchReviewRfidType = function(type) {
+        window.currentReviewRfidType = type;
+        const btnClose = el('revTypeBtnClose');
+        const btnLong = el('revTypeBtnLong');
+        const title = el('revRfidStationTitle');
+        const subtitle = el('revRfidStationSubtitle');
+        const approveBtn = el('revBtnApprove');
 
-    const cleanUid = (card?.rfid_uid && !card.rfid_uid.startsWith('UNASSIGNED_')) ? card.rfid_uid : '';
-    if (el('revRfidUid')) {
-        el('revRfidUid').value = cleanUid;
-        handleRfidInputCheck(cleanUid);
-    }
+        if (btnClose && btnLong) {
+            if (type === 'CLOSE_RANGE') {
+                btnClose.className = 'px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 bg-blue-600 text-white shadow-xs';
+                btnLong.className = 'px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 text-slate-600 hover:text-slate-900';
+            } else {
+                btnClose.className = 'px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 text-slate-600 hover:text-slate-900';
+                btnLong.className = 'px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 bg-purple-600 text-white shadow-xs';
+            }
+        }
+
+        if (title) {
+            title.textContent = type === 'CLOSE_RANGE' 
+                ? 'Close-Range 13.56MHz RFID Card Assignment Station' 
+                : 'Long-Range UHF RFID Sticker Assignment Station';
+        }
+        if (subtitle) {
+            subtitle.textContent = type === 'CLOSE_RANGE'
+                ? 'Assign a physical 13.56MHz Mifare / 125kHz RFID card for pedestrian turnstiles and gates.'
+                : `Assign a physical UHF sticker (860-960MHz) ${veh ? `to vehicle plate ${veh.plate_number}` : ''} for automated vehicle drive-through.`;
+        }
+
+        // Populate UID input with existing card of this type
+        const userObj = adminState.users.find(x => x.id === currentReviewUserId);
+        if (userObj) {
+            const cObj = (userObj.rfid_cards || []).find(c => c.rfid_type === type);
+            const val = (cObj?.rfid_uid && !cObj.rfid_uid.startsWith('UNASSIGNED_')) ? cObj.rfid_uid : '';
+            if (el('revRfidUid')) {
+                el('revRfidUid').value = val;
+                handleRfidInputCheck(val);
+            }
+        }
+
+        if (approveBtn) {
+            approveBtn.innerHTML = `<i data-lucide="check-circle" class="w-4 h-4 text-charm-yellow"></i> Approve &amp; Issue ${type === 'CLOSE_RANGE' ? 'Close-Range Card' : 'Long-Range UHF Sticker'}`;
+            if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
+        }
+
+        if (activeScanListener.isActive) {
+            window.startRfidScanListening(type, 'revRfidUid', 'revUidStatusChip');
+        }
+    };
+
+    // Initialize with target range type
+    const initialRange = isVehTarget ? 'LONG_RANGE' : 'CLOSE_RANGE';
+    switchReviewRfidType(initialRange);
 
     // Action Buttons
     if (el('revBtnApprove')) {
-        el('revBtnApprove').innerHTML = isItemAuth 
-            ? '<i data-lucide="check-circle" class="w-4 h-4 text-charm-yellow"></i> Update RFID UID' 
-            : (isVehTarget ? '<i data-lucide="check-circle" class="w-4 h-4 text-charm-yellow"></i> Approve &amp; Issue UHF Sticker' : '<i data-lucide="check-circle" class="w-4 h-4 text-charm-yellow"></i> Approve &amp; Issue Card');
         el('revBtnApprove').onclick = () => { approveUser(u.id, currentReviewTargetType, currentReviewVehicleId); };
     }
 
@@ -3753,6 +3953,7 @@ window.openReviewModal = function(id, targetType = 'PEDESTRIAN', vehicleId = nul
 };
 
 window.closeReviewModal = function() {
+    window.stopRfidScanListening(false);
     const modal = el('reviewModal');
     if (!modal) return;
     modal.classList.remove('opacity-100'); 
@@ -3780,6 +3981,219 @@ window.switchReviewTab = function(tabName) {
     lucide.createIcons();
 };
 
+// ==========================================
+// LIVE RFID SCAN CAPTURE ENGINE (Entry & UHF Gates)
+// ==========================================
+let activeScanListener = {
+    isActive: false,
+    targetMode: 'CLOSE_RANGE', // 'CLOSE_RANGE' | 'LONG_RANGE'
+    targetInputId: 'revRfidUid',
+    targetBtnId: 'revUidStatusChip',
+    startTime: null,
+    pollTimer: null,
+    timeoutTimer: null,
+    subscription: null
+};
+
+function playScanBeep(success = true) {
+    try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        const ctx = new AudioCtx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        if (success) {
+            osc.frequency.setValueAtTime(880, ctx.currentTime);
+            osc.frequency.setValueAtTime(1320, ctx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.2, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.3);
+        } else {
+            osc.frequency.setValueAtTime(350, ctx.currentTime);
+            gain.gain.setValueAtTime(0.2, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.2);
+        }
+    } catch(e) {}
+}
+
+window.startRfidScanListening = function(targetMode = 'CLOSE_RANGE', targetInputId = 'revRfidUid', targetBtnId = 'revUidStatusChip') {
+    window.stopRfidScanListening(false);
+
+    activeScanListener.isActive = true;
+    activeScanListener.targetMode = targetMode;
+    activeScanListener.targetInputId = targetInputId;
+    activeScanListener.targetBtnId = targetBtnId;
+    activeScanListener.startTime = new Date(Date.now() - 1500).toISOString();
+
+    const inputEl = el(targetInputId);
+    if (inputEl) {
+        inputEl.focus();
+        inputEl.classList.add('ring-4', targetMode === 'LONG_RANGE' ? 'ring-purple-400/50' : 'ring-emerald-400/50');
+    }
+
+    const btnEl = el(targetBtnId);
+    if (btnEl) {
+        const isLong = targetMode === 'LONG_RANGE';
+        btnEl.className = `w-full py-3 px-4 rounded-2xl ${isLong ? 'bg-purple-100 border-2 border-purple-500 text-purple-900' : 'bg-emerald-100 border-2 border-emerald-500 text-emerald-900'} text-xs font-black flex items-center justify-center gap-2 shadow-lg animate-pulse transition-all cursor-pointer`;
+        btnEl.innerHTML = `
+            <i data-lucide="radio" class="w-4 h-4 ${isLong ? 'text-purple-600' : 'text-emerald-600'} animate-spin"></i>
+            <span>📡 Waiting for ${isLong ? 'Long-Range UHF' : 'Entry RFID'} Scan... Tap now!</span>
+            <span class="text-[10px] text-red-600 font-bold ml-1.5 underline hover:text-red-800">(Cancel)</span>
+        `;
+        if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
+    }
+
+    showToast(`📡 Listening for ${targetMode === 'LONG_RANGE' ? 'Long-Range UHF Sticker' : 'Entry RFID Card'}... Tap/scan your tag now at the gate reader!`, 'info');
+
+    // Supabase Realtime Hook on transactions
+    if (supabaseClient) {
+        try {
+            activeScanListener.subscription = supabaseClient.channel('rfid-live-listen-' + Date.now())
+                .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'transactions' }, (payload) => {
+                    if (payload && payload.new) {
+                        handleIncomingScanRecord(payload.new);
+                    }
+                })
+                .subscribe();
+        } catch(e) {
+            console.warn('Realtime listen subscribe error:', e);
+        }
+    }
+
+    // Polling Fallback (checks every 800ms)
+    activeScanListener.pollTimer = setInterval(async () => {
+        if (!activeScanListener.isActive) return;
+        if (supabaseClient) {
+            try {
+                const { data } = await supabaseClient
+                    .from('transactions')
+                    .select('rfid_uid, gate, direction, rfid_type, timestamp, status')
+                    .gte('timestamp', activeScanListener.startTime)
+                    .order('timestamp', { ascending: false })
+                    .limit(1);
+
+                if (data && data.length) {
+                    handleIncomingScanRecord(data[0]);
+                }
+            } catch(err) {
+                console.warn('Poll scan check error:', err);
+            }
+        }
+    }, 800);
+
+    // Timeout after 60s
+    activeScanListener.timeoutTimer = setTimeout(() => {
+        if (activeScanListener.isActive) {
+            window.stopRfidScanListening(true);
+            showToast('Scan listening timed out. Click button again to retry.', 'warning');
+        }
+    }, 60000);
+};
+
+window.stopRfidScanListening = function(isTimeout = false) {
+    if (!activeScanListener.isActive) return;
+    activeScanListener.isActive = false;
+
+    if (activeScanListener.pollTimer) {
+        clearInterval(activeScanListener.pollTimer);
+        activeScanListener.pollTimer = null;
+    }
+    if (activeScanListener.timeoutTimer) {
+        clearTimeout(activeScanListener.timeoutTimer);
+        activeScanListener.timeoutTimer = null;
+    }
+    if (activeScanListener.subscription && supabaseClient) {
+        try {
+            supabaseClient.removeChannel(activeScanListener.subscription);
+        } catch(e) {}
+        activeScanListener.subscription = null;
+    }
+
+    const inputEl = el(activeScanListener.targetInputId);
+    if (inputEl) {
+        inputEl.classList.remove('ring-4', 'ring-purple-400/50', 'ring-emerald-400/50');
+    }
+
+    // Restore button appearance
+    const btnEl = el(activeScanListener.targetBtnId);
+    if (btnEl) {
+        const currentVal = inputEl ? inputEl.value : '';
+        if (activeScanListener.targetBtnId === 'revUidStatusChip') {
+            handleRfidInputCheck(currentVal);
+        } else {
+            const isLong = activeScanListener.targetMode === 'LONG_RANGE';
+            btnEl.className = `px-3 py-2 ${isLong ? 'bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-600' : 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-600'} border rounded-xl text-xs font-bold transition-all flex items-center gap-1 shrink-0 cursor-pointer hover:text-white`;
+            btnEl.innerHTML = `<i data-lucide="radio" class="w-3.5 h-3.5"></i> <span>Scan</span>`;
+            if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
+        }
+    }
+};
+
+window.toggleRfidScanListener = function() {
+    if (activeScanListener.isActive) {
+        window.stopRfidScanListening(false);
+        showToast('Scanner listening cancelled.', 'info');
+        return;
+    }
+    const currentMode = window.currentReviewRfidType || 'CLOSE_RANGE';
+    window.startRfidScanListening(currentMode, 'revRfidUid', 'revUidStatusChip');
+};
+
+window.startModalRfidScanListener = function(type) {
+    if (activeScanListener.isActive && activeScanListener.targetMode === type) {
+        window.stopRfidScanListening(false);
+        return;
+    }
+    const inputId = type === 'LONG_RANGE' ? 'formUidLong' : 'formUidClose';
+    const btnId = type === 'LONG_RANGE' ? 'btnScanLongUserModal' : 'btnScanCloseUserModal';
+    window.startRfidScanListening(type, inputId, btnId);
+};
+
+function handleIncomingScanRecord(record) {
+    if (!activeScanListener.isActive || !record || !record.rfid_uid) return;
+    
+    const rfidType = record.rfid_type || '';
+    const gate = (record.gate || '').toUpperCase();
+    const isLongMode = activeScanListener.targetMode === 'LONG_RANGE';
+
+    if (isLongMode) {
+        if (rfidType === 'CLOSE_RANGE' && !gate.includes('LONG') && !gate.includes('UHF')) {
+            return; // Ignore close-range card when listening for UHF
+        }
+    } else {
+        if (rfidType === 'LONG_RANGE' || gate.includes('LONG') || gate.includes('UHF')) {
+            return; // Ignore long-range UHF when listening for close-range
+        }
+    }
+
+    const cleanUid = record.rfid_uid.trim().toUpperCase();
+    const inputEl = el(activeScanListener.targetInputId);
+    if (inputEl) {
+        inputEl.value = cleanUid;
+    }
+
+    playScanBeep(true);
+    showToast(`🎉 Captured RFID UID from ${record.gate || (isLongMode ? 'Long-Range UHF Gate' : 'Entry Gate')}: ${cleanUid}`, 'success');
+
+    const targetBtnId = activeScanListener.targetBtnId;
+    window.stopRfidScanListening(false);
+
+    if (targetBtnId === 'revUidStatusChip') {
+        handleRfidInputCheck(cleanUid);
+        const chipEl = el('revUidStatusChip');
+        if (chipEl && !chipEl.textContent.includes('Duplicate')) {
+            chipEl.innerHTML = `<i data-lucide="check-check" class="w-4 h-4 text-emerald-600"></i><span class="text-emerald-800">Scanned from ${record.gate || 'Scanner'}: ${cleanUid}</span>`;
+            chipEl.className = 'w-full py-3 px-4 rounded-2xl bg-emerald-100 border-2 border-emerald-400 text-xs font-extrabold text-emerald-900 flex items-center justify-center gap-2 shadow-sm';
+            if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
+        }
+    }
+}
+
 window.handleRfidInputCheck = function(val) {
     const inputVal = (val || '').trim().toUpperCase();
     const warnEl = el('revDuplicateWarning');
@@ -3788,10 +4202,10 @@ window.handleRfidInputCheck = function(val) {
     if (!inputVal) {
         if (warnEl) warnEl.classList.add('hidden');
         if (chipEl) {
-            chipEl.innerHTML = '<i data-lucide="radio" class="w-4 h-4 text-slate-400"></i><span>Awaiting UID Input</span>';
-            chipEl.className = 'w-full py-3 px-4 rounded-2xl bg-white border border-slate-200 text-xs font-bold text-slate-500 flex items-center justify-center gap-2 shadow-sm';
+            chipEl.innerHTML = '<i data-lucide="radio" class="w-4 h-4 text-emerald-600 animate-pulse"></i><span id="revUidStatusChipText">Awaiting UID Input (Click to Listen)</span>';
+            chipEl.className = 'w-full py-3 px-4 rounded-2xl bg-white border-2 border-slate-200 text-xs font-bold text-slate-600 flex items-center justify-center gap-2 shadow-sm hover:border-emerald-500 hover:bg-emerald-50/50 hover:text-emerald-800 transition-all cursor-pointer group';
         }
-        lucide.createIcons();
+        if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
         return;
     }
 
@@ -3818,7 +4232,7 @@ window.handleRfidInputCheck = function(val) {
             chipEl.className = 'w-full py-3 px-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs font-bold text-emerald-800 flex items-center justify-center gap-2 shadow-sm';
         }
     }
-    lucide.createIcons();
+    if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
 };
 
 window.generateTestUID = function() {
@@ -4760,40 +5174,142 @@ window.renderEsp32DevicesTable = function() {
         return { ...dev, computedStatus: status, statusBadge, lastSeenText, elapsedSecs };
     });
 
-    // Update Gate Health Cards
+    // Helper to dynamically render all hardware component statuses
+    const updateUnitComponents = (prefix, dev, isUhf) => {
+        const isOnline = dev && dev.computedStatus === 'ONLINE';
+        const isStandby = dev && dev.computedStatus === 'STANDBY';
+
+        const setBadge = (elementId, text, statusType) => {
+            const elem = el(elementId);
+            if (!elem) return;
+            if (statusType === 'good') {
+                elem.className = 'font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1';
+                elem.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> ${text}`;
+            } else if (statusType === 'warn') {
+                elem.className = 'font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 text-[10px] flex items-center gap-1';
+                elem.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span> ${text}`;
+            } else {
+                elem.className = 'font-bold text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200 text-[10px] flex items-center gap-1';
+                elem.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span> ${text}`;
+            }
+        };
+
+        // 1. MicroSD Memory (HSPI)
+        const sdRaw = (dev && dev.sd_status) || 'MOUNTED';
+        if (isOnline) {
+            setBadge(`${prefix}SdStatus`, sdRaw.includes('ERROR') || sdRaw.includes('UNMOUNTED') ? 'SD UNMOUNTED' : 'MOUNTED (HSPI)', sdRaw.includes('ERROR') ? 'warn' : 'good');
+        } else if (isStandby) {
+            setBadge(`${prefix}SdStatus`, 'MOUNTED (STANDBY)', 'good');
+        } else {
+            setBadge(`${prefix}SdStatus`, 'OFFLINE FALLBACK CACHE', 'warn');
+        }
+
+        // 2. RFID Reader
+        if (isUhf) {
+            if (isOnline) setBadge(`${prefix}RfidStatus`, (dev && dev.rfid_status) || 'WIEGAND 26/34 READY', 'good');
+            else if (isStandby) setBadge(`${prefix}RfidStatus`, 'STANDBY SCAN (~860–960 MHz)', 'good');
+            else setBadge(`${prefix}RfidStatus`, 'LOCAL OFFLINE SCAN', 'warn');
+        } else {
+            if (isOnline) setBadge(`${prefix}RfidStatus`, (dev && dev.rfid_status) || 'MFRC522 READY (13.56 MHz)', 'good');
+            else if (isStandby) setBadge(`${prefix}RfidStatus`, 'STANDBY SCAN (13.56 MHz)', 'good');
+            else setBadge(`${prefix}RfidStatus`, 'LOCAL OFFLINE SCAN', 'warn');
+        }
+
+        // 3. Traffic Light / Barrier LEDs
+        if (isUhf) {
+            if (isOnline) setBadge(`${prefix}LedStatus`, (dev && dev.led_status) || '🔴 🟢 OPERATIONAL', 'good');
+            else if (isStandby) setBadge(`${prefix}LedStatus`, '🔴 STANDBY IDLE', 'good');
+            else setBadge(`${prefix}LedStatus`, 'LOCAL HARDWARE', 'warn');
+        } else {
+            if (isOnline) setBadge(`${prefix}LedStatus`, (dev && dev.led_status) || '🔴 🟡 🟢 ACTIVE', 'good');
+            else if (isStandby) setBadge(`${prefix}LedStatus`, '🔴 STANDBY RED', 'good');
+            else setBadge(`${prefix}LedStatus`, 'LOCAL HARDWARE', 'warn');
+        }
+
+        // 4. Active Buzzer
+        if (isUhf) {
+            if (isOnline) setBadge(`${prefix}BuzzerStatus`, (dev && dev.buzzer_status) || '3/3 MATCH BEEP (GPIO 27)', 'good');
+            else if (isStandby) setBadge(`${prefix}BuzzerStatus`, 'STANDBY ARMED', 'good');
+            else setBadge(`${prefix}BuzzerStatus`, 'LOCAL FEEDBACK', 'warn');
+        } else {
+            if (isOnline) setBadge(`${prefix}BuzzerStatus`, (dev && dev.buzzer_status) || 'PWM ACTIVE (GPIO 27)', 'good');
+            else if (isStandby) setBadge(`${prefix}BuzzerStatus`, 'STANDBY ARMED', 'good');
+            else setBadge(`${prefix}BuzzerStatus`, 'LOCAL FEEDBACK', 'warn');
+        }
+
+        // 5. 16x2 I2C LCD
+        if (isOnline) setBadge(`${prefix}LcdStatus`, (dev && dev.lcd_status) || 'INITIALIZED (0x27 / 16x2)', 'good');
+        else if (isStandby) setBadge(`${prefix}LcdStatus`, 'STANDBY DISPLAY', 'good');
+        else setBadge(`${prefix}LcdStatus`, 'LOCAL DISPLAY', 'warn');
+
+        // 6. Actuator / Pass Signal Relay
+        if (isUhf) {
+            if (isOnline) setBadge(`${prefix}RelayStatus`, (dev && dev.relay_status) || 'PASS SIGNAL ARMED', 'good');
+            else if (isStandby) setBadge(`${prefix}RelayStatus`, 'SIGNAL STANDBY', 'good');
+            else setBadge(`${prefix}RelayStatus`, 'LOCAL SIGNAL ACTIVE', 'warn');
+        } else {
+            if (isOnline) setBadge(`${prefix}RelayStatus`, (dev && dev.relay_status) || 'GATE RELAY ARMED', 'good');
+            else if (isStandby) setBadge(`${prefix}RelayStatus`, 'GATE STANDBY', 'good');
+            else setBadge(`${prefix}RelayStatus`, 'LOCAL RELAY ACTIVE', 'warn');
+        }
+    };
+
+    // 1. Entry Gate Unit
+    const entryDev = deviceStatuses.find(d => d.gate_type === 'ENTRY' || (d.esp32_identifier && d.esp32_identifier.includes('ENTRY')));
     if (el('entryGateStatusBadge')) {
-        const entryDev = deviceStatuses.find(d => d.gate_type === 'ENTRY' || (d.esp32_identifier && d.esp32_identifier.includes('ENTRY')));
         if (entryDev && entryDev.computedStatus === 'ONLINE') {
             el('entryGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> ONLINE (Active)`;
-            el('entryGateStatusBadge').className = 'text-sm font-black text-emerald-700 mt-1 flex items-center gap-1.5';
-            if (el('entryGateIpText')) el('entryGateIpText').textContent = `${entryDev.device_location || 'Main Entry'} • ${entryDev.lastSeenText}`;
+            el('entryGateStatusBadge').className = 'text-xs font-black text-emerald-700 flex items-center gap-1.5';
+            if (el('entryGateIpText')) el('entryGateIpText').textContent = `${entryDev.device_location || 'Entry Gate'} • ${entryDev.lastSeenText}`;
         } else if (entryDev && entryDev.computedStatus === 'STANDBY') {
             el('entryGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-500"></span> STANDBY`;
-            el('entryGateStatusBadge').className = 'text-sm font-black text-amber-700 mt-1 flex items-center gap-1.5';
+            el('entryGateStatusBadge').className = 'text-xs font-black text-amber-700 flex items-center gap-1.5';
             if (el('entryGateIpText')) el('entryGateIpText').textContent = `${entryDev.lastSeenText}`;
         } else {
             el('entryGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-slate-400"></span> OFFLINE / STANDBY`;
-            el('entryGateStatusBadge').className = 'text-sm font-black text-slate-500 mt-1 flex items-center gap-1.5';
-            if (el('entryGateIpText')) el('entryGateIpText').textContent = entryDev ? entryDev.lastSeenText : 'No active gate session';
+            el('entryGateStatusBadge').className = 'text-xs font-black text-slate-500 flex items-center gap-1.5';
+            if (el('entryGateIpText')) el('entryGateIpText').textContent = entryDev ? entryDev.lastSeenText : 'Offline Fallback Enabled';
         }
     }
+    updateUnitComponents('entry', entryDev, false);
 
+    // 2. Exit Gate Unit
+    const exitDev = deviceStatuses.find(d => d.gate_type === 'EXIT' || (d.esp32_identifier && d.esp32_identifier.includes('EXIT')));
     if (el('exitGateStatusBadge')) {
-        const exitDev = deviceStatuses.find(d => d.gate_type === 'EXIT' || (d.esp32_identifier && d.esp32_identifier.includes('EXIT')));
         if (exitDev && exitDev.computedStatus === 'ONLINE') {
             el('exitGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> ONLINE (Active)`;
-            el('exitGateStatusBadge').className = 'text-sm font-black text-emerald-700 mt-1 flex items-center gap-1.5';
-            if (el('exitGateIpText')) el('exitGateIpText').textContent = `${exitDev.device_location || 'Main Exit'} • ${exitDev.lastSeenText}`;
+            el('exitGateStatusBadge').className = 'text-xs font-black text-emerald-700 flex items-center gap-1.5';
+            if (el('exitGateIpText')) el('exitGateIpText').textContent = `${exitDev.device_location || 'Exit Gate'} • ${exitDev.lastSeenText}`;
         } else if (exitDev && exitDev.computedStatus === 'STANDBY') {
             el('exitGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-500"></span> STANDBY`;
-            el('exitGateStatusBadge').className = 'text-sm font-black text-amber-700 mt-1 flex items-center gap-1.5';
+            el('exitGateStatusBadge').className = 'text-xs font-black text-amber-700 flex items-center gap-1.5';
             if (el('exitGateIpText')) el('exitGateIpText').textContent = `${exitDev.lastSeenText}`;
         } else {
             el('exitGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-slate-400"></span> OFFLINE / STANDBY`;
-            el('exitGateStatusBadge').className = 'text-sm font-black text-slate-500 mt-1 flex items-center gap-1.5';
-            if (el('exitGateIpText')) el('exitGateIpText').textContent = exitDev ? exitDev.lastSeenText : 'No active gate session';
+            el('exitGateStatusBadge').className = 'text-xs font-black text-slate-500 flex items-center gap-1.5';
+            if (el('exitGateIpText')) el('exitGateIpText').textContent = exitDev ? exitDev.lastSeenText : 'Offline Fallback Enabled';
         }
     }
+    updateUnitComponents('exit', exitDev, false);
+
+    // 3. Automated Vehicle UHF Gate Monitor (Gate Unit 1: Vehicle Entry - No Barrier)
+    const uhfDev = deviceStatuses.find(d => d.gate_type === 'ENTRY_EXIT' || d.gate_type === 'ENTRY' && (d.rfid_range === 'LONG_RANGE' || (d.esp32_identifier && (d.esp32_identifier.includes('01') || d.esp32_identifier.includes('UHF')))) || d.gate_type === 'BIDIRECTIONAL' || (d.esp32_identifier && (d.esp32_identifier.includes('UHF') || d.esp32_identifier.includes('01') || d.esp32_identifier.includes('VEHICLE'))));
+    if (el('uhfGateStatusBadge')) {
+        if (uhfDev && uhfDev.computedStatus === 'ONLINE') {
+            el('uhfGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> ONLINE (Active)`;
+            el('uhfGateStatusBadge').className = 'text-xs font-black text-emerald-700 flex items-center gap-1.5';
+            if (el('uhfGateIpText')) el('uhfGateIpText').textContent = `${uhfDev.device_location || 'Main Gate'} • ${uhfDev.lastSeenText}`;
+        } else if (uhfDev && uhfDev.computedStatus === 'STANDBY') {
+            el('uhfGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-500"></span> STANDBY`;
+            el('uhfGateStatusBadge').className = 'text-xs font-black text-amber-700 flex items-center gap-1.5';
+            if (el('uhfGateIpText')) el('uhfGateIpText').textContent = `${uhfDev.lastSeenText}`;
+        } else {
+            el('uhfGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-slate-400"></span> OFFLINE / STANDBY`;
+            el('uhfGateStatusBadge').className = 'text-xs font-black text-slate-500 flex items-center gap-1.5';
+            if (el('uhfGateIpText')) el('uhfGateIpText').textContent = uhfDev ? uhfDev.lastSeenText : 'Offline Fallback Enabled';
+        }
+    }
+    updateUnitComponents('uhf', uhfDev, true);
 
     if (el('syncedGatesCount')) {
         el('syncedGatesCount').textContent = `${onlineCount} of ${devices.length} Nodes Active`;
@@ -4818,26 +5334,28 @@ window.renderEsp32DevicesTable = function() {
         }
 
         tableBody.innerHTML = deviceStatuses.map(d => {
-            const roleBadge = d.gate_type === 'ENTRY' 
-                ? '<span class="px-2 py-0.5 rounded text-[10px] font-black bg-emerald-100 text-emerald-800">ENTRY GATE</span>'
-                : (d.gate_type === 'EXIT' 
-                    ? '<span class="px-2 py-0.5 rounded text-[10px] font-black bg-blue-100 text-blue-800">EXIT GATE</span>'
-                    : '<span class="px-2 py-0.5 rounded text-[10px] font-black bg-purple-100 text-purple-800">ADMIN</span>');
+            const isUhf = d.rfid_range === 'LONG_RANGE' || d.gate_type === 'ENTRY_EXIT' || d.gate_type === 'BIDIRECTIONAL' || (d.esp32_identifier && (d.esp32_identifier.includes('UHF') || d.esp32_identifier.includes('01') || d.esp32_identifier.includes('VEHICLE')));
+            
+            const roleBadge = isUhf
+                ? '<span class="px-2 py-0.5 rounded text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">VEHICLE (ENTRY &amp; EXIT - 1 DEVICE)</span>'
+                : (d.gate_type === 'ENTRY' 
+                    ? '<span class="px-2 py-0.5 rounded text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">PEDESTRIAN (ENTRY)</span>'
+                    : (d.gate_type === 'EXIT' 
+                        ? '<span class="px-2 py-0.5 rounded text-[10px] font-black bg-blue-100 text-blue-800 border border-blue-300">PEDESTRIAN (EXIT)</span>'
+                        : '<span class="px-2 py-0.5 rounded text-[10px] font-black bg-purple-100 text-purple-800">ADMIN GATE</span>'));
 
-            const rangeBadge = d.rfid_range === 'LONG_RANGE'
-                ? '<span class="font-mono text-emerald-700 font-bold">900MHz UHF</span>'
-                : (d.rfid_range === 'CLOSE_RANGE'
-                    ? '<span class="font-mono text-blue-700 font-bold">13.56MHz NFC</span>'
-                    : '<span class="font-mono text-purple-700 font-bold">Hybrid Dual</span>');
+            const rangeBadge = isUhf
+                ? '<span class="font-mono text-amber-800 font-bold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">~860–960 MHz UHF</span>'
+                : '<span class="font-mono text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">13.56 MHz HF</span>';
 
-            const categoryText = (d.device_category || 'VEHICLE_BARRIER').replace(/_/g, ' ');
+            const categoryText = isUhf ? 'MAIN GATE' : (d.gate_type === 'ENTRY' ? 'PEDESTRIAN (ENTRY)' : 'PEDESTRIAN (EXIT)');
 
             return `
             <tr class="hover:bg-slate-50 transition-colors">
                 <td class="p-3.5">
                     <div class="flex items-center gap-2">
-                        <div class="w-8 h-8 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center font-bold">
-                            <i data-lucide="cpu" class="w-4 h-4 text-emerald-700"></i>
+                        <div class="w-8 h-8 rounded-xl ${isUhf ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700'} flex items-center justify-center font-bold">
+                            <i data-lucide="${isUhf ? 'car' : 'footprints'}" class="w-4 h-4"></i>
                         </div>
                         <div>
                             <div class="font-bold text-slate-800">${d.device_name || d.esp32_identifier}</div>
@@ -4848,7 +5366,7 @@ window.renderEsp32DevicesTable = function() {
                 <td class="p-3.5">${roleBadge}</td>
                 <td class="p-3.5">
                     <div class="font-bold text-slate-700 text-xs">${categoryText}</div>
-                    <div class="text-[11px]">${rangeBadge}</div>
+                    <div class="text-[11px] mt-0.5">${rangeBadge}</div>
                 </td>
                 <td class="p-3.5 text-slate-600 font-medium">${d.device_location || 'Campus Gate'}</td>
                 <td class="p-3.5">
@@ -4861,7 +5379,6 @@ window.renderEsp32DevicesTable = function() {
                         <button onclick="openChangeGateWifiModal('${d.id}', '${(d.device_name || d.esp32_identifier).replace(/'/g, "\\'")}', '${d.esp32_identifier}')" class="px-2.5 py-1 bg-charm-dark text-white hover:bg-charm-mid rounded-lg font-bold text-xs flex items-center gap-1 transition-colors shadow-sm" title="Change Wi-Fi Over-The-Air (1-Click)">
                             <i data-lucide="wifi" class="w-3.5 h-3.5 text-charm-yellow"></i> Change Wi-Fi
                         </button>
-                        <button onclick="reprovisionDevice('${d.gate_type || 'ENTRY'}')" class="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-bold text-xs transition-colors" title="Pair & Provision via Bluetooth (Offline)">BLE</button>
                         <button onclick="openDeviceModal('${d.id}')" class="p-1.5 text-slate-400 hover:text-blue-600 rounded-lg transition-colors" title="Edit Gate Unit"><i data-lucide="edit-2" class="w-3.5 h-3.5"></i></button>
                         <button onclick="deleteDevice('${d.id}')" class="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition-colors" title="Delete Gate Unit"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
                     </div>
@@ -5095,13 +5612,21 @@ window.openChangeGateWifiModal = function(deviceId = null, deviceName = '', esp3
         if (devices.length > 0) {
             devSelect.innerHTML = devices.map(d => {
                 const isSelected = (deviceId && d.id === deviceId) || (esp32Identifier && d.esp32_identifier === esp32Identifier);
+                const isUhf = d.rfid_range === 'LONG_RANGE' || d.gate_type === 'ENTRY_EXIT' || d.gate_type === 'BIDIRECTIONAL' || (d.esp32_identifier && (d.esp32_identifier.includes('01') || d.esp32_identifier.includes('UHF')));
+                const typeLabel = isUhf
+                    ? '[~860–960 MHz UHF — VEHICLE (ENTRY)]'
+                    : (d.gate_type === 'ENTRY' ? '[13.56 MHz HF — PEDESTRIAN (ENTRY)]' : '[13.56 MHz HF — PEDESTRIAN (EXIT)]');
                 const wifiInfo = d.wifi_ssid ? ` • Current Wi-Fi: ${d.wifi_ssid}` : '';
                 return `<option value="${d.id}" data-identifier="${d.esp32_identifier}" data-name="${(d.device_name || d.esp32_identifier).replace(/"/g, '&quot;')}" ${isSelected ? 'selected' : ''}>
-                    ${d.device_name || d.esp32_identifier} (${d.esp32_identifier})${wifiInfo}
+                    ${d.device_name || d.esp32_identifier} ${typeLabel} (${d.esp32_identifier})${wifiInfo}
                 </option>`;
             }).join('');
         } else {
-            devSelect.innerHTML = `<option value="DEFAULT_GATE" data-identifier="CHARRMPASS_GATE_ENTRY" data-name="CHARRMPASS Entry Unit">CHARRMPASS Entry Unit (Default Gate)</option>`;
+            devSelect.innerHTML = `
+                <option value="GATE_ENTRY" data-identifier="CHARRMPASS_GATE_ENTRY" data-name="CHARRMPASS Entry Unit">CHARRMPASS Entry Unit [13.56 MHz HF] - PEDESTRIAN (ENTRY) (CHARRMPASS_GATE_ENTRY)</option>
+                <option value="GATE_EXIT" data-identifier="CHARRMPASS_GATE_EXIT" data-name="CHARRMPASS Exit Unit">CHARRMPASS Exit Unit [13.56 MHz HF] - PEDESTRIAN (EXIT) (CHARRMPASS_GATE_EXIT)</option>
+                <option value="GATE_01" data-identifier="CHARRMPASS_GATE_01" data-name="CHARRMPASS Gate Unit 1">CHARRMPASS Gate Unit 1 [~860–960 MHz UHF] - VEHICLE (ENTRY) (CHARRMPASS_GATE_01)</option>
+            `;
         }
     }
 
@@ -5199,8 +5724,14 @@ window.submitChangeGateWifi = async function(event) {
 
     } catch (err) {
         console.error('Error dispatching OTA Wi-Fi update:', err);
-        appendBleLog(`[OTA Wi-Fi] ❌ Failed to dispatch Wi-Fi command: ${err.message}`, 'error');
-        showToast('Failed to send Wi-Fi command: ' + err.message, 'error');
+        const isColumnMissing = err.message && (err.message.includes('target_pass') || err.message.includes('target_ssid') || err.message.includes('schema cache'));
+        if (isColumnMissing) {
+            appendBleLog(`[OTA Wi-Fi] ❌ Supabase Schema Update Required: Run 'ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS target_pass TEXT;' in Supabase SQL Editor.`, 'error');
+            showToast("Missing 'target_pass' column in Supabase devices table. Please run the SQL migration snippet in your Supabase SQL Editor.", 'error');
+        } else {
+            appendBleLog(`[OTA Wi-Fi] ❌ Failed to dispatch Wi-Fi command: ${err.message}`, 'error');
+            showToast('Failed to send Wi-Fi command: ' + err.message, 'error');
+        }
     } finally {
         if (submitBtn) {
             submitBtn.disabled = false;
@@ -5346,28 +5877,51 @@ function updateBulkSectionOptions() {
     }
 }
 
+let pendingAcademicDelete = null;
+
 function renderAcademicBadgesList() {
     const container = el('academicProgramsBadgesList');
     if (!container) return;
 
+    if (!academicState.programs || academicState.programs.length === 0) {
+        container.innerHTML = `
+            <div class="col-span-full p-8 text-center bg-white border border-dashed border-slate-200 rounded-2xl shadow-xs">
+                <i data-lucide="folder-x" class="w-8 h-8 text-slate-300 mx-auto mb-2"></i>
+                <p class="text-xs font-bold text-slate-600">No academic programs configured yet</p>
+                <p class="text-[11px] text-slate-400 mt-0.5">Use the "Add Academic Program / Course" form above to create one.</p>
+            </div>
+        `;
+        if (window.lucide && typeof lucide.createIcons === 'function') {
+            lucide.createIcons();
+        }
+        return;
+    }
+
     container.innerHTML = academicState.programs.map(p => {
         const progSections = academicState.sections.filter(s => s.program === p.code);
         return `
-            <div class="p-4 rounded-2xl bg-white border border-slate-200/80 shadow-sm flex flex-col justify-between gap-3">
+            <div class="p-4 rounded-2xl bg-white border border-slate-200/80 shadow-xs flex flex-col justify-between gap-3 hover:border-slate-300 hover:shadow-sm transition-all group">
                 <div>
-                    <div class="flex items-center justify-between">
-                        <span class="font-display font-black text-sm text-charm-dark">${p.code}</span>
-                        <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">${p.department || 'General'}</span>
+                    <div class="flex items-center justify-between gap-2">
+                        <div class="flex items-center gap-2">
+                            <span class="font-display font-black text-sm text-charm-dark">${p.code}</span>
+                            <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">${p.department || 'General'}</span>
+                        </div>
+                        <button onclick="confirmDeleteAcademicProgram('${p.code}')" class="p-1.5 rounded-xl text-slate-400 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-100 transition-all flex items-center gap-1" title="Delete Program & All Sections">
+                            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                        </button>
                     </div>
-                    <p class="text-xs font-semibold text-slate-700 mt-1 line-clamp-1">${p.name}</p>
+                    <p class="text-xs font-semibold text-slate-700 mt-1 line-clamp-1" title="${p.name}">${p.name}</p>
                 </div>
                 <div>
-                    <div class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Configured Sections (${progSections.length}):</div>
+                    <div class="flex items-center justify-between text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                        <span>Configured Sections (${progSections.length}):</span>
+                    </div>
                     <div class="flex flex-wrap gap-1">
                         ${progSections.length ? progSections.map(s => `
-                            <span class="px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-bold flex items-center gap-1">
-                                ${s.section}
-                                <button onclick="deleteAcademicSection('${p.code}', ${s.year}, '${s.section}')" class="text-emerald-500 hover:text-red-500 font-black">×</button>
+                            <span class="px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-bold flex items-center gap-1 group/sec hover:border-emerald-300 transition-all">
+                                <span>${s.section}</span>
+                                <button onclick="confirmDeleteAcademicSection('${p.code}', ${s.year}, '${s.section}')" class="text-emerald-500 hover:text-red-600 hover:bg-red-50 rounded px-1 font-black transition-all leading-none" title="Delete Section ${s.section}">×</button>
                             </span>
                         `).join('') : '<span class="text-[11px] text-slate-400 italic">No sections configured yet</span>'}
                     </div>
@@ -5375,6 +5929,10 @@ function renderAcademicBadgesList() {
             </div>
         `;
     }).join('');
+
+    if (window.lucide && typeof lucide.createIcons === 'function') {
+        lucide.createIcons();
+    }
 }
 
 window.saveNewAcademicProgram = function() {
@@ -5428,12 +5986,152 @@ window.saveNewAcademicSection = function() {
     showToast(`Added Section ${sec} to ${prog}!`, 'success');
 };
 
-window.deleteAcademicSection = function(prog, year, sec) {
-    academicState.sections = academicState.sections.filter(s => !(s.program === prog && s.year === year && s.section === sec));
-    saveAcademicDataToStorage();
-    renderAcademicDataUI();
-    showToast(`Removed section ${sec} from ${prog}`, 'info');
+// ==============================================
+// CONFIRMATION DIALOG FOR ACADEMIC DELETE ACTIONS
+// ==============================================
+
+window.confirmDeleteAcademicProgram = function(code) {
+    const prog = academicState.programs.find(p => p.code === code);
+    if (!prog) return;
+    const progSections = academicState.sections.filter(s => s.program === code);
+
+    pendingAcademicDelete = {
+        type: 'PROGRAM',
+        code: code,
+        name: prog.name,
+        dept: prog.department,
+        sectionsCount: progSections.length
+    };
+
+    const title = el('academicConfirmTitle');
+    const msg = el('academicConfirmMessage');
+    const details = el('academicConfirmDetails');
+
+    if (title) title.textContent = `Delete Program: ${code}?`;
+    if (msg) msg.textContent = `Are you sure you want to permanently delete this academic program? All associated sections will also be removed.`;
+    if (details) {
+        details.innerHTML = `
+            <div class="space-y-1.5 text-xs">
+                <div class="flex justify-between items-start gap-2">
+                    <span class="text-slate-400 font-semibold">Program Code:</span>
+                    <span class="font-bold text-slate-800">${prog.code}</span>
+                </div>
+                <div class="flex justify-between items-start gap-2">
+                    <span class="text-slate-400 font-semibold">Full Name:</span>
+                    <span class="font-bold text-slate-800 text-right">${prog.name}</span>
+                </div>
+                <div class="flex justify-between items-start gap-2">
+                    <span class="text-slate-400 font-semibold">Department:</span>
+                    <span class="font-bold text-slate-800">${prog.department || 'General'}</span>
+                </div>
+                <div class="flex justify-between items-start gap-2 pt-1 border-t border-slate-200">
+                    <span class="text-red-500 font-bold">Sections to remove:</span>
+                    <span class="font-bold text-red-600">${progSections.length} section(s)</span>
+                </div>
+            </div>
+        `;
+    }
+
+    openAcademicConfirmModal();
 };
+
+window.confirmDeleteAcademicSection = function(prog, year, sec) {
+    pendingAcademicDelete = {
+        type: 'SECTION',
+        prog: prog,
+        year: year,
+        sec: sec
+    };
+
+    const title = el('academicConfirmTitle');
+    const msg = el('academicConfirmMessage');
+    const details = el('academicConfirmDetails');
+
+    if (title) title.textContent = `Delete Section ${sec}?`;
+    if (msg) msg.textContent = `Are you sure you want to delete Section ${sec} from ${prog}?`;
+    if (details) {
+        details.innerHTML = `
+            <div class="space-y-1.5 text-xs">
+                <div class="flex justify-between items-center">
+                    <span class="text-slate-400 font-semibold">Program:</span>
+                    <span class="font-bold text-slate-800">${prog}</span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="text-slate-400 font-semibold">Year Level:</span>
+                    <span class="font-bold text-slate-800">${year === 1 ? '1st' : year === 2 ? '2nd' : year === 3 ? '3rd' : '4th'} Year</span>
+                </div>
+                <div class="flex justify-between items-center pt-1 border-t border-slate-200">
+                    <span class="text-red-500 font-bold">Section Name:</span>
+                    <span class="font-bold text-red-600">Section ${sec}</span>
+                </div>
+            </div>
+        `;
+    }
+
+    openAcademicConfirmModal();
+};
+
+function openAcademicConfirmModal() {
+    const modal = el('academicConfirmModal');
+    if (!modal) {
+        // Fallback to native browser confirmation if modal element not rendered
+        if (pendingAcademicDelete?.type === 'PROGRAM') {
+            if (confirm(`Delete program ${pendingAcademicDelete.code} and all its sections?`)) {
+                executeAcademicConfirmedDelete();
+            }
+        } else if (pendingAcademicDelete?.type === 'SECTION') {
+            if (confirm(`Delete section ${pendingAcademicDelete.sec} from ${pendingAcademicDelete.prog}?`)) {
+                executeAcademicConfirmedDelete();
+            }
+        }
+        return;
+    }
+
+    modal.classList.remove('hidden');
+    setTimeout(() => {
+        modal.classList.remove('opacity-0');
+        el('academicConfirmModalContent')?.classList.remove('scale-95');
+    }, 10);
+    if (window.lucide && typeof lucide.createIcons === 'function') {
+        lucide.createIcons();
+    }
+}
+
+window.closeAcademicConfirmModal = function() {
+    const modal = el('academicConfirmModal');
+    if (!modal) return;
+    modal.classList.add('opacity-0');
+    el('academicConfirmModalContent')?.classList.add('scale-95');
+    setTimeout(() => {
+        modal.classList.add('hidden');
+        pendingAcademicDelete = null;
+    }, 200);
+};
+
+window.executeAcademicConfirmedDelete = function() {
+    if (!pendingAcademicDelete) return;
+
+    if (pendingAcademicDelete.type === 'PROGRAM') {
+        const code = pendingAcademicDelete.code;
+        academicState.programs = academicState.programs.filter(p => p.code !== code);
+        academicState.sections = academicState.sections.filter(s => s.program !== code);
+        saveAcademicDataToStorage();
+        renderAcademicDataUI();
+        showToast(`Program "${code}" and all associated sections were deleted.`, 'success');
+    } else if (pendingAcademicDelete.type === 'SECTION') {
+        const { prog, year, sec } = pendingAcademicDelete;
+        academicState.sections = academicState.sections.filter(s => !(s.program === prog && s.year === year && s.section === sec));
+        saveAcademicDataToStorage();
+        renderAcademicDataUI();
+        showToast(`Section "${sec}" removed from ${prog}.`, 'info');
+    }
+
+    closeAcademicConfirmModal();
+};
+
+// Aliases for backwards compatibility
+window.deleteAcademicProgram = window.confirmDeleteAcademicProgram;
+window.deleteAcademicSection = window.confirmDeleteAcademicSection;
 
 // 2. Bulk Upload Modal Operations
 window.openBulkUploadModal = function() {
@@ -5521,25 +6219,43 @@ window.switchBulkInputMode = function(type, mode) {
 
 // Load Sample Demo Data into Paste Textarea
 window.loadSamplePasteData = function(type) {
+    const isFirstFirst = (type === 'students' ? el('bulkStudentNameOrder')?.value : el('bulkFacultyNameOrder')?.value) !== 'LAST_FIRST';
     if (type === 'students') {
         const area = el('bulkStudentPasteArea');
         if (area) {
-            area.value = "Student ID\tLast Name\tFirst Name\tMiddle Name\tSuffix\tTransit Mode\n" +
-                         "2022-00101\tDela Cruz\tJuan\tMercado\t\tVEHICLE\n" +
-                         "2022-00102\tSantos\tMaria Clara\tReyes\t\tPEDESTRIAN\n" +
-                         "2022-00103\tReyes\tCarlos\tPadilla\tJr.\tPEDESTRIAN\n" +
-                         "2022-00104\tVillanueva\tAna Beatriz\tFlores\t\tVEHICLE\n" +
-                         "2022-00105\tTan\tKenji\tLim\t\tPEDESTRIAN";
+            if (isFirstFirst) {
+                area.value = "Student ID\tFirst Name\tMiddle Name\tLast Name\tSuffix\tTransit Mode\n" +
+                             "2022-00101\tJuan\tMercado\tDela Cruz\t\tPEDESTRIAN\n" +
+                             "2022-00102\tMaria Clara\tReyes\tSantos\t\tPEDESTRIAN\n" +
+                             "2022-00103\tCarlos\tPadilla\tReyes\tJr.\tPEDESTRIAN\n" +
+                             "2022-00104\tAna Beatriz\tFlores\tVillanueva\t\tVEHICLE\n" +
+                             "2022-00105\tKenji\tLim\tTan\t\tPEDESTRIAN";
+            } else {
+                area.value = "Student ID\tLast Name\tFirst Name\tMiddle Name\tSuffix\tTransit Mode\n" +
+                             "2022-00101\tDela Cruz\tJuan\tMercado\t\tPEDESTRIAN\n" +
+                             "2022-00102\tSantos\tMaria Clara\tReyes\t\tPEDESTRIAN\n" +
+                             "2022-00103\tReyes\tCarlos\tPadilla\tJr.\tPEDESTRIAN\n" +
+                             "2022-00104\tVillanueva\tAna Beatriz\tFlores\t\tVEHICLE\n" +
+                             "2022-00105\tTan\tKenji\tLim\t\tPEDESTRIAN";
+            }
             showToast('Sample student roster pasted. Click "Read and Verify" to view.', 'info');
         }
     } else {
         const area = el('bulkFacultyPasteArea');
         if (area) {
-            area.value = "Employee ID\tLast Name\tFirst Name\tMiddle Name\tDepartment\tRole\tTransit Mode\n" +
-                         "EMP-2019-01\tTuring\tAlan\tMathison\tCollege of Computing\tFaculty\tVEHICLE\n" +
-                         "EMP-2021-04\tHopper\tGrace\tBrewster\tCollege of Computing\tFaculty\tVEHICLE\n" +
-                         "STAFF-009\tCruz\tJuanita\tBautista\tAdministration\tStaff\tPEDESTRIAN\n" +
-                         "VENDOR-02\tPenduko\tPedro\tSantos\tCanteen Services\tOthers\tVEHICLE";
+            if (isFirstFirst) {
+                area.value = "Employee ID\tFirst Name\tMiddle Name\tLast Name\tDepartment\tRole\tTransit Mode\n" +
+                             "EMP-2019-01\tAlan\tMathison\tTuring\tCollege of Computing\tFaculty\tVEHICLE\n" +
+                             "EMP-2021-04\tGrace\tBrewster\tHopper\tCollege of Computing\tFaculty\tVEHICLE\n" +
+                             "STAFF-009\tJuanita\tBautista\tCruz\tAdministration\tStaff\tPEDESTRIAN\n" +
+                             "VENDOR-02\tPedro\tSantos\tPenduko\tCanteen Services\tOthers\tVEHICLE";
+            } else {
+                area.value = "Employee ID\tLast Name\tFirst Name\tMiddle Name\tDepartment\tRole\tTransit Mode\n" +
+                             "EMP-2019-01\tTuring\tAlan\tMathison\tCollege of Computing\tFaculty\tVEHICLE\n" +
+                             "EMP-2021-04\tHopper\tGrace\tBrewster\tCollege of Computing\tFaculty\tVEHICLE\n" +
+                             "STAFF-009\tCruz\tJuanita\tBautista\tAdministration\tStaff\tPEDESTRIAN\n" +
+                             "VENDOR-02\tPenduko\tPedro\tSantos\tCanteen Services\tOthers\tVEHICLE";
+            }
             showToast('Sample faculty roster pasted. Click "Read and Verify" to view.', 'info');
         }
     }
@@ -5560,6 +6276,7 @@ window.processPastedText = function(type) {
 window.downloadCSVTemplate = function(type) {
     let csvContent = '';
     let filename = '';
+    const isFirstFirst = (type === 'students' ? el('bulkStudentNameOrder')?.value : el('bulkFacultyNameOrder')?.value) !== 'LAST_FIRST';
 
     if (type === 'students') {
         const mode = el('bulkStudentMode')?.value || 'SCOPED';
@@ -5567,25 +6284,48 @@ window.downloadCSVTemplate = function(type) {
             const prog = el('bulkStudentProgram')?.value || 'BSIT';
             const sec = el('bulkStudentSection')?.value || '3A';
             filename = `CHARRMPASS_Students_${prog}_${sec}_Template.csv`;
-            csvContent = "Student ID,Last Name,First Name,Middle Name,Suffix,Sex,Age,Address,Transit Mode,Plate Number\n" +
-                         "2022-00101,Dela Cruz,Juan,Mercado,,Male,21,\"Ibajay, Aklan\",VEHICLE,ABC-1234\n" +
-                         "2022-00102,Santos,Maria Clara,Reyes,,Female,20,\"Kalibo, Aklan\",PEDESTRIAN,\n" +
-                         "2022-00103,Reyes,Carlos,Padilla,Jr.,Male,21,\"Tangalan, Aklan\",PEDESTRIAN,\n" +
-                         "2022-00104,Lopez,Ana Beatriz,Villanueva,,Female,22,\"Numancia, Aklan\",VEHICLE,XYZ-5678\n";
+            if (isFirstFirst) {
+                csvContent = "Student ID,First Name,Middle Name,Last Name,Suffix,Sex,Age,Address,Transit Mode,Plate Number\n" +
+                             "2022-00101,Juan,Mercado,Dela Cruz,,Male,21,\"Ibajay, Aklan\",PEDESTRIAN,\n" +
+                             "2022-00102,Maria Clara,Reyes,Santos,,Female,20,\"Kalibo, Aklan\",PEDESTRIAN,\n" +
+                             "2022-00103,Carlos,Padilla,Reyes,Jr.,Male,21,\"Tangalan, Aklan\",PEDESTRIAN,\n" +
+                             "2022-00104,Ana Beatriz,Villanueva,Lopez,,Female,22,\"Numancia, Aklan\",VEHICLE,ABC-1234\n";
+            } else {
+                csvContent = "Student ID,Last Name,First Name,Middle Name,Suffix,Sex,Age,Address,Transit Mode,Plate Number\n" +
+                             "2022-00101,Dela Cruz,Juan,Mercado,,Male,21,\"Ibajay, Aklan\",PEDESTRIAN,\n" +
+                             "2022-00102,Santos,Maria Clara,Reyes,,Female,20,\"Kalibo, Aklan\",PEDESTRIAN,\n" +
+                             "2022-00103,Reyes,Carlos,Padilla,Jr.,Male,21,\"Tangalan, Aklan\",PEDESTRIAN,\n" +
+                             "2022-00104,Lopez,Ana Beatriz,Villanueva,,Female,22,\"Numancia, Aklan\",VEHICLE,ABC-1234\n";
+            }
         } else {
             filename = `CHARRMPASS_Master_Students_Template.csv`;
-            csvContent = "Student ID,Last Name,First Name,Middle Name,Suffix,Program,Section,Sex,Age,Address,Transit Mode,Plate Number\n" +
-                         "2022-00101,Dela Cruz,Juan,Mercado,,BSIT,3A,Male,21,\"Ibajay, Aklan\",VEHICLE,ABC-1234\n" +
-                         "2022-00102,Santos,Maria Clara,Reyes,,BSCS,2B,Female,20,\"Kalibo, Aklan\",PEDESTRIAN,\n" +
-                         "2022-00103,Reyes,Carlos,Padilla,Jr.,BSA,1A,Male,19,\"Tangalan, Aklan\",PEDESTRIAN,\n";
+            if (isFirstFirst) {
+                csvContent = "Student ID,First Name,Middle Name,Last Name,Suffix,Program,Section,Sex,Age,Address,Transit Mode,Plate Number\n" +
+                             "2022-00101,Juan,Mercado,Dela Cruz,,BSIT,3A,Male,21,\"Ibajay, Aklan\",PEDESTRIAN,\n" +
+                             "2022-00102,Maria Clara,Reyes,Santos,,BSCS,2B,Female,20,\"Kalibo, Aklan\",PEDESTRIAN,\n" +
+                             "2022-00103,Carlos,Padilla,Reyes,Jr.,BSA,1A,Male,19,\"Tangalan, Aklan\",PEDESTRIAN,\n";
+            } else {
+                csvContent = "Student ID,Last Name,First Name,Middle Name,Suffix,Program,Section,Sex,Age,Address,Transit Mode,Plate Number\n" +
+                             "2022-00101,Dela Cruz,Juan,Mercado,,BSIT,3A,Male,21,\"Ibajay, Aklan\",PEDESTRIAN,\n" +
+                             "2022-00102,Santos,Maria Clara,Reyes,,BSCS,2B,Female,20,\"Kalibo, Aklan\",PEDESTRIAN,\n" +
+                             "2022-00103,Reyes,Carlos,Padilla,Jr.,BSA,1A,Male,19,\"Tangalan, Aklan\",PEDESTRIAN,\n";
+            }
         }
     } else {
         filename = `CHARRMPASS_Faculty_Staff_Template.csv`;
-        csvContent = "Employee ID,Last Name,First Name,Middle Name,Suffix,Role,Department,Sex,Age,Address,Transit Mode,Plate Number\n" +
-                     "EMP-2018-01,Turing,Alan,Mathison,Dr.,Faculty,\"College of Computing\",Male,42,\"Kalibo, Aklan\",VEHICLE,ABC-789\n" +
-                     "EMP-2020-04,Hopper,Grace,Brewster,,Faculty,\"College of Computing\",Female,38,\"Ibajay, Aklan\",VEHICLE,XYZ-456\n" +
-                     "STAFF-009,Cruz,Juanita,Bautista,,Staff,Administration,Female,30,\"Makato, Aklan\",PEDESTRIAN,\n" +
-                     "VENDOR-02,Penduko,Pedro,Santos,,Others,\"Canteen Services\",Male,45,\"Numancia, Aklan\",VEHICLE,JKL-321\n";
+        if (isFirstFirst) {
+            csvContent = "Employee ID,First Name,Middle Name,Last Name,Suffix,Role,Department,Sex,Age,Address,Transit Mode,Plate Number\n" +
+                         "EMP-2018-01,Alan,Mathison,Turing,Dr.,Faculty,\"College of Computing\",Male,42,\"Kalibo, Aklan\",VEHICLE,ABC-789\n" +
+                         "EMP-2020-04,Grace,Brewster,Hopper,,Faculty,\"College of Computing\",Female,38,\"Ibajay, Aklan\",VEHICLE,XYZ-456\n" +
+                         "STAFF-009,Juanita,Bautista,Cruz,,Staff,Administration,Female,30,\"Makato, Aklan\",PEDESTRIAN,\n" +
+                         "VENDOR-02,Pedro,Santos,Penduko,,Others,\"Canteen Services\",Male,45,\"Numancia, Aklan\",VEHICLE,JKL-321\n";
+        } else {
+            csvContent = "Employee ID,Last Name,First Name,Middle Name,Suffix,Role,Department,Sex,Age,Address,Transit Mode,Plate Number\n" +
+                         "EMP-2018-01,Turing,Alan,Mathison,Dr.,Faculty,\"College of Computing\",Male,42,\"Kalibo, Aklan\",VEHICLE,ABC-789\n" +
+                         "EMP-2020-04,Hopper,Grace,Brewster,,Faculty,\"College of Computing\",Female,38,\"Ibajay, Aklan\",VEHICLE,XYZ-456\n" +
+                         "STAFF-009,Cruz,Juanita,Bautista,,Staff,Administration,Female,30,\"Makato, Aklan\",PEDESTRIAN,\n" +
+                         "VENDOR-02,Penduko,Pedro,Santos,,Others,\"Canteen Services\",Male,45,\"Numancia, Aklan\",VEHICLE,JKL-321\n";
+        }
     }
 
     // Include UTF-8 Byte Order Mark (\uFEFF) so Microsoft Excel opens it cleanly without garbling characters
@@ -5597,7 +6337,7 @@ window.downloadCSVTemplate = function(type) {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    showToast(`Downloaded template: ${filename}`, 'info');
+    showToast(`Downloaded template (${isFirstFirst ? 'First Name First' : 'Last Name First'}): ${filename}`, 'info');
 };
 
 // 4. File Drag & Drop Handlers
@@ -5673,6 +6413,8 @@ function parseCSVTextAndPreview(csvText, type, fileName) {
     const defaultFacultyRole = el('bulkFacultyRole')?.value || 'Faculty';
     const defaultFacultyStatus = el('bulkFacultyStatus')?.value || 'APPROVED';
 
+    const isFirstFirst = (type === 'students' ? el('bulkStudentNameOrder')?.value : el('bulkFacultyNameOrder')?.value) !== 'LAST_FIRST';
+
     const existingUsers = adminState.users || [];
     const normalizedList = [];
 
@@ -5721,7 +6463,7 @@ function parseCSVTextAndPreview(csvText, type, fileName) {
             }
         }
 
-        // Assemble Full Name from parts if separate columns were provided
+        // Assemble Full Name according to selected Name Format (First Name First vs Last Name First)
         let finalFullName = '';
         if (mapped.last_name || mapped.first_name) {
             const last = (mapped.last_name || '').trim();
@@ -5729,18 +6471,36 @@ function parseCSVTextAndPreview(csvText, type, fileName) {
             const middle = (mapped.middle_name || '').trim();
             const suffix = (mapped.suffix || '').trim();
 
+            let middlePart = '';
+            if (middle) {
+                middlePart = middle.length === 1 ? ` ${middle}.` : ` ${middle}`;
+            }
+            let suffixPart = suffix ? ` ${suffix}` : '';
+
             if (last && first) {
-                let middlePart = '';
-                if (middle) {
-                    middlePart = middle.length === 1 ? ` ${middle}.` : ` ${middle}`;
+                if (isFirstFirst) {
+                    finalFullName = `${first}${middlePart} ${last}${suffixPart}`.trim();
+                } else {
+                    finalFullName = `${last}, ${first}${middlePart}${suffixPart}`.trim();
                 }
-                let suffixPart = suffix ? ` ${suffix}` : '';
-                finalFullName = `${last}, ${first}${middlePart}${suffixPart}`.trim();
             } else {
-                finalFullName = `${last} ${first}`.trim();
+                finalFullName = isFirstFirst ? `${first} ${last}`.trim() : `${last} ${first}`.trim();
             }
         } else if (mapped.full_name) {
-            finalFullName = mapped.full_name.trim();
+            let fn = mapped.full_name.trim();
+            if (isFirstFirst && fn.includes(',')) {
+                // Invert "Dela Cruz, Juan M." -> "Juan M. Dela Cruz"
+                const parts = fn.split(',');
+                const lName = (parts[0] || '').trim();
+                const fName = parts.slice(1).join(',').trim();
+                if (fName && lName) {
+                    fn = `${fName} ${lName}`.trim();
+                }
+            } else if (!isFirstFirst && !fn.includes(',')) {
+                // User explicitly selected Last Name First but file has "First Last" without commas
+                // We keep as is to avoid erroneously guessing compound first/last names
+            }
+            finalFullName = fn;
         }
 
         mapped.full_name = finalFullName;
@@ -5999,57 +6759,157 @@ window.executeBulkImport = async function() {
 
     try {
         if (isConnected && supabaseClient) {
-            // Direct Supabase Client batch upsert
+            // Direct Supabase Client batch insert/update
             for (let i = 0; i < validRecords.length; i++) {
                 const r = validRecords[i];
+                const cleanCpass = (r.student_id || r.cpass_id || '').trim().toUpperCase();
+
                 const userPayload = {
                     full_name: r.full_name,
                     student_id: r.student_id || null,
-                    cpass_id: r.student_id || (r.cpass_id ? r.cpass_id.toUpperCase() : null),
-                    role: r.role,
-                    program: r.program,
-                    section: r.section,
-                    sex: r.sex,
-                    age: r.age,
-                    address: r.address,
-                    default_transit_mode: r.default_transit_mode,
-                    approval_status: r.approval_status
+                    role: r.role || 'Student',
+                    program: r.program || null,
+                    section: r.section || null,
+                    sex: r.sex || 'Male',
+                    age: r.age || null,
+                    address: r.address || null,
+                    default_transit_mode: r.default_transit_mode || 'PEDESTRIAN',
+                    approval_status: r.approval_status || 'APPROVED'
                 };
+                if (cleanCpass) {
+                    userPayload.cpass_id = cleanCpass;
+                }
 
-                const { data: userData, error: userError } = await supabaseClient
-                    .from('users')
-                    .upsert(userPayload, { onConflict: 'cpass_id' })
-                    .select()
-                    .single();
+                // Check for existing user to update or insert
+                let existingUser = null;
+                if (cleanCpass) {
+                    existingUser = (adminState.users || []).find(u => 
+                        (u.cpass_id && u.cpass_id.toUpperCase() === cleanCpass) ||
+                        (u.student_id && u.student_id.toUpperCase() === cleanCpass)
+                    );
+                    if (!existingUser) {
+                        const { data: dbMatches } = await supabaseClient
+                            .from('users')
+                            .select('id, cpass_id, student_id')
+                            .or(`cpass_id.eq.${cleanCpass},student_id.eq.${cleanCpass}`)
+                            .limit(1);
+                        if (dbMatches && dbMatches.length) existingUser = dbMatches[0];
+                    }
+                }
+                if (!existingUser && r.full_name) {
+                    existingUser = (adminState.users || []).find(u => 
+                        u.full_name && u.full_name.trim().toLowerCase() === r.full_name.trim().toLowerCase()
+                    );
+                }
 
-                if (!userError && userData) {
+                let userData = null;
+                let userError = null;
+
+                if (existingUser) {
+                    const updateRes = await supabaseClient
+                        .from('users')
+                        .update(userPayload)
+                        .eq('id', existingUser.id)
+                        .select()
+                        .single();
+                    userData = updateRes.data;
+                    userError = updateRes.error;
+                } else {
+                    const insertRes = await supabaseClient
+                        .from('users')
+                        .insert([userPayload])
+                        .select()
+                        .single();
+                    userData = insertRes.data;
+                    userError = insertRes.error;
+                }
+
+                if (userError) {
+                    console.error('❌ User enroll error for row', r.rowNumber, r.full_name, userError);
+                } else if (userData) {
+                    insertedCount++;
+
                     // Attach Vehicle if plate provided
                     if (r.plate_number && r.plate_number !== 'PENDING-PLATE' && r.plate_number !== 'NONE' && r.plate_number.trim()) {
-                        await supabaseClient.from('vehicles').upsert({
+                        const cleanPlate = r.plate_number.trim().toUpperCase();
+                        const { data: existingVeh } = await supabaseClient
+                            .from('vehicles')
+                            .select('id')
+                            .eq('plate_number', cleanPlate)
+                            .maybeSingle();
+
+                        if (existingVeh) {
+                            await supabaseClient.from('vehicles').update({
+                                user_id: userData.id,
+                                vehicle_type: r.vehicle_type || 'Motorcycle',
+                                vehicle_model: r.vehicle_model || '',
+                                approval_status: r.approval_status || 'APPROVED'
+                            }).eq('id', existingVeh.id);
+                        } else {
+                            await supabaseClient.from('vehicles').insert([{
+                                user_id: userData.id,
+                                plate_number: cleanPlate,
+                                vehicle_type: r.vehicle_type || 'Motorcycle',
+                                vehicle_model: r.vehicle_model || '',
+                                approval_status: r.approval_status || 'APPROVED'
+                            }]);
+                        }
+                    }
+
+                    // Attach RFID tag if provided in CSV
+                    if (r.rfid_uid && r.rfid_uid.trim()) {
+                        const cleanRfid = r.rfid_uid.trim().toUpperCase();
+                        const isVeh = r.default_transit_mode === 'VEHICLE';
+                        const { data: existingCard } = await supabaseClient
+                            .from('rfid_cards')
+                            .select('id')
+                            .eq('rfid_uid', cleanRfid)
+                            .maybeSingle();
+
+                        if (existingCard) {
+                            await supabaseClient.from('rfid_cards').update({
+                                user_id: userData.id,
+                                rfid_type: isVeh ? 'LONG_RANGE' : 'CLOSE_RANGE',
+                                user_type: isVeh ? 'VEHICLE' : 'PEDESTRIAN',
+                                authorization_status: r.approval_status === 'APPROVED' ? 'AUTHORIZED' : 'PENDING'
+                            }).eq('id', existingCard.id);
+                        } else {
+                            await supabaseClient.from('rfid_cards').insert([{
+                                user_id: userData.id,
+                                rfid_uid: cleanRfid,
+                                rfid_type: isVeh ? 'LONG_RANGE' : 'CLOSE_RANGE',
+                                user_type: isVeh ? 'VEHICLE' : 'PEDESTRIAN',
+                                authorization_status: r.approval_status === 'APPROVED' ? 'AUTHORIZED' : 'PENDING'
+                            }]);
+                        }
+                    } else if (r.default_transit_mode === 'PEDESTRIAN' || !r.plate_number) {
+                        // Generate placeholder unassigned pedestrian close-range card ready for physical RFID assignment
+                        await supabaseClient.from('rfid_cards').insert([{
                             user_id: userData.id,
-                            plate_number: r.plate_number,
-                            vehicle_type: r.vehicle_type || 'Motorcycle',
-                            vehicle_model: r.vehicle_model || '',
-                            approval_status: r.approval_status
-                        }, { onConflict: 'plate_number' });
+                            rfid_uid: 'UNASSIGNED_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+                            rfid_type: 'CLOSE_RANGE',
+                            user_type: 'PEDESTRIAN',
+                            authorization_status: r.approval_status === 'APPROVED' ? 'PENDING' : 'PENDING'
+                        }]);
                     }
                 }
 
-                insertedCount++;
-                const pct = Math.min(100, Math.round((insertedCount / total) * 100));
+                const pct = Math.min(100, Math.round(((i + 1) / total) * 100));
                 if (progressBarFill) progressBarFill.style.width = `${pct}%`;
                 if (progressPercent) progressPercent.textContent = `${pct}%`;
                 if (progressLabel) progressLabel.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin text-emerald-600"></i> Enrolled ${insertedCount} of ${total} records...`;
             }
 
-            showToast(`🎉 Successfully enrolled ${insertedCount} ${bulkUploadState.fileType === 'students' ? 'students' : 'members'} into CHARRMPASS!`, 'success');
+            showToast(`🎉 Successfully enrolled ${insertedCount} of ${total} ${bulkUploadState.fileType === 'students' ? 'students' : 'members'} into CHARRMPASS!`, 'success');
             await loadData();
+            renderAdmin();
             closeBulkUploadModal();
 
         } else {
             // Local Offline Simulation mode
             validRecords.forEach((r, idx) => {
                 const newId = 'LOCAL-' + Date.now() + '-' + idx;
+                const isPedMode = r.default_transit_mode === 'PEDESTRIAN' || !r.plate_number;
                 const localUser = {
                     id: newId,
                     full_name: r.full_name,
@@ -6061,14 +6921,28 @@ window.executeBulkImport = async function() {
                     sex: r.sex,
                     age: r.age,
                     address: r.address,
-                    default_transit_mode: r.default_transit_mode,
-                    user_type: r.default_transit_mode,
-                    rfid_type: r.default_transit_mode === 'VEHICLE' ? 'LONG_RANGE' : 'CLOSE_RANGE',
+                    default_transit_mode: isPedMode ? 'PEDESTRIAN' : 'VEHICLE',
+                    user_type: isPedMode ? 'PEDESTRIAN' : 'VEHICLE',
+                    rfid_type: isPedMode ? 'CLOSE_RANGE' : 'LONG_RANGE',
                     rfid_uid: r.rfid_uid || '',
-                    plate_number: r.plate_number || '',
-                    vehicle_type: r.vehicle_type || '',
+                    plate_number: (!isPedMode && r.plate_number) ? r.plate_number : (isPedMode ? 'PEDESTRIAN' : ''),
+                    vehicle_type: (!isPedMode && r.vehicle_type) ? r.vehicle_type : (isPedMode ? 'None' : 'Motorcycle'),
                     authorization_status: r.approval_status === 'APPROVED' ? 'AUTHORIZED' : 'PENDING',
-                    approval_status: r.approval_status
+                    approval_status: r.approval_status,
+                    rfid_cards: [{
+                        id: 'CARD-' + newId,
+                        rfid_uid: r.rfid_uid || (isPedMode ? 'UNASSIGNED_' + Date.now() : ''),
+                        rfid_type: isPedMode ? 'CLOSE_RANGE' : 'LONG_RANGE',
+                        user_type: isPedMode ? 'PEDESTRIAN' : 'VEHICLE',
+                        authorization_status: r.approval_status === 'APPROVED' ? 'AUTHORIZED' : 'PENDING'
+                    }],
+                    vehicles: (!isPedMode && r.plate_number) ? [{
+                        id: 'VEH-' + newId,
+                        plate_number: r.plate_number,
+                        vehicle_type: r.vehicle_type || 'Motorcycle',
+                        vehicle_model: r.vehicle_model || '',
+                        approval_status: r.approval_status
+                    }] : []
                 };
 
                 const existingIdx = adminState.users.findIndex(u => 
@@ -6083,9 +6957,7 @@ window.executeBulkImport = async function() {
                 }
             });
 
-            renderStats();
-            renderUsersTable();
-            renderPendingApprovals();
+            renderAdmin();
             showToast(`🎉 Local Batch Import: Enrolled ${validRecords.length} records into CHARRMPASS.`, 'success');
             closeBulkUploadModal();
         }

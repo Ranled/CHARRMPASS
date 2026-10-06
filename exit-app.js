@@ -87,6 +87,46 @@ function doLogout() {
   resetScanPanel();
 }
 
+// ─── TRAFFIC LIGHT STATE CONTROLLER ───────────────────────────
+function setTrafficLightUI(state) {
+  // state: 'standby' (Red) | 'scanning' (Yellow) | 'done' (Green) | 'denied' (Red) | 'offline' (Blinking Yellow) | 'connected' (3 Green Blinks)
+  const red = document.getElementById('tlLampRed');
+  const yellow = document.getElementById('tlLampYellow');
+  const green = document.getElementById('tlLampGreen');
+  if (!red || !yellow || !green) return;
+
+  red.classList.remove('active');
+  yellow.classList.remove('active');
+  green.classList.remove('active');
+
+  if (state === 'offline') {
+    yellow.classList.add('active'); // CSS tl-blink animates yellow
+  } else if (state === 'connected') {
+    let count = 0;
+    const interval = setInterval(() => {
+      green.classList.toggle('active');
+      count++;
+      if (count >= 6) {
+        clearInterval(interval);
+        green.classList.remove('active');
+        red.classList.add('active'); // Return to Standby RED
+      }
+    }, 150);
+  } else if (state === 'scanning') {
+    yellow.classList.add('active');
+  } else if (state === 'done') {
+    green.classList.add('active');
+  } else {
+    // 'standby' or 'denied'
+    red.classList.add('active');
+  }
+}
+
+window.addEventListener('supabase:connected', () => setTrafficLightUI('connected'));
+window.addEventListener('supabase:disconnected', () => setTrafficLightUI('offline'));
+window.addEventListener('offline', () => setTrafficLightUI('offline'));
+window.addEventListener('online', () => setTrafficLightUI('connected'));
+
 // ─── LOAD RECENT EXITS ───────────────────────────────────────
 async function loadRecentExits() {
   if (!isConnected) return;
@@ -174,10 +214,13 @@ function renderRecentList() {
       }
     }
 
-    if (!name) name = ok ? 'Authorized Driver' : 'Unregistered RFID';
+    if (!name) name = ok ? 'Authorized Driver' : (t.status === 'PENDING_CONFIRMATION' ? 'Exit Conflict (Verify)' : 'Unregistered RFID');
     if (!plate) plate = t.rfid_uid?.substring(0, 12) || '--';
     const timeStr = new Date(t.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
-    const dotClass = ok ? 'ok' : 'deny';
+    const isPending = t.status === 'PENDING_CONFIRMATION';
+    const dotClass = ok ? 'ok' : (isPending ? 'pending' : 'deny');
+    const badgeColor = ok ? 'color:#3b82f6' : (isPending ? 'color:#d97706' : 'color:#ef4444');
+    const badgeIcon = ok ? '◄' : (isPending ? '⚠' : '✕');
     return `
       <div class="scan-row">
         <div class="scan-row-dot ${dotClass}"></div>
@@ -186,7 +229,7 @@ function renderRecentList() {
           <div class="scan-row-plate">${htmlEsc(plate)}</div>
         </div>
         <div class="scan-row-time">${timeStr}</div>
-        <div style="font-size:14px;flex-shrink:0;${ok ? 'color:#3b82f6' : 'color:#ef4444'}">${ok ? '◄' : '✕'}</div>
+        <div style="font-size:14px;flex-shrink:0;${badgeColor}">${badgeIcon}</div>
       </div>`;
   }).join('');
 }
@@ -231,7 +274,13 @@ async function handleNewTransaction(txn, priorEntryStatus) {
   // Check prior entry if not already known
   const entryStatus = priorEntryStatus || await checkPriorEntry(full.rfid_uid);
 
-  recentExits.unshift(full);
+  // Deduplicate if already present in recentExits
+  const existingIdx = recentExits.findIndex(e => e.id && full.id && e.id === full.id);
+  if (existingIdx !== -1) {
+    recentExits[existingIdx] = full;
+  } else {
+    recentExits.unshift(full);
+  }
   renderRecentList();
   showScanResult(full, entryStatus);
 }
@@ -239,8 +288,9 @@ async function handleNewTransaction(txn, priorEntryStatus) {
 // ─── SHOW SCAN RESULT ─────────────────────────────────────────
 function showScanResult(txn, entryStatus) {
   currentScanData = txn;
-  const ok      = txn.status === 'AUTHORIZED';
-  const hasWarn = ok && (entryStatus === 'ghost' || entryStatus === 'none');
+  const ok        = txn.status === 'AUTHORIZED';
+  const isPending = txn.status === 'PENDING_CONFIRMATION';
+  const hasWarn   = (ok && (entryStatus === 'ghost' || entryStatus === 'none')) || isPending;
   let name    = txn.users?.full_name;
   let plate   = txn.vehicles?.plate_number;
   let role    = txn.users?.role;
@@ -282,6 +332,9 @@ function showScanResult(txn, entryStatus) {
   ready.style.display = 'none';
   result.classList.remove('hidden');
 
+  // Update Traffic Light: Done (Green), Warning/Scanning (Yellow), or Denied (Red)
+  setTrafficLightUI(ok ? (hasWarn ? 'scanning' : 'done') : 'denied');
+
   let panelClass, resultClass, badgeClass, avatarClass, verdictClass, verdictHTML, warningHTML = '';
 
   if (!ok) {
@@ -292,14 +345,15 @@ function showScanResult(txn, entryStatus) {
     panelClass = 'scan-panel warning-mode'; resultClass = 'scan-result warning-mode';
     badgeClass = 'warning'; avatarClass = 'warning'; verdictClass = 'warning';
     verdictHTML = '⚠ VERIFY REQUIRED';
-    const warnMsg = entryStatus === 'none'
+    const warnMsg = txn.remarks || (entryStatus === 'none'
       ? 'No active entry record found for this vehicle. They may have entered before the system was active, or this may be an unauthorized exit attempt.'
-      : 'This vehicle has already recorded an exit. Possible double-exit or system anomaly.';
+      : 'This vehicle has already recorded an exit. Possible double-exit or system anomaly.');
+    const warnTitle = entryStatus === 'none' ? 'No Entry Record Found' : (isPending ? 'Verification Required' : 'Already Exited');
     warningHTML = `
       <div class="no-entry-warning">
         <div class="no-entry-warning-icon">⚠</div>
         <div class="no-entry-warning-text">
-          <div class="no-entry-warning-title">${entryStatus === 'none' ? 'No Entry Record Found' : 'Already Exited'}</div>
+          <div class="no-entry-warning-title">${htmlEsc(warnTitle)}</div>
           ${htmlEsc(warnMsg)}
         </div>
       </div>
@@ -364,6 +418,8 @@ function resetScanPanel() {
   result.innerHTML = '';
   ready.style.display = 'flex';
   currentScanData = null;
+  // Return traffic light to RED STANDBY
+  setTrafficLightUI('standby');
   lucide.createIcons();
 }
 
@@ -373,9 +429,17 @@ async function processManual() {
   const uid   = input.value.trim().toUpperCase();
   if (!uid) { showToast('Enter an RFID UID first.', 'error'); return; }
   input.value = '';
+
+  // Set Traffic Light to YELLOW SCANNING
+  setTrafficLightUI('scanning');
+
   showToast('Processing UID: ' + uid, 'info');
 
-  if (!isConnected) { showToast('No database connection.', 'error'); return; }
+  if (!isConnected) {
+    showToast('No database connection.', 'error');
+    setTrafficLightUI('standby');
+    return;
+  }
 
   let card = null;
   const { data: c } = await supabaseClient

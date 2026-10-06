@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS public.transactions (
     direction   TEXT NOT NULL CHECK (direction IN ('ENTRY', 'EXIT')),
     gate        TEXT,
     timestamp   TIMESTAMPTZ DEFAULT NOW(),
-    status      TEXT DEFAULT 'AUTHORIZED' CHECK (status IN ('AUTHORIZED', 'DENIED', 'PENDING')),
+    status      TEXT DEFAULT 'AUTHORIZED' CHECK (status IN ('AUTHORIZED', 'DENIED', 'PENDING', 'PENDING_CONFIRMATION')),
     remarks     TEXT
 );
 
@@ -150,6 +150,8 @@ ALTER TABLE public.transactions ADD COLUMN IF NOT EXISTS rfid_type TEXT DEFAULT 
 ALTER TABLE public.transactions ADD COLUMN IF NOT EXISTS gate TEXT;
 ALTER TABLE public.transactions ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'AUTHORIZED';
 ALTER TABLE public.transactions ADD COLUMN IF NOT EXISTS remarks TEXT;
+ALTER TABLE public.transactions DROP CONSTRAINT IF EXISTS transactions_status_check;
+ALTER TABLE public.transactions ADD CONSTRAINT transactions_status_check CHECK (status IN ('AUTHORIZED', 'DENIED', 'PENDING', 'PENDING_CONFIRMATION'));
 
 -- ============================================================
 -- 5. SPECIAL TAGS TABLE (Visitor & Emergency passes)
@@ -191,19 +193,50 @@ CREATE TABLE IF NOT EXISTS public.devices (
     device_name      TEXT NOT NULL,
     device_location  TEXT NOT NULL,
     esp32_identifier TEXT UNIQUE NOT NULL,
-    gate_type        TEXT DEFAULT 'ENTRY' CHECK (gate_type IN ('ENTRY', 'EXIT', 'ADMIN')),
-    device_category  TEXT DEFAULT 'VEHICLE_BARRIER' CHECK (device_category IN ('VEHICLE_BARRIER', 'PEDESTRIAN_TURNSTILE', 'PORTABLE_SCANNER', 'ADMIN_STATION')),
-    rfid_range       TEXT DEFAULT 'LONG_RANGE' CHECK (rfid_range IN ('CLOSE_RANGE', 'LONG_RANGE', 'HYBRID')),
+    gate_type        TEXT DEFAULT 'ENTRY',
+    device_category  TEXT DEFAULT 'VEHICLE (ENTRY)',
+    rfid_range       TEXT DEFAULT '~860–960 MHz UHF',
     status           TEXT DEFAULT 'ONLINE' CHECK (status IN ('ONLINE', 'OFFLINE')),
-    last_online      TIMESTAMPTZ DEFAULT NOW()
+    last_online      TIMESTAMPTZ DEFAULT NOW(),
+    wifi_ssid        TEXT,
+    target_ssid      TEXT,
+    target_pass      TEXT,
+    updated_at       TIMESTAMPTZ DEFAULT NOW(),
+    sd_status        TEXT DEFAULT 'MOUNTED (HSPI)',
+    rfid_status      TEXT DEFAULT 'READY',
+    led_status       TEXT DEFAULT 'ACTIVE',
+    buzzer_status    TEXT DEFAULT 'ACTIVE',
+    lcd_status       TEXT DEFAULT 'INITIALIZED',
+    relay_status     TEXT DEFAULT 'ARMED'
 );
+
+-- Drop legacy restrictive constraints so new gate types (ENTRY_EXIT), descriptive categories, and frequencies work cleanly
+ALTER TABLE public.devices DROP CONSTRAINT IF EXISTS devices_gate_type_check;
+ALTER TABLE public.devices ADD CONSTRAINT devices_gate_type_check 
+    CHECK (gate_type IN ('ENTRY', 'EXIT', 'ENTRY_EXIT', 'BIDIRECTIONAL', 'ADMIN'));
+
+ALTER TABLE public.devices DROP CONSTRAINT IF EXISTS devices_device_category_check;
+ALTER TABLE public.devices DROP CONSTRAINT IF EXISTS devices_rfid_range_check;
 
 -- Safe column additions if devices table already existed from an older version
 ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS gate_type TEXT DEFAULT 'ENTRY';
-ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS device_category TEXT DEFAULT 'VEHICLE_BARRIER';
-ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS rfid_range TEXT DEFAULT 'LONG_RANGE';
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS device_category TEXT DEFAULT 'VEHICLE (ENTRY)';
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS rfid_range TEXT DEFAULT '~860–960 MHz UHF';
 ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ONLINE';
 ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS last_online TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS wifi_ssid TEXT;
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS target_ssid TEXT;
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS target_pass TEXT;
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS sd_status TEXT DEFAULT 'MOUNTED (HSPI)';
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS rfid_status TEXT DEFAULT 'READY';
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS led_status TEXT DEFAULT 'ACTIVE';
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS buzzer_status TEXT DEFAULT 'ACTIVE';
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS lcd_status TEXT DEFAULT 'INITIALIZED';
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS relay_status TEXT DEFAULT 'ARMED';
+-- Sent by every ESP32 heartbeat. Without this column PostgREST rejects the whole
+-- heartbeat PATCH, so devices never update status / wifi_ssid / last_online.
+ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS ip_address TEXT;
 
 -- ============================================================
 -- 8. INDEXES FOR PERFORMANCE & SCAN LATENCY
@@ -303,6 +336,7 @@ ALTER TABLE public.rfid_cards    REPLICA IDENTITY FULL;
 ALTER TABLE public.users         REPLICA IDENTITY FULL;
 ALTER TABLE public.special_tags  REPLICA IDENTITY FULL;
 ALTER TABLE public.vehicles      REPLICA IDENTITY FULL;
+ALTER TABLE public.devices       REPLICA IDENTITY FULL;
 
 DO $$
 BEGIN
@@ -328,6 +362,9 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND tablename = 'vehicles') THEN
         ALTER PUBLICATION supabase_realtime ADD TABLE public.vehicles;
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND tablename = 'devices') THEN
+        ALTER PUBLICATION supabase_realtime ADD TABLE public.devices;
+    END IF;
 END $$;
 
 -- ============================================================
@@ -338,7 +375,20 @@ INSERT INTO public.system_accounts (username, password, role) VALUES
     ('admin', 'admin123', 'ADMIN')
 ON CONFLICT (username) DO NOTHING;
 
-INSERT INTO public.devices (device_name, device_location, esp32_identifier, gate_type, device_category, rfid_range) VALUES
-    ('CHARRMPASS Entry Unit', 'Entry Gate', 'CHARRMPASS_GATE_ENTRY', 'ENTRY', 'VEHICLE_BARRIER', 'LONG_RANGE'),
-    ('CHARRMPASS Exit Unit',  'Exit Gate',  'CHARRMPASS_GATE_EXIT',  'EXIT',  'VEHICLE_BARRIER', 'LONG_RANGE')
-ON CONFLICT (esp32_identifier) DO NOTHING;
+INSERT INTO public.devices (device_name, device_location, esp32_identifier, gate_type, device_category, rfid_range, sd_status, rfid_status, led_status, buzzer_status, lcd_status, relay_status) VALUES
+    ('CHARRMPASS Entry Unit',  'Pedestrian Entry Gate', 'CHARRMPASS_GATE_ENTRY', 'ENTRY',      'PEDESTRIAN (ENTRY)',                 '13.56 MHz HF',     'MOUNTED (HSPI)', 'MFRC522 READY', 'ACTIVE (🔴🟡🟢)', 'PWM READY', 'INITIALIZED (16x2)', 'ARMED'),
+    ('CHARRMPASS Exit Unit',   'Pedestrian Exit Gate',  'CHARRMPASS_GATE_EXIT',  'EXIT',       'PEDESTRIAN (EXIT)',                  '13.56 MHz HF',     'MOUNTED (HSPI)', 'MFRC522 READY', 'ACTIVE (🔴🟡🟢)', 'PWM READY', 'INITIALIZED (16x2)', 'ARMED'),
+    ('CHARRMPASS Gate Unit 1', 'Main Gate',             'CHARRMPASS_GATE_01',    'ENTRY',      'VEHICLE (ENTRY)',                    '~860–960 MHz UHF', 'MOUNTED (HSPI)', 'WIEGAND 26/34', 'ACTIVE (🔴🟢)',   'PWM READY', 'INITIALIZED (16x2)', 'PASS SIGNAL ARMED')
+ON CONFLICT (esp32_identifier) DO UPDATE SET
+    device_name = EXCLUDED.device_name,
+    device_location = EXCLUDED.device_location,
+    gate_type = EXCLUDED.gate_type,
+    device_category = EXCLUDED.device_category,
+    rfid_range = EXCLUDED.rfid_range,
+    sd_status = EXCLUDED.sd_status,
+    rfid_status = EXCLUDED.rfid_status,
+    led_status = EXCLUDED.led_status,
+    buzzer_status = EXCLUDED.buzzer_status,
+    lcd_status = EXCLUDED.lcd_status,
+    relay_status = EXCLUDED.relay_status;
+

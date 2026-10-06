@@ -94,6 +94,46 @@ function doLogout() {
   resetScanPanel();
 }
 
+// ─── TRAFFIC LIGHT STATE CONTROLLER ───────────────────────────
+function setTrafficLightUI(state) {
+  // state: 'standby' (Red) | 'scanning' (Yellow) | 'done' (Green) | 'denied' (Red) | 'offline' (Blinking Yellow) | 'connected' (3 Green Blinks)
+  const red = document.getElementById('tlLampRed');
+  const yellow = document.getElementById('tlLampYellow');
+  const green = document.getElementById('tlLampGreen');
+  if (!red || !yellow || !green) return;
+
+  red.classList.remove('active');
+  yellow.classList.remove('active');
+  green.classList.remove('active');
+
+  if (state === 'offline') {
+    yellow.classList.add('active'); // CSS tl-blink animates yellow
+  } else if (state === 'connected') {
+    let count = 0;
+    const interval = setInterval(() => {
+      green.classList.toggle('active');
+      count++;
+      if (count >= 6) {
+        clearInterval(interval);
+        green.classList.remove('active');
+        red.classList.add('active'); // Return to Standby RED
+      }
+    }, 150);
+  } else if (state === 'scanning') {
+    yellow.classList.add('active');
+  } else if (state === 'done') {
+    green.classList.add('active');
+  } else {
+    // 'standby' or 'denied'
+    red.classList.add('active');
+  }
+}
+
+window.addEventListener('supabase:connected', () => setTrafficLightUI('connected'));
+window.addEventListener('supabase:disconnected', () => setTrafficLightUI('offline'));
+window.addEventListener('offline', () => setTrafficLightUI('offline'));
+window.addEventListener('online', () => setTrafficLightUI('connected'));
+
 // ─── LOAD RECENT ENTRIES ─────────────────────────────────────
 async function loadRecentEntries() {
   if (!isConnected) return;
@@ -123,7 +163,8 @@ function renderRecentList() {
     return;
   }
   body.innerHTML = recentEntries.slice(0, 20).map(t => {
-    const ok      = t.status === 'AUTHORIZED';
+    const ok        = t.status === 'AUTHORIZED';
+    const isPending = t.status === 'PENDING_CONFIRMATION';
     let name    = t.users?.full_name;
     let plate   = t.vehicles?.plate_number;
 
@@ -143,18 +184,21 @@ function renderRecentList() {
       }
     }
 
-    if (!name) name = ok ? 'Authorized Driver' : 'Unregistered RFID';
+    if (!name) name = ok ? 'Authorized Driver' : (isPending ? 'Duplicate Entry Scan' : 'Unregistered RFID');
     if (!plate) plate = t.rfid_uid?.substring(0, 12) || '--';
     const timeStr = new Date(t.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const dotColor = ok ? 'ok' : (isPending ? 'pending' : 'deny');
+    const badgeIcon = ok ? '✓' : (isPending ? '⚠' : '✕');
+    const badgeColor = ok ? 'color:#22c55e' : (isPending ? 'color:#d97706' : 'color:#ef4444');
     return `
       <div class="scan-row">
-        <div class="scan-row-dot ${ok ? 'ok' : 'deny'}"></div>
+        <div class="scan-row-dot ${dotColor}"></div>
         <div class="scan-row-info">
           <div class="scan-row-name">${htmlEsc(name)}</div>
           <div class="scan-row-plate">${htmlEsc(plate)}</div>
         </div>
         <div class="scan-row-time">${timeStr}</div>
-        <div style="font-size:14px; flex-shrink:0; ${ok ? 'color:#22c55e' : 'color:#ef4444'}">${ok ? '✓' : '✕'}</div>
+        <div style="font-size:14px; flex-shrink:0; ${badgeColor}">${badgeIcon}</div>
       </div>`;
   }).join('');
 }
@@ -190,8 +234,13 @@ async function handleNewTransaction(txn) {
     if (data) full = data;
   }
 
-  // Prepend to local list and re-render
-  recentEntries.unshift(full);
+  // Deduplicate if already present in recentEntries
+  const existingIdx = recentEntries.findIndex(e => e.id && full.id && e.id === full.id);
+  if (existingIdx !== -1) {
+    recentEntries[existingIdx] = full;
+  } else {
+    recentEntries.unshift(full);
+  }
   renderRecentList();
 
   // Show in scan panel
@@ -201,7 +250,8 @@ async function handleNewTransaction(txn) {
 // ─── SHOW SCAN RESULT IN PANEL ────────────────────────────────
 function showScanResult(txn) {
   currentScanUID = txn.rfid_uid;
-  const ok      = txn.status === 'AUTHORIZED';
+  const ok        = txn.status === 'AUTHORIZED';
+  const isPending = txn.status === 'PENDING_CONFIRMATION';
   let name    = txn.users?.full_name;
   let plate   = txn.vehicles?.plate_number;
   let role    = txn.users?.role;
@@ -225,13 +275,14 @@ function showScanResult(txn) {
     section = 'Priority Pass';
   }
 
-  if (!name) name = 'Unknown Card';
+  if (!name) name = isPending ? 'Registered User (Duplicate Scan)' : (ok ? 'Authorized User' : 'Unknown Card');
   if (!plate) plate = '—';
   if (!role) role = '--';
   const vtype   = txn.vehicles?.vehicle_type || '';
   const vmodel  = txn.vehicles?.vehicle_model|| '';
   const timeStr = new Date(txn.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-  const avatar  = `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=${ok ? '16a34a' : 'b91c1c'}&color=fff&size=200&bold=true`;
+  const avatarBg = ok ? '16a34a' : (isPending ? 'd97706' : 'b91c1c');
+  const avatar  = `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=${avatarBg}&color=fff&size=200&bold=true`;
 
   const panel  = document.getElementById('scanPanel');
   const ready  = document.getElementById('readyState');
@@ -239,15 +290,18 @@ function showScanResult(txn) {
 
   ready.style.display  = 'none';
   result.classList.remove('hidden');
-  panel.className = `scan-panel ${ok ? 'authorized' : 'denied'}`;
+  panel.className = `scan-panel ${ok ? 'authorized' : (isPending ? 'pending' : 'denied')}`;
 
-  result.className = `scan-result ${ok ? 'authorized' : 'denied'}`;
+  // Update Traffic Light: Done (Green) or Denied/Standby (Red)
+  setTrafficLightUI(ok ? 'done' : (isPending ? 'scanning' : 'denied'));
+
+  result.className = `scan-result ${ok ? 'authorized' : (isPending ? 'pending' : 'denied')}`;
   result.innerHTML = `
     <div class="scan-profile-wrap">
-      <img class="scan-avatar ${ok ? '' : 'denied'}" src="${avatar}" alt="${htmlEsc(name)}" />
-      <div class="scan-status-badge ${ok ? 'ok' : 'deny'}">
+      <img class="scan-avatar ${ok ? '' : (isPending ? 'pending' : 'denied')}" src="${avatar}" alt="${htmlEsc(name)}" />
+      <div class="scan-status-badge ${ok ? 'ok' : (isPending ? 'warn' : 'deny')}">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-          ${ok ? '<polyline points="20 6 9 17 4 12"/>' : '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>'}
+          ${ok ? '<polyline points="20 6 9 17 4 12"/>' : (isPending ? '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>' : '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>')}
         </svg>
       </div>
     </div>
@@ -255,20 +309,23 @@ function showScanResult(txn) {
     <div class="scan-name">${htmlEsc(name)}</div>
 
     <div class="scan-details">
-      ${ok ? `
+      ${ok || isPending ? `
         <div class="scan-detail-row"><strong>${htmlEsc(role)}</strong> · ${htmlEsc(program)} ${htmlEsc(section)}</div>
         <div class="scan-plate">${htmlEsc(plate)}</div>
         ${vtype ? `<div class="scan-detail-row">${htmlEsc(vtype)} ${htmlEsc(vmodel)}</div>` : ''}
+        ${isPending ? `<div class="scan-detail-row" style="color:#d97706; font-size:12px; font-weight:600;">⚠️ ${htmlEsc(txn.remarks || 'Already logged inside campus')}</div>` : ''}
       ` : `
         <div class="scan-detail-row" style="color: var(--denied)">Not registered or unauthorized</div>
         <div class="scan-detail-row" style="font-family: 'JetBrains Mono', monospace; font-size:12px; color:var(--muted);">${htmlEsc(txn.rfid_uid)}</div>
       `}
     </div>
 
-    <div class="scan-verdict ${ok ? 'ok' : 'deny'}">
+    <div class="scan-verdict ${ok ? 'ok' : (isPending ? 'warn' : 'deny')}">
       ${ok
         ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> ENTRY GRANTED'
-        : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> ACCESS DENIED'
+        : (isPending
+          ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg> ALREADY ENTERED (AWAITING GUARD)'
+          : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> ACCESS DENIED')
       }
     </div>
 
@@ -290,6 +347,8 @@ function resetScanPanel() {
   result.innerHTML = '';
   ready.style.display = 'flex';
   currentScanUID = null;
+  // Return traffic light to RED STANDBY
+  setTrafficLightUI('standby');
   lucide.createIcons();
 }
 
@@ -300,10 +359,14 @@ async function processManual() {
   if (!uid) { showToast('Enter an RFID UID first.', 'error'); return; }
   input.value = '';
 
+  // Set Traffic Light to YELLOW SCANNING
+  setTrafficLightUI('scanning');
+
   showToast('Processing UID: ' + uid, 'info');
 
   if (!isConnected) {
     showToast('No database connection.', 'error');
+    setTrafficLightUI('standby');
     return;
   }
 
