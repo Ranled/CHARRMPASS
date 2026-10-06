@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CHARRMPASS — Exit Gate</title>
   <meta name="description" content="CHARRMPASS Exit Gate Monitor Dashboard" />
+  <link rel="icon" type="image/png" href="logocharrmpark.png" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#0E4B3A" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="CHARRMPASS" />
+  <link rel="apple-touch-icon" href="logocharrmpark.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Outfit:wght@400;600;700;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -425,6 +432,11 @@
 <script src="exit-app.js"></script>
 <script>
   lucide.createIcons();
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js')
+      .then((reg) => console.log('CHARRMPASS PWA registered:', reg.scope))
+      .catch((err) => console.warn('PWA registration:', err));
+  }
 </script>
 </body>
 </html>

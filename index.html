@@ -6,6 +6,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CHARRMPASS: A Web-Based Smart Entry and Exit Monitoring System Using RFID Technology for Aklan State University - Ibajay Campus</title>
     <link rel="icon" type="image/png" href="logocharrmpark.png">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0E4B3A">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="CHARRMPASS">
+    <link rel="apple-touch-icon" href="logocharrmpark.png">
     <meta name="description"
         content="CHARRMPASS: A Web-Based Smart Entry and Exit Monitoring System Using RFID Technology for Aklan State University - Ibajay Campus">
 
@@ -428,6 +434,13 @@
                     const s = JSON.parse(session);
                     console.log('Active session detected:', s.username, `(${s.role})`);
                 } catch (err) { }
+            }
+
+            // Register PWA Service Worker
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.register('./sw.js')
+                    .then((reg) => console.log('CHARRMPASS PWA registered:', reg.scope))
+                    .catch((err) => console.warn('PWA registration:', err));
             }
         });
     </script>
