@@ -3,8 +3,8 @@
  * Central configuration file for Supabase client, Realtime, and Storage
  */
 
-const SUPABASE_URL = 'https://sdwjkgtxrpeajuymgpxp.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNkd2prZ3R4cnBlYWp1eW1ncHhwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgxMDA0ODEsImV4cCI6MjEwMzY3NjQ4MX0.ZLloaPDBQTMj_OMTgr5BX6VHqEK7Nc0bFnB7b35d4PA';
+const SUPABASE_URL = 'https://xrdpgsnastqnbhvdltwt.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhyZHBnc25hc3RxbmJodmRsdHd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEzMDQxMjgsImV4cCI6MjEwNjg4MDEyOH0.1ZKaUnEmB9B7PVk8arIhkGRqoxJbv6-VzflUaB7mZiE';
 
 let supabaseClient = null;
 let isConnected = false;
@@ -125,7 +125,7 @@ function updateDBBadge() {
                 `;
                 badge.className = "flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-100/90 border border-green-300 shadow-sm text-[11px] font-bold uppercase tracking-wider";
             }
-            badge.title = "Supabase Cloud Database Connected & Active (sdwjkgtxrpeajuymgpxp)";
+            badge.title = "Supabase Cloud Database Connected & Active (xrdpgsnastqnbhvdltwt)";
         } else if (isCheckingConnection) {
             badge.innerHTML = `
                 <span class="relative flex h-2 w-2">

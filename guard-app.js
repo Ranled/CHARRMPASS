@@ -23,12 +23,12 @@ async function initState() {
 
     if (supabaseClient) {
         try {
-            // Load users with vehicles and rfid_cards
+            // Load users with vehicles and rfid_cards (metadata only, no heavy base64 images)
             const { data: users, error: ue } = await supabaseClient
                 .from('users')
                 .select(`
-                    *,
-                    vehicles ( id, vehicle_type, vehicle_model, plate_number, vehicle_color, motorcycle_image ),
+                    id, full_name, role, role_detail, program, section, cpass_id, student_id, default_transit_mode,
+                    vehicles ( id, vehicle_type, vehicle_model, plate_number, vehicle_color ),
                     rfid_cards ( id, rfid_uid, authorization_status )
                 `);
             if (ue) console.error('Users fetch error:', ue);
@@ -39,7 +39,7 @@ async function initState() {
                     vehicle_model:    u.vehicles?.[0]?.vehicle_model    || null,
                     plate_number:     u.vehicles?.[0]?.plate_number     || null,
                     vehicle_color:    u.vehicles?.[0]?.vehicle_color    || null,
-                    motorcycle_image: u.vehicles?.[0]?.motorcycle_image || null,
+                    motorcycle_image: null,
                     rfid_uid:         u.rfid_cards?.[0]?.rfid_uid       || null,
                     rfid_card_id:     u.rfid_cards?.[0]?.id             || null,
                     authorization_status: u.rfid_cards?.[0]?.authorization_status || 'PENDING',
@@ -55,13 +55,13 @@ async function initState() {
             if (ste) console.error('Special tags fetch error:', ste);
             appState.specialTags = (st && Array.isArray(st)) ? st : [];
 
-            // Load recent access logs
+            // Load recent access logs (omit profile_image from batch 500 logs)
             const today = new Date().toISOString().split('T')[0];
             const { data: logs, error: le } = await supabaseClient
                 .from('transactions')
                 .select(`
-                    *,
-                    users ( full_name, role, role_detail, program, section, profile_image, cpass_id, student_id ),
+                    id, rfid_uid, direction, gate, status, remarks, timestamp, user_type, rfid_type,
+                    users ( full_name, role, role_detail, program, section, cpass_id, student_id ),
                     vehicles ( plate_number, vehicle_type, vehicle_model, vehicle_color )
                 `)
                 .order('timestamp', { ascending: false })
@@ -188,7 +188,14 @@ function setupGuardRealtime() {
             })
             .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'transactions' }, async payload => {
                 console.log('📡 [Guard RT] Transaction UPDATE:', payload.new);
-                await initState();
+                const updTxn = payload.new;
+                if (updTxn && updTxn.id) {
+                    const idx = appState.recentScans.findIndex(s => s.id === updTxn.id || s.uid === updTxn.rfid_uid);
+                    if (idx !== -1) {
+                        appState.recentScans[idx].status = updTxn.status || appState.recentScans[idx].status;
+                        renderAll();
+                    }
+                }
             })
             .subscribe((status, err) => {
                 console.log('⚡ [Guard RT] Subscription status:', status);

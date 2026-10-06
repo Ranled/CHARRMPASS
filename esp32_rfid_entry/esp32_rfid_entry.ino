@@ -75,12 +75,12 @@ String currentPass = "";
 // SUPABASE SETTINGS
 // =======================
 const char *SUPABASE_URL =
-    "https://sdwjkgtxrpeajuymgpxp.supabase.co";
+    "https://xrdpgsnastqnbhvdltwt.supabase.co";
 const char *SUPABASE_ANON =
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
-    "eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNkd2prZ3R4cnBlYWp1eW1ncHhwIiwicm9sZSI6Im"
-    "Fub24iLCJpYXQiOjE3ODgxMDA0ODEsImV4cCI6MjEwMzY3NjQ4MX0.ZLloaPDBQTMj_"
-    "OMTgr5BX6VHqEK7Nc0bFnB7b35d4PA";
+    "eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhyZHBnc25hc3RxbmJodmRsdHd0Iiwicm9sZSI6Im"
+    "Fub24iLCJpYXQiOjE3OTEzMDQxMjgsImV4cCI6MjEwNjg4MDEyOH0.1ZKaUnEmB9B7"
+    "PVk8arIhkGRqoxJbv6-VzflUaB7mZiE";
 
 // =======================
 // HARDWARE PINS — DUAL SPI BUSES

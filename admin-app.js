@@ -61,12 +61,13 @@ async function loadData() {
 
     if (supabaseClient) {
         try {
-            // 1. Load users with their vehicles and rfid_cards via relational JOIN
+            // 1. Load users with their vehicles and rfid_cards via relational JOIN (lightweight metadata, no bulk base64 doc images)
             const { data: u, error: ue } = await supabaseClient
                 .from('users')
                 .select(`
-                    *,
-                    vehicles ( id, vehicle_type, vehicle_model, plate_number, vehicle_color, motorcycle_image, or_cr_image, approval_status, created_at ),
+                    id, cpass_id, student_id, full_name, age, sex, address, program, section,
+                    role, role_detail, default_transit_mode, approval_status, profile_image, created_at, updated_at,
+                    vehicles ( id, vehicle_type, vehicle_model, plate_number, vehicle_color, approval_status, created_at ),
                     rfid_cards ( id, rfid_uid, authorization_status, rfid_type, user_type, vehicle_id )
                 `)
                 .order('created_at', { ascending: false });
@@ -97,8 +98,11 @@ async function loadData() {
                         vehicle_model:    firstVeh?.vehicle_model    || (isPed ? 'Walking' : null),
                         plate_number:     firstVeh?.plate_number     || (isPed ? 'PEDESTRIAN' : null),
                         vehicle_color:    firstVeh?.vehicle_color    || null,
-                        motorcycle_image: firstVeh?.motorcycle_image || null,
-                        or_cr_image:      firstVeh?.or_cr_image      || null,
+                        motorcycle_image: null,
+                        or_cr_image:      null,
+                        id_front_image:   null,
+                        id_back_image:    null,
+                        drivers_license_image: null,
                         vehicle_id:       firstVeh?.id               || null,
                         rfid_uid:         firstCard?.rfid_uid        || null,
                         rfid_card_id:     firstCard?.id              || null,
@@ -178,12 +182,12 @@ async function loadData() {
                 adminState.pendingUsers = [];
             }
 
-            // 2. Load transactions with vehicle & user info
+            // 2. Load transactions with vehicle & user info (omit profile_image from batch 1000 logs)
             const { data: l, error: le } = await supabaseClient
                 .from('transactions')
                 .select(`
-                    *,
-                    users ( full_name, role, role_detail, program, section, profile_image, default_transit_mode, cpass_id, student_id ),
+                    id, rfid_uid, direction, gate, status, remarks, timestamp, user_type, rfid_type, user_id, vehicle_id,
+                    users ( full_name, role, role_detail, program, section, default_transit_mode, cpass_id, student_id ),
                     vehicles ( plate_number, vehicle_type, vehicle_model, vehicle_color )
                 `)
                 .order('timestamp', { ascending: false })
@@ -234,6 +238,35 @@ window.addEventListener('supabase:connected', () => {
     loadData();
 });
 
+// Helper: Refresh only transaction logs and live presence counters without re-fetching all users
+async function refreshAdminLogsOnly() {
+    if (!isConnected || !supabaseClient) return;
+    try {
+        const { data: l } = await supabaseClient
+            .from('transactions')
+            .select(`
+                id, rfid_uid, direction, gate, status, remarks, timestamp, user_type, rfid_type, user_id, vehicle_id,
+                users ( full_name, role, role_detail, program, section, default_transit_mode, cpass_id, student_id ),
+                vehicles ( plate_number, vehicle_type, vehicle_model, vehicle_color )
+            `)
+            .order('timestamp', { ascending: false })
+            .limit(1000);
+        if (l && Array.isArray(l)) {
+            adminState.logs = l;
+            const vehEntries = adminState.logs.filter(t => t.direction === 'ENTRY' && t.status === 'AUTHORIZED' && (t.user_type === 'VEHICLE' || t.rfid_type === 'LONG_RANGE' || (t.vehicles?.plate_number && t.vehicles?.plate_number !== 'PEDESTRIAN'))).length;
+            const vehExits   = adminState.logs.filter(t => t.direction === 'EXIT'  && t.status === 'AUTHORIZED' && (t.user_type === 'VEHICLE' || t.rfid_type === 'LONG_RANGE' || (t.vehicles?.plate_number && t.vehicles?.plate_number !== 'PEDESTRIAN'))).length;
+            adminState.activeVehicles = Math.max(0, vehEntries - vehExits);
+
+            const pedEntries = adminState.logs.filter(t => t.direction === 'ENTRY' && t.status === 'AUTHORIZED' && (t.user_type === 'PEDESTRIAN' || t.rfid_type === 'CLOSE_RANGE' || t.vehicles?.vehicle_type === 'None' || t.vehicles?.plate_number === 'PEDESTRIAN' || t.gate?.includes('PEDESTRIAN'))).length;
+            const pedExits   = adminState.logs.filter(t => t.direction === 'EXIT'  && t.status === 'AUTHORIZED' && (t.user_type === 'PEDESTRIAN' || t.rfid_type === 'CLOSE_RANGE' || t.vehicles?.vehicle_type === 'None' || t.vehicles?.plate_number === 'PEDESTRIAN' || t.gate?.includes('PEDESTRIAN'))).length;
+            adminState.activePedestrians = Math.max(0, pedEntries - pedExits);
+            renderAdmin();
+        }
+    } catch(e) {
+        console.error('Error refreshing logs:', e);
+    }
+}
+
 let adminRealtimeSubscribed = false;
 function setupAdminRealtime() {
     if (!isConnected || !supabaseClient || adminRealtimeSubscribed) return;
@@ -242,8 +275,8 @@ function setupAdminRealtime() {
     try {
         supabaseClient.channel('admin-live-bus')
             .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
-                console.log('⚡ [Admin RT] Transactions updated');
-                if (typeof initAdminState === 'function') initAdminState();
+                console.log('⚡ [Admin RT] Transactions updated (refreshing logs only)');
+                refreshAdminLogsOnly();
             })
             .on('postgres_changes', { event: '*', schema: 'public', table: 'rfid_cards' }, () => {
                 console.log('⚡ [Admin RT] RFID cards updated');
@@ -253,9 +286,13 @@ function setupAdminRealtime() {
                 console.log('⚡ [Admin RT] Users/registrations updated');
                 if (typeof initAdminState === 'function') initAdminState();
             })
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, () => {
-                console.log('⚡ [Admin RT] Devices updated');
-                if (typeof initAdminState === 'function') initAdminState();
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, async () => {
+                console.log('⚡ [Admin RT] Devices updated (refreshing devices table only)');
+                const { data: dev } = await supabaseClient.from('devices').select('*').order('device_name', { ascending: true });
+                if (dev && Array.isArray(dev)) {
+                    adminState.devices = dev;
+                    renderEsp32DevicesTable();
+                }
             })
             .subscribe((status, err) => {
                 console.log('⚡ [Admin RT] Channel status:', status);
@@ -3807,7 +3844,7 @@ window.openReviewModal = function(id, targetType = 'PEDESTRIAN', vehicleId = nul
         if (el('revOverviewVehImg')) el('revOverviewVehImg').src = u.profile_image || placeholder;
     }
 
-    // Tab 2: Document Images
+    // Tab 2: Document Images (Lazy loaded on-demand for bandwidth efficiency)
     if (el('revProfileImage')) el('revProfileImage').src = u.profile_image || placeholder;
     if (el('revImgMotor')) el('revImgMotor').src = veh?.motorcycle_image || defaultVehImg;
     if (el('revImgIdFront')) el('revImgIdFront').src = u.id_front_image || 'https://images.unsplash.com/photo-1633158829585-23ba8f7c8caf?auto=format&fit=crop&q=60&w=400';
@@ -3825,6 +3862,44 @@ window.openReviewModal = function(id, targetType = 'PEDESTRIAN', vehicleId = nul
         } else {
             el('revDocOrCrCard').classList.add('hidden');
         }
+    }
+
+    // On-demand fetch of detailed document photos if not yet cached in memory for this stakeholder
+    if (isConnected && (!u.id_front_image || (isVehTarget && veh && !veh.or_cr_image))) {
+        (async () => {
+            try {
+                if (!u.id_front_image) {
+                    const { data: docData } = await supabaseClient
+                        .from('users')
+                        .select('id_front_image, id_back_image, drivers_license_image')
+                        .eq('id', u.id)
+                        .maybeSingle();
+                    if (docData) {
+                        u.id_front_image = docData.id_front_image;
+                        u.id_back_image = docData.id_back_image;
+                        u.drivers_license_image = docData.drivers_license_image;
+                        if (el('revImgIdFront')) el('revImgIdFront').src = u.id_front_image || 'https://images.unsplash.com/photo-1633158829585-23ba8f7c8caf?auto=format&fit=crop&q=60&w=400';
+                        if (el('revImgIdBack')) el('revImgIdBack').src = u.id_back_image || 'https://images.unsplash.com/photo-1621252179027-94459d278660?auto=format&fit=crop&q=60&w=400';
+                    }
+                }
+                if (isVehTarget && veh && !veh.or_cr_image) {
+                    const { data: vehDoc } = await supabaseClient
+                        .from('vehicles')
+                        .select('motorcycle_image, or_cr_image')
+                        .eq('id', veh.id)
+                        .maybeSingle();
+                    if (vehDoc) {
+                        veh.motorcycle_image = vehDoc.motorcycle_image;
+                        veh.or_cr_image = vehDoc.or_cr_image;
+                        if (el('revImgMotor')) el('revImgMotor').src = veh.motorcycle_image || defaultVehImg;
+                        if (el('revOverviewVehImg')) el('revOverviewVehImg').src = veh.motorcycle_image || defaultVehImg;
+                        if (el('revImgOrCr')) el('revImgOrCr').src = veh.or_cr_image || 'https://images.unsplash.com/photo-1589829545856-d10d557cf95f?auto=format&fit=crop&q=60&w=400';
+                    }
+                }
+            } catch(docErr) {
+                console.warn('Lazy doc image load error:', docErr);
+            }
+        })();
     }
 
     // Tab 3: Access History for this User
