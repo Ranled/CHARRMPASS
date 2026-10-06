@@ -59,11 +59,23 @@
 #include <hd44780.h>
 #include <hd44780ioClass/hd44780_I2Cexp.h>
 #include <esp_wifi.h>
+#include <esp_bt.h>     // for esp_bt_controller_mem_release()
+
+// BLE Libraries for wireless Web Bluetooth provisioning
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+
+// BLE Service & Characteristic UUIDs (Matches CHARRMPASS Web App)
+#define BLE_SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define BLE_CHAR_UUID    "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+#define BLE_DEVICE_NAME  "CHARRMPASS_EXIT_BLE"
 
 // =======================
-// WI-FI CREDENTIALS & SETTINGS (NO BLUETOOTH NEEDED)
-// Enter your default Wi-Fi network below.
-// (You can also update it Over-The-Air anytime from the Web Dashboard or via SD / Serial)
+// WI-FI CREDENTIALS & SETTINGS
+// Wi-Fi can be configured wirelessly via Web Bluetooth from the Admin Dashboard,
+// Over-The-Air from cloud, or via MicroSD / Serial.
 // =======================
 const char *DEFAULT_WIFI_SSID = "YOUR_WIFI_SSID";
 const char *DEFAULT_WIFI_PASS = "YOUR_WIFI_PASSWORD";
@@ -100,6 +112,7 @@ const char *SUPABASE_ANON =
 #define YELLOW_LED 25   // SCANNING: Reading card & verifying local authorization
 #define GREEN_LED 4     // DONE: Authorized & exit gate passage granted
 #define BUZZER_PIN 15
+#define BOOT_BUTTON_PIN 0 // ESP32 onboard BOOT button (Hold 3s to enter BLE setup mode)
 
 // Hardware Instances
 MFRC522 rfid(RFID_SS_PIN, RFID_RST_PIN);
@@ -107,6 +120,29 @@ SPIClass spiSD(HSPI); // Independent HSPI Controller for SD
 hd44780_I2Cexp lcd;
 Preferences preferences;
 WiFiClientSecure secureClient;
+
+// BLE Server handles & wireless provisioning state
+BLEServer* pBleServer = NULL;
+BLECharacteristic* pBleCharacteristic = NULL;
+bool bleClientConnected = false;
+bool bleServerRunning = false;
+volatile bool newWifiCredentialsReceived = false;
+String pendingBleSsid = "";
+String pendingBlePass = "";
+
+// BLE callbacks run on the Bluetooth stack task. They only set flags; loop() handles LCD/buzzer.
+volatile bool bleEvtConnected = false;
+volatile bool bleEvtDisconnected = false;
+
+// Coexistence: ESP32 shares ONE 2.4GHz radio between Wi-Fi and BLE.
+// When BLE is active, WIFI_PS_MIN_MODEM is required by ESP-IDF to prevent panic.
+void applyWifiPowerSave() {
+  if (bleServerRunning) {
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+  } else {
+    esp_wifi_set_ps(WIFI_PS_NONE);
+  }
+}
 
 // =======================
 // ULTRA-FAST LOCAL CACHE (DYNAMIC HEAP RAM + SD HYBRID)
@@ -225,7 +261,11 @@ void showReady() {
     // Connected Standby: Solid RED
     setTrafficLight(true, false, false);
   } else {
-    lcdMsg("  SCAN CARD   ", "[OFFLINE] READY");
+    if (bleServerRunning) {
+      lcdMsg("  SCAN CARD   ", "BLE ON: NO WIFI");
+    } else {
+      lcdMsg("  SCAN CARD   ", "[OFFLINE] READY");
+    }
     // Offline: Yellow blink handled by loop
     setTrafficLight(false, true, false);
   }
@@ -1213,6 +1253,131 @@ void scanAndPrintNetworks() {
   Serial.println();
 }
 
+// =====================================================
+// BLUETOOTH LOW ENERGY (BLE) PROVISIONING SUBSYSTEM
+// =====================================================
+void sendBleStatus(String status) {
+  if (pBleCharacteristic && bleClientConnected) {
+    pBleCharacteristic->setValue(status.c_str());
+    pBleCharacteristic->notify();
+    Serial.println("[BLE TX NOTIFY] " + status);
+  }
+}
+
+class BleServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer) {
+    bleClientConnected = true;
+    bleEvtConnected = true;
+  }
+
+  void onDisconnect(BLEServer* pServer) {
+    bleClientConnected = false;
+    bleEvtDisconnected = true;
+  }
+};
+
+class BleCharCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* pCharacteristic) {
+    String rxValue = pCharacteristic->getValue().c_str();
+    if (rxValue.length() > 0) {
+      Serial.println("[BLE RX] Raw data: " + rxValue);
+      DynamicJsonDocument doc(512);
+      DeserializationError err = deserializeJson(doc, rxValue);
+      String newSsid = "";
+      String newPass = "";
+      if (err == DeserializationError::Ok) {
+        newSsid = String(doc["ssid"] | "");
+        newPass = String(doc["pass"] | "");
+      } else {
+        int colon = rxValue.indexOf(':');
+        int comma = rxValue.indexOf(',');
+        if (colon != -1) {
+          newSsid = rxValue.substring(0, colon);
+          newPass = rxValue.substring(colon + 1);
+        } else if (comma != -1) {
+          newSsid = rxValue.substring(0, comma);
+          newPass = rxValue.substring(comma + 1);
+        } else {
+          newSsid = rxValue;
+        }
+      }
+      newSsid.trim();
+      newPass.trim();
+
+      if (newSsid.length() > 0 && !newWifiCredentialsReceived) {
+        pendingBleSsid = newSsid;
+        pendingBlePass = newPass;
+        newWifiCredentialsReceived = true;
+      }
+    }
+  }
+};
+
+void startBleServer() {
+  if (bleServerRunning) {
+    BLEDevice::startAdvertising();
+    return;
+  }
+
+  Serial.println("[BLE] Initializing Bluetooth Provisioning Server (" + String(BLE_DEVICE_NAME) + ")...");
+  lcdMsg("BLE SETUP MODE", "PAIR ON WEB/APP");
+
+  // Coexistence: Wi-Fi must be in modem-sleep before the BT controller starts
+  esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+
+  // We only use BLE, so give Classic-BT memory (~30KB) back to heap for Supabase HTTPS TLS
+  static bool classicBtReleased = false;
+  if (!classicBtReleased) {
+    esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
+    classicBtReleased = true;
+  }
+
+  BLEDevice::init(BLE_DEVICE_NAME);
+  BLEDevice::setMTU(517);
+  pBleServer = BLEDevice::createServer();
+  pBleServer->setCallbacks(new BleServerCallbacks());
+
+  BLEService* pService = pBleServer->createService(BLE_SERVICE_UUID);
+  pBleCharacteristic = pService->createCharacteristic(
+      BLE_CHAR_UUID,
+      BLECharacteristic::PROPERTY_READ |
+      BLECharacteristic::PROPERTY_WRITE |
+      BLECharacteristic::PROPERTY_WRITE_NR |
+      BLECharacteristic::PROPERTY_NOTIFY
+  );
+
+  pBleCharacteristic->setCallbacks(new BleCharCallbacks());
+  pBleCharacteristic->addDescriptor(new BLE2902());
+  pService->start();
+
+  BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(BLE_SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  pAdvertising->setMinPreferred(0x06);
+  pAdvertising->setMinPreferred(0x12);
+
+  BLEAdvertisementData oAdvertisementData = BLEAdvertisementData();
+  oAdvertisementData.setFlags(0x04);
+  oAdvertisementData.setCompleteServices(BLEUUID(BLE_SERVICE_UUID));
+  oAdvertisementData.setName(BLE_DEVICE_NAME);
+  pAdvertising->setAdvertisementData(oAdvertisementData);
+
+  BLEAdvertisementData oScanResponseData = BLEAdvertisementData();
+  oScanResponseData.setName(BLE_DEVICE_NAME);
+  pAdvertising->setScanResponseData(oScanResponseData);
+
+  BLEDevice::startAdvertising();
+  bleServerRunning = true;
+  Serial.println("[BLE] >>> BROADCASTING AS '" + String(BLE_DEVICE_NAME) + "' (Ready for Pairing) <<<");
+}
+
+void pauseBleAdvertising() {
+  if (bleServerRunning) {
+    BLEDevice::getAdvertising()->stop();
+    Serial.println("[BLE] Wi-Fi connected! Paused BLE advertising.");
+  }
+}
+
 // =======================
 // WIFI CONNECTION & AUTO RECONNECT
 // =======================
@@ -1229,8 +1394,14 @@ bool attemptWifiConnection(String testSsid, String testPass, int timeoutSeconds)
   Serial.println("===========================================");
   lcdMsg("CONNECTING WiFi", testSsid.substring(0, 16));
 
-  // Proper WiFi initialization — DO NOT use WiFi.disconnect(true) which powers off radio!
+  // Temporarily pause BLE advertising during Wi-Fi handshake to give 100% radio priority to Wi-Fi
+  if (bleServerRunning) {
+    BLEDevice::getAdvertising()->stop();
+  }
+
+  // Proper WiFi initialization
   WiFi.mode(WIFI_STA);
+  applyWifiPowerSave();
   WiFi.disconnect();
   delay(150);
 
@@ -1257,7 +1428,7 @@ bool attemptWifiConnection(String testSsid, String testPass, int timeoutSeconds)
 
   if (WiFi.status() == WL_CONNECTED) {
     wifiConnected = true;
-    WiFi.setSleep(false); // Disable WiFi modem sleep only AFTER successful connection
+    applyWifiPowerSave();
     Serial.println("\n[OK] WiFi Connected! IP: " + WiFi.localIP().toString() + " | RSSI: " + String(WiFi.RSSI()) + " dBm");
     lcdMsg("WiFi CONNECTED", WiFi.localIP().toString());
     signalWifiConnectedSuccess(); // 3 Green blinks, then Red Standby
@@ -1268,6 +1439,10 @@ bool attemptWifiConnection(String testSsid, String testPass, int timeoutSeconds)
     currentSsid = testSsid;
     currentPass = testPass;
 
+    // Send positive acknowledgement to Web Bluetooth client
+    sendBleStatus("{\"event\":\"CONNECTED\",\"ip\":\"" + WiFi.localIP().toString() + "\",\"rssi\":" + String(WiFi.RSSI()) + "}");
+    pauseBleAdvertising();
+
     syncWhitelistToSD();
     syncOfflineTransactionsToCloud();
     sendDeviceHeartbeat();
@@ -1275,19 +1450,29 @@ bool attemptWifiConnection(String testSsid, String testPass, int timeoutSeconds)
   } else {
     wifiConnected = false;
     int st = WiFi.status();
-    Serial.println("\n[WARN] WiFi connection failed (Status: " + String(st) + ")");
+    String errDetail = "Connection timeout";
     if (st == WL_NO_SSID_AVAIL) {
-      Serial.println("       Reason: WL_NO_SSID_AVAIL (1) — SSID '" + testSsid + "' not found! Check spelling and ensure 2.4GHz is enabled.");
+      errDetail = "SSID not found. Make sure router is broadcasting on 2.4GHz!";
     } else if (st == WL_CONNECT_FAILED) {
-      Serial.println("       Reason: WL_CONNECT_FAILED (4) — Incorrect password.");
+      errDetail = "Incorrect password (Code 4)";
     } else if (st == WL_DISCONNECTED) {
-      Serial.println("       Reason: WL_DISCONNECTED (6) — Handshake timeout or radio contention.");
+      errDetail = "Handshake timeout / weak signal (Code 6)";
     }
-    Serial.println("[WARN] Operating in Offline SD Cache Mode.");
+
+    Serial.println("\n[WARN] WiFi connection failed (Status: " + String(st) + " - " + errDetail + ")");
     lcdMsg("WIFI FAILED", "SD OFFLINE MODE");
 
     // Scan and list nearby 2.4GHz networks for diagnostics
     scanAndPrintNetworks();
+
+    // Send exact, informative failure notification to Web Bluetooth client
+    String failPayload = "{\"event\":\"FAILED\",\"error\":\"" + errDetail + "\",\"code\":" + String(st) + "}";
+    sendBleStatus(failPayload);
+
+    // Resume BLE advertising so user can retry or reconfigure
+    if (bleServerRunning) {
+      BLEDevice::startAdvertising();
+    }
 
     delay(1000);
   }
@@ -1337,6 +1522,7 @@ void setup() {
   pinMode(YELLOW_LED, OUTPUT);
   pinMode(GREEN_LED, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
   setTrafficLight(true, false, false); // Initial Standby: RED ON
 
   // 3. Load Saved Wi-Fi Credentials
@@ -1364,14 +1550,14 @@ void setup() {
     Serial.println("[BOOT] Wi-Fi credentials found: '" + currentSsid + "'. Attempting connection...");
     bool wifiOk = attemptWifiConnection(currentSsid, currentPass, 15);
     if (!wifiOk) {
-      Serial.println("[BOOT] Wi-Fi connection failed. Operating in Offline SD Cache Mode.");
+      Serial.println("[BOOT] Wi-Fi connection failed. Starting BLE server & Operating in Offline SD Cache Mode.");
+      startBleServer();
       lcdMsg("WiFi FAILED", "SD OFFLINE MODE");
     }
   } else {
     Serial.println("[BOOT] No saved Wi-Fi credentials found in NVS, SD, or code.");
-    Serial.println("[BOOT] Operating in Offline SD Cache Mode.");
-    Serial.println("[BOOT] TIP: Send 'WIFI:SSID,PASS' via Serial Monitor to connect.");
-    lcdMsg("[NO WIFI SAVED]", "SD OFFLINE MODE");
+    Serial.println("[BOOT] Starting BLE server for wireless Web provisioning...");
+    startBleServer();
     scanAndPrintNetworks();
   }
 
@@ -1382,6 +1568,78 @@ void setup() {
 // MAIN LOOP
 // =======================
 void loop() {
+  // ── ONBOARD BOOT BUTTON (GPIO 0): Hold for 3s to force Wi-Fi reset & enter BLE Setup Mode ──
+  static unsigned long bootButtonPressStart = 0;
+  if (digitalRead(BOOT_BUTTON_PIN) == LOW) {
+    if (bootButtonPressStart == 0) {
+      bootButtonPressStart = millis();
+    } else if (millis() - bootButtonPressStart >= 3000) {
+      Serial.println("\n🔘 [HARDWARE BUTTON] BOOT button held for 3s -> Forcing Wi-Fi Reset & BLE Setup Mode!");
+      lcdMsg("WIFI RESET", "BLE SETUP MODE");
+      tone(BUZZER_PIN, 1800, 200);
+      preferences.begin("charrm_wifi", false);
+      preferences.remove("ssid");
+      preferences.remove("pass");
+      preferences.end();
+      if (sdCardReady && SD.exists(WIFI_CONFIG_FILE)) {
+        SD.remove(WIFI_CONFIG_FILE);
+        Serial.println("[RESET] SD Wi-Fi backup removed.");
+      }
+      currentSsid = "";
+      currentPass = "";
+      WiFi.disconnect(true);
+      wifiConnected = false;
+      startBleServer();
+      showReady();
+      bootButtonPressStart = 0;
+      while (digitalRead(BOOT_BUTTON_PIN) == LOW) {
+        delay(10);
+      } // Wait for button release
+    }
+  } else {
+    bootButtonPressStart = 0;
+  }
+
+  // ── BLE EVENTS (raised by BLE callbacks, handled safely here) ──
+  if (bleEvtConnected) {
+    bleEvtConnected = false;
+    Serial.println("\n[BLE] Web Client Connected via Bluetooth!");
+    lcdMsg("BLUETOOTH PAIRED", "WAITING WIFI...");
+    tone(BUZZER_PIN, 2000, 100);
+  }
+  if (bleEvtDisconnected) {
+    bleEvtDisconnected = false;
+    Serial.println("[BLE] Web Client Disconnected.");
+    // Only re-advertise if we still need provisioning (i.e. offline)
+    if (bleServerRunning && !wifiConnected) {
+      BLEDevice::startAdvertising();
+      Serial.println("[BLE] Advertising resumed (device still offline).");
+    }
+    showReady();
+  }
+
+  // ── BLE PROVISIONING: Handle new Wi-Fi credentials received over Bluetooth ──
+  if (newWifiCredentialsReceived) {
+    String newSsid = pendingBleSsid;
+    String newPass = pendingBlePass;
+    newWifiCredentialsReceived = false;
+
+    Serial.println("\n[BLE PROVISION] Received SSID: '" + newSsid + "' (" + String(newPass.length()) + " char password)");
+    lcdMsg("RECEIVED WIFI", newSsid.substring(0, 16));
+    tone(BUZZER_PIN, 2000, 150);
+    sendBleStatus("{\"event\":\"SAVED\",\"ssid\":\"" + newSsid + "\"}");
+    delay(300); // let notify reach browser before radio switches
+
+    String prevSsid = currentSsid;
+    String prevPass = currentPass;
+    bool ok = attemptWifiConnection(newSsid, newPass, 25);
+    if (!ok && prevSsid.length() > 0 && prevSsid != newSsid) {
+      Serial.println("[BLE PROVISION] New Wi-Fi failed. Restoring previous network '" + prevSsid + "'...");
+      attemptWifiConnection(prevSsid, prevPass, 15);
+    }
+    showReady();
+  }
+
   // Non-blocking ready reset timer
   if (isDisplayHolding && millis() >= readyResetTime) {
     isDisplayHolding = false;
@@ -1393,7 +1651,10 @@ void loop() {
     if (wifiConnected) {
       wifiConnected = false;
       Serial.println("[WARN] WiFi lost — SD Fallback Mode Active (Blinking Yellow)");
+      startBleServer();
       showReady();
+    } else if (!bleServerRunning) {
+      startBleServer();
     }
     // When NOT connected to internet: Yellow LED blinks continuously in standby
     if (!isDisplayHolding) {
@@ -1411,6 +1672,8 @@ void loop() {
     if (!wifiConnected) {
       wifiConnected = true;
       Serial.println("[OK] WiFi Reconnected! Signaling 3 green blinks...");
+      applyWifiPowerSave();
+      pauseBleAdvertising();
       signalWifiConnectedSuccess(); // 3 Green blinks, then Standby RED
       syncOfflineTransactionsToCloud();
       syncWhitelistToSD();
