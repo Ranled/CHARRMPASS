@@ -815,7 +815,7 @@ function renderAdmin() {
                 let name     = l.users?.full_name;
                 let plate    = l.vehicles?.plate_number;
 
-                const isPed = l.user_type === 'PEDESTRIAN' || l.rfid_type === 'CLOSE_RANGE' || l.vehicles?.vehicle_type === 'None' || l.vehicles?.plate_number === 'PEDESTRIAN' || l.gate?.includes('PEDESTRIAN') || l.gate?.includes('TURNSTILE');
+                const isPed = l.user_type === 'PEDESTRIAN' || l.rfid_type === 'CLOSE_RANGE' || (!l.vehicle_id && !l.vehicles?.plate_number) || l.users?.default_transit_mode === 'PEDESTRIAN' || l.vehicles?.vehicle_type === 'None' || l.vehicles?.plate_number === 'PEDESTRIAN' || l.gate?.includes('PEDESTRIAN') || l.gate?.includes('TURNSTILE') || l.gate?.includes('CHARRMPASS_GATE');
 
                 if (!name && l.remarks) {
                     if (l.remarks.includes('Visitor')) {
@@ -1800,27 +1800,127 @@ function getFilteredAnalyticsLogs(preset = analyticsPreset, customFrom = customA
     return logs;
 }
 
+// ─── UNIFIED LOG DETAILS & STAKEHOLDER RESOLVER ─────────────
+function resolveLogDetails(l) {
+    if (!l) return { name: '--', role: '--', subtext: '--', plate: '--', isPed: false, user: null };
+    
+    let u = l.users;
+    if (!u && l.user_id && adminState.users) {
+        u = adminState.users.find(x => x.id === l.user_id);
+    }
+    if (!u && l.rfid_uid && adminState.users) {
+        const clean = (l.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+        u = adminState.users.find(x => {
+            const uRfid = (x.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+            if (uRfid && uRfid === clean) return true;
+            if (x.rfid_cards && Array.isArray(x.rfid_cards)) {
+                return x.rfid_cards.some(c => (c.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase() === clean);
+            }
+            return false;
+        });
+    }
+
+    let name = u?.full_name;
+    let role = (u?.role === 'OTHERS' && u?.role_detail) ? u.role_detail : (u?.role || '');
+    let subtext = u?.cpass_id ? `CPASS: ${u.cpass_id}` : (u?.student_id ? `ID: ${u.student_id}` : (u?.program ? `${u.program} ${u.section || ''}`.trim() : ''));
+    let plate = l.vehicles?.plate_number;
+
+    if (!name && l.remarks) {
+        if (l.remarks.includes('Visitor')) {
+            const match = l.remarks.match(/Visitor (?:Exit|Entry):\s*([^|]+)(?:\s*\|\s*Plate:\s*([^|]+))?/i);
+            if (match) {
+                name = match[1]?.trim();
+                if (match[2]?.trim() && match[2].trim() !== 'N/A') plate = match[2].trim();
+            } else {
+                name = 'Campus Visitor';
+            }
+            role = 'Visitor';
+            subtext = 'Visitor Pass';
+        } else if (l.remarks.includes('Emergency') || l.remarks.includes('EMERGENCY')) {
+            const match = l.remarks.match(/Emergency (?:tag|Response):\s*(.+)/i);
+            name = match ? match[1].trim() : 'Emergency Response';
+            role = 'Emergency';
+            subtext = 'First Responder';
+            plate = 'EMERGENCY';
+        }
+    }
+
+    if (!name && adminState.specialTags) {
+        const cleanUid = (l.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+        const spec = adminState.specialTags.find(s => s.rfid_uid === l.rfid_uid || ((s.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase() === cleanUid));
+        if (spec) {
+            if (spec.type === 'EMERGENCY') {
+                name = spec.label || 'Emergency Response';
+                role = 'Emergency';
+                subtext = 'First Responder';
+                plate = 'EMERGENCY';
+            } else if (spec.type === 'VISITOR') {
+                name = (spec.label && spec.label !== 'Reusable Visitor Tag') ? spec.label : 'Visitor Pass';
+                role = 'Visitor';
+                subtext = 'Visitor Pass';
+                plate = spec.description?.match(/Plate:\s*([^|]+)/)?.[1]?.trim() || 'VISITOR PASS';
+            }
+        }
+    }
+
+    const isStudent = (role || '').toLowerCase() === 'student';
+    const hasRealVehicle = plate && plate !== 'PEDESTRIAN' && plate !== 'NONE' && plate !== 'N/A' && l.vehicles?.vehicle_type !== 'None' && l.vehicles?.vehicle_type !== 'Walking / Pedestrian';
+
+    const isPed = l.user_type === 'PEDESTRIAN' ||
+                  l.rfid_type === 'CLOSE_RANGE' ||
+                  u?.default_transit_mode === 'PEDESTRIAN' ||
+                  (isStudent && !hasRealVehicle) ||
+                  !l.vehicle_id ||
+                  l.vehicles?.vehicle_type === 'None' ||
+                  l.vehicles?.vehicle_type === 'Walking / Pedestrian' ||
+                  plate === 'PEDESTRIAN';
+
+    if (!plate || isPed) {
+        plate = isPed ? 'PEDESTRIAN' : '--';
+    }
+
+    const resolvedName = name || (l.status === 'DENIED' ? 'Unregistered Card' : 'Authorized User');
+    const idNum = u?.cpass_id || u?.student_id || '';
+
+    return {
+        user: u,
+        name: resolvedName,
+        ownerName: resolvedName,
+        role: role || (isPed ? 'Student' : 'Driver'),
+        subtext: subtext || (isPed ? 'Pedestrian Access' : 'Campus Access'),
+        idNumber: idNum,
+        plate: plate || '--',
+        isPed: !!isPed,
+        isPedestrian: !!isPed
+    };
+}
+
 function renderAnalytics() {
     const filteredLogs = getFilteredAnalyticsLogs();
     
     // 1. Primary Top 4 Statistics
     const entries = filteredLogs.filter(l => l.direction === 'ENTRY' && l.status === 'AUTHORIZED');
     const exits = filteredLogs.filter(l => l.direction === 'EXIT' && l.status === 'AUTHORIZED');
-    const uniquePlates = new Set();
+
+    const uniqueStakeholders = new Set();
     filteredLogs.forEach(l => {
-        const plate = l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || l.rfid_uid;
-        if (plate && plate !== '--' && plate !== 'N/A') uniquePlates.add(plate.toUpperCase());
+        const info = resolveLogDetails(l);
+        if (info.isPed) {
+            const uid = l.rfid_uid ? l.rfid_uid.replace(/[\s:-]/g, '').toUpperCase() : (info.user?.id || info.name);
+            if (uid) uniqueStakeholders.add('PED:' + uid);
+        } else {
+            const p = (info.plate || '').toUpperCase().trim();
+            if (p && p !== 'N/A' && p !== '--' && p !== 'PEDESTRIAN') {
+                uniqueStakeholders.add('VEH:' + p);
+            } else if (l.rfid_uid) {
+                uniqueStakeholders.add('CARD:' + l.rfid_uid.replace(/[\s:-]/g, '').toUpperCase());
+            }
+        }
     });
     
     const totalEntries = entries.length;
     const totalExits = exits.length;
-    const uniqueCount = uniquePlates.size;
-    const activeInside = typeof adminState.activeVehicles === 'number' ? adminState.activeVehicles : Math.max(0, totalEntries - totalExits);
-
-    if (el('anStatEntries')) el('anStatEntries').textContent = totalEntries.toLocaleString();
-    if (el('anStatExits')) el('anStatExits').textContent = totalExits.toLocaleString();
-    if (el('anStatUnique')) el('anStatUnique').textContent = uniqueCount.toLocaleString();
-    if (el('anStatInside')) el('anStatInside').textContent = activeInside.toLocaleString();
+    const uniqueCount = uniqueStakeholders.size;
 
     // 2. Secondary Operational Statistics
     const totalReg = adminState.users.length;
@@ -1833,16 +1933,20 @@ function renderAnalytics() {
     filteredLogs.forEach(l => {
         if (l.status === 'DENIED') {
             failedCount++;
-            if (!l.users && (!l.remarks || l.remarks.includes('Unregistered') || l.remarks.includes('Unknown'))) {
+            if (!l.users && (!l.remarks || l.remarks.includes('Unregistered') || l.remarks.includes('Unknown') || l.remarks.includes('Unauthorized'))) {
                 unregCards++;
             }
         }
-        const role = (l.users?.role || '').toUpperCase();
+        const info = resolveLogDetails(l);
+        const role = (info.role || '').toUpperCase();
         if (role === 'STUDENT') studentCount++;
-        else if (role === 'FACULTY' || role === 'STAFF') staffCount++;
-        else if (l.remarks && (l.remarks.includes('Visitor') || l.remarks.includes('VISITOR'))) visitorCount++;
-        else if (l.is_emergency) {}
+        else if (role === 'FACULTY' || role === 'STAFF' || role.includes('STAFF') || role.includes('ADMIN')) staffCount++;
+        else if (role === 'VISITOR' || (l.remarks && l.remarks.toLowerCase().includes('visitor'))) visitorCount++;
     });
+
+    if (el('anStatEntries')) el('anStatEntries').textContent = totalEntries.toLocaleString();
+    if (el('anStatExits')) el('anStatExits').textContent = totalExits.toLocaleString();
+    if (el('anStatUnique')) el('anStatUnique').textContent = uniqueCount.toLocaleString();
 
     if (el('secRegVehicles')) el('secRegVehicles').textContent = totalReg.toLocaleString();
     if (el('secVisitors')) el('secVisitors').textContent = visitorCount.toLocaleString();
@@ -1866,16 +1970,35 @@ function renderAnalytics() {
     if (el('gateExitPassCount')) el('gateExitPassCount').textContent = exitSuccess.toLocaleString();
     if (el('gateExitFailCount')) el('gateExitFailCount').textContent = exitFail.toLocaleString();
 
-    // Denial Reasons Breakdown
+    // Denial Reasons Breakdown (100% Dynamic from real logs)
     const reasonCounts = {
-        'Unregistered RFID Tag': unregCards,
-        'Inactive / Suspended RFID': Math.max(0, failedCount - unregCards - 1),
-        'Invalid Access Direction': 1,
-        'System Verification Time-out': 0
+        'Unregistered RFID Tag': 0,
+        'Duplicate / Passback Conflict': 0,
+        'Unauthorized / Suspended': 0,
+        'Guard Explicit Denial': 0,
+        'Other Verification Failure': 0
     };
+    filteredLogs.forEach(l => {
+        if (l.status !== 'DENIED') return;
+        const rem = (l.remarks || '').toLowerCase();
+        if (rem.includes('unregistered') || rem.includes('unknown card')) {
+            reasonCounts['Unregistered RFID Tag']++;
+        } else if (rem.includes('duplicate') || rem.includes('already logged') || rem.includes('already inside') || rem.includes('re-entry') || rem.includes('forgot to tap') || rem.includes('direction')) {
+            reasonCounts['Duplicate / Passback Conflict']++;
+        } else if (rem.includes('denied by guard')) {
+            reasonCounts['Guard Explicit Denial']++;
+        } else if (rem.includes('unauthorized') || rem.includes('suspended') || rem.includes('not authorized') || rem.includes('inactive')) {
+            reasonCounts['Unauthorized / Suspended']++;
+        } else {
+            reasonCounts['Other Verification Failure']++;
+        }
+    });
+
+    const totalDenied = Math.max(1, failedCount);
     if (el('denialReasonsTable')) {
-        const totalDenied = Math.max(1, failedCount);
-        el('denialReasonsTable').innerHTML = Object.entries(reasonCounts).map(([reason, count]) => {
+        const activeReasons = Object.entries(reasonCounts).filter(([_, count]) => count > 0);
+        const displayReasons = activeReasons.length > 0 ? activeReasons : [['Unregistered RFID Tag', 0]];
+        el('denialReasonsTable').innerHTML = displayReasons.map(([reason, count]) => {
             const pct = Math.round((count / totalDenied) * 100);
             return `
                 <tr class="border-b border-slate-100/60 hover:bg-white/80">
@@ -1887,37 +2010,40 @@ function renderAnalytics() {
         }).join('');
     }
 
-    // 4. Vehicles Inside Breakdown & Longest Stay
+    // 4. Vehicles & Pedestrians Inside Campus (Live Roster Engine)
     let insideStud = 0, insideStf = 0, insideVis = 0, insideEmg = 0;
-    // Map entries vs exits to find who is currently inside
     const openEntries = [];
     const sortedLogsAsc = [...adminState.logs].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
     const normalizeUid = (u) => (u || '').toString().replace(/[\s:-]/g, '').toUpperCase();
+    const isRealPlate = (p) => p && p !== 'N/A' && p !== '--' && p !== 'PEDESTRIAN' && p !== 'NONE' && p !== 'WALKING' && p !== 'VISITOR PASS' && p !== 'EMERGENCY';
 
     sortedLogsAsc.forEach(l => {
         if (l.status !== 'AUTHORIZED') return;
         const uid = normalizeUid(l.rfid_uid);
+        const lUserId = l.user_id || l.users?.id;
         const plate = (l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').toUpperCase().trim();
 
+        const matchIdx = openEntries.findIndex(e => {
+            const eUid = normalizeUid(e.rfid_uid);
+            const eUserId = e.user_id || e.users?.id;
+            if (uid && eUid && uid === eUid) return true;
+            if (lUserId && eUserId && lUserId === eUserId) return true;
+            const ePlate = (e.vehicles?.plate_number || (e.remarks && e.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').toUpperCase().trim();
+            if (isRealPlate(plate) && isRealPlate(ePlate) && plate === ePlate) return true;
+            return false;
+        });
+
         if (l.direction === 'ENTRY') {
-            const existingIdx = openEntries.findIndex(e => {
-                const eUid = normalizeUid(e.rfid_uid);
-                const ePlate = (e.vehicles?.plate_number || (e.remarks && e.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').toUpperCase().trim();
-                return (uid && eUid && uid === eUid) || (plate && ePlate && plate !== 'N/A' && plate !== '--' && plate === ePlate);
-            });
-            if (existingIdx !== -1) {
-                openEntries[existingIdx] = l;
+            if (matchIdx !== -1) {
+                openEntries[matchIdx] = l;
             } else {
                 openEntries.push(l);
             }
         } else if (l.direction === 'EXIT') {
-            const idx = openEntries.findIndex(e => {
-                const eUid = normalizeUid(e.rfid_uid);
-                const ePlate = (e.vehicles?.plate_number || (e.remarks && e.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').toUpperCase().trim();
-                return (uid && eUid && uid === eUid) || (plate && ePlate && plate !== 'N/A' && plate !== '--' && plate === ePlate);
-            });
-            if (idx !== -1) openEntries.splice(idx, 1);
+            if (matchIdx !== -1) {
+                openEntries.splice(matchIdx, 1);
+            }
         }
     });
 
@@ -1946,34 +2072,32 @@ function renderAnalytics() {
         const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
         const diffMins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
         
-        let ownerName = longest.users?.full_name;
-        if (!ownerName && longest.remarks?.includes('Visitor')) {
-            ownerName = longest.remarks.match(/Visitor (?:Entry|Exit):\s*([^|]+)/i)?.[1]?.trim() || 'Visitor';
-        }
-        if (!ownerName) ownerName = 'Cardholder ' + (longest.rfid_uid || '');
-
-        const plate = longest.vehicles?.plate_number || longest.remarks?.match(/Plate:\s*([^|]+)/i)?.[1]?.trim() || 'N/A';
+        const info = resolveLogDetails(longest);
+        const ownerName = info.name;
+        const plateDisplay = info.isPed ? 'Pedestrian (Walking)' : (info.plate !== '--' ? `Plate: ${info.plate}` : 'No Plate');
 
         if (el('longestStayDuration')) el('longestStayDuration').textContent = `${diffHours}h ${diffMins}m`;
         if (el('longestStayOwner')) el('longestStayOwner').textContent = ownerName;
-        if (el('longestStayPlate')) el('longestStayPlate').textContent = `Plate: ${plate}`;
+        if (el('longestStayPlate')) el('longestStayPlate').textContent = plateDisplay;
         if (el('longestStayTime')) el('longestStayTime').textContent = `Entered: ${enterTime.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}`;
     } else {
         if (el('longestStayDuration')) el('longestStayDuration').textContent = '--';
-        if (el('longestStayOwner')) el('longestStayOwner').textContent = 'No active vehicles';
-        if (el('longestStayPlate')) el('longestStayPlate').textContent = 'Plate: --';
+        if (el('longestStayOwner')) el('longestStayOwner').textContent = 'No occupants inside';
+        if (el('longestStayPlate')) el('longestStayPlate').textContent = 'Transit: --';
         if (el('longestStayTime')) el('longestStayTime').textContent = 'Entered: --';
     }
 
-    // 5. Top Frequent Vehicles
+    // 5. Top Frequent Vehicles (Exclude Walking Pedestrians)
     const vehicleVisits = {};
     filteredLogs.forEach(l => {
-        const plate = l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim());
-        if (!plate || plate === '--' || plate === 'N/A') return;
+        const info = resolveLogDetails(l);
+        if (info.isPed) return; // Only true vehicles with plates
+        const plate = info.plate;
+        if (!plate || plate === '--' || plate === 'N/A' || plate === 'PEDESTRIAN') return;
         if (!vehicleVisits[plate]) {
             vehicleVisits[plate] = {
                 plate: plate,
-                owner: l.users?.full_name || (l.remarks && l.remarks.match(/Visitor (?:Entry|Exit):\s*([^|]+)/i)?.[1]?.trim()) || 'Authorized User',
+                owner: info.name,
                 type: l.vehicles?.vehicle_type || 'Vehicle',
                 visits: 0,
                 lastScan: l.timestamp
@@ -1998,12 +2122,13 @@ function renderAnalytics() {
         `).join('') : '<tr><td colspan="5" class="p-6 text-center text-slate-400 text-xs">No frequent vehicles recorded in this period.</td></tr>';
     }
 
-    // 6. User Access Leaderboard (Students, Faculty, Staff/Utility, Visitors)
+    // 6. User Access Leaderboard
     renderUserLeaderboard(filteredLogs);
 
+    // 7. Dynamic Analytics Charts
     renderAnalyticsCharts(filteredLogs);
 
-    // 7. Live Campus Occupants Roster Table
+    // 8. Live Campus Occupants Roster Table
     if (typeof window.renderInsideCampusTable === 'function') {
         window.renderInsideCampusTable();
     }
@@ -2021,11 +2146,12 @@ window.getInsideOccupantCategory = function(l) {
     if (l.is_emergency) return 'EMERGENCY';
     const rem = (l.remarks || '').toLowerCase();
     if (rem.includes('emergency')) return 'EMERGENCY';
-    const role = (l.users?.role || '').toUpperCase();
+    const info = resolveLogDetails(l);
+    const role = (info.role || '').toUpperCase();
     if (role === 'STUDENT') return 'STUDENT';
-    if (role === 'FACULTY' || role === 'STAFF') return 'STAFF';
+    if (role === 'FACULTY' || role === 'STAFF' || role.includes('STAFF') || role.includes('ADMIN') || role.includes('GUARD')) return 'STAFF';
     if (rem.includes('visitor') || role === 'VISITOR' || l.user_type === 'VISITOR') return 'VISITOR';
-    if (l.users) return 'STAFF';
+    if (info.user) return 'STAFF';
     return 'VISITOR';
 };
 
@@ -2087,19 +2213,16 @@ window.renderInsideCampusTable = function() {
         }
 
         if (insideRosterSearch) {
-            let ownerName = l.users?.full_name || '';
-            if (!ownerName && l.remarks) {
-                const match = l.remarks.match(/Visitor (?:Entry|Exit):\s*([^|]+)/i);
-                if (match) ownerName = match[1].trim();
-            }
-            const plate = (l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').toLowerCase();
+            const info = resolveLogDetails(l);
+            const ownerName = info.name || '';
+            const subtext = info.subtext || '';
+            const plate = (info.plate || '').toLowerCase();
             const rfid = (l.rfid_uid || '').toLowerCase();
             const gate = (l.gate || '').toLowerCase();
             const remarks = (l.remarks || '').toLowerCase();
-            const role = (l.users?.role || '').toLowerCase();
-            const idNumber = (l.users?.id_number || '').toLowerCase();
+            const role = (info.role || '').toLowerCase();
 
-            const textPool = `${ownerName.toLowerCase()} ${plate} ${rfid} ${gate} ${remarks} ${role} ${idNumber} ${cat.toLowerCase()}`;
+            const textPool = `${ownerName.toLowerCase()} ${subtext.toLowerCase()} ${plate} ${rfid} ${gate} ${remarks} ${role} ${cat.toLowerCase()}`;
             if (!textPool.includes(insideRosterSearch)) {
                 return false;
             }
@@ -2127,7 +2250,7 @@ window.renderInsideCampusTable = function() {
                                 <i data-lucide="shield-check" class="w-6 h-6 text-emerald-500"></i>
                             </div>
                             <div class="font-bold text-slate-700 text-sm">No Occupants Currently Inside</div>
-                            <p class="text-xs text-slate-400 max-w-sm">All scanned vehicles and visitors have verified exits. Campus perimeter is clear.</p>
+                            <p class="text-xs text-slate-400 max-w-sm">All scanned vehicles and pedestrians have verified exits. Campus perimeter is clear.</p>
                         </div>
                     </td>
                 </tr>
@@ -2153,27 +2276,10 @@ window.renderInsideCampusTable = function() {
 
     const rowsHtml = filtered.map((l, index) => {
         const cat = window.getInsideOccupantCategory(l);
-        
-        // Owner/Driver name & details
-        let ownerName = l.users?.full_name;
-        let subtext = l.users?.id_number || l.users?.program || l.users?.section;
-        if (!ownerName && l.remarks) {
-            const match = l.remarks.match(/Visitor (?:Entry|Exit):\s*([^|]+)/i);
-            if (match) ownerName = match[1].trim();
-        }
-        if (!ownerName && l.is_emergency) {
-            ownerName = 'Emergency Responder';
-            subtext = 'Priority Response Vehicle';
-        }
-        if (!ownerName) {
-            const raw = (l.rfid_uid || '').replace(/\s+/g, '');
-            const masked = raw.length >= 4 ? `****${raw.slice(-4)}` : '****';
-            ownerName = `Cardholder ${masked}`;
-            subtext = 'Guest / Unlinked Tag';
-        }
-        if (!subtext) {
-            subtext = cat === 'STUDENT' ? 'Student' : (cat === 'STAFF' ? 'Faculty / Staff' : 'Campus Visitor');
-        }
+        const info = resolveLogDetails(l);
+        const ownerName = info.name;
+        const subtext = info.subtext;
+        const isPed = info.isPed;
 
         // Category Badge
         let catBadge = '';
@@ -2187,15 +2293,21 @@ window.renderInsideCampusTable = function() {
             catBadge = `<span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-blue-100 text-blue-800 border border-blue-300 flex items-center gap-1.5 w-fit shadow-sm"><span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span> Visitor</span>`;
         }
 
-        // Vehicle info & Plate
-        const plate = l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || 'N/A';
-        const vehType = l.vehicles?.vehicle_type || 'Vehicle';
-        const vehModel = l.vehicles?.model || l.vehicles?.color || '';
-        let vehIcon = 'car-front';
-        const vLower = (vehType + ' ' + (l.user_type || '')).toLowerCase();
-        if (vLower.includes('motorcycle') || vLower.includes('motor') || vLower.includes('bike')) vehIcon = 'bike';
-        else if (vLower.includes('truck') || vLower.includes('van') || vLower.includes('bus')) vehIcon = 'truck';
-        else if (vLower.includes('pedestrian')) vehIcon = 'user';
+        // Plate and Transit Mode info
+        let plateDisplay = '';
+        if (isPed) {
+            plateDisplay = `<span class="font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-xs flex items-center gap-1 w-fit"><i data-lucide="footprints" class="w-3 h-3 text-emerald-600"></i> Pedestrian</span>`;
+        } else {
+            plateDisplay = `<span class="font-mono font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 text-xs w-fit">${info.plate}</span>`;
+        }
+
+        const vehDesc = isPed ? 'Walking / Pedestrian' : `${l.vehicles?.vehicle_type || 'Vehicle'} ${l.vehicles?.vehicle_model ? '• ' + l.vehicles.vehicle_model : ''}`;
+        let vehIcon = isPed ? 'footprints' : 'car-front';
+        const vLower = ((l.vehicles?.vehicle_type || '') + ' ' + (l.user_type || '')).toLowerCase();
+        if (!isPed) {
+            if (vLower.includes('motorcycle') || vLower.includes('motor') || vLower.includes('bike')) vehIcon = 'bike';
+            else if (vLower.includes('truck') || vLower.includes('van') || vLower.includes('bus')) vehIcon = 'truck';
+        }
 
         // Entry timestamp
         const enterTime = new Date(l.timestamp);
@@ -2220,8 +2332,8 @@ window.renderInsideCampusTable = function() {
 
         // Gate info
         const isLongRange = l.rfid_type === 'LONG_RANGE' || (l.gate && l.gate.toLowerCase().includes('long'));
-        const gateLabel = l.gate || (isLongRange ? 'UHF Vehicle Gate' : 'Main Campus Gate');
-        const readerMode = isLongRange ? 'Long-Range UHF' : 'Close-Range Gate';
+        const gateLabel = l.gate || (isPed ? 'Pedestrian Gate' : (isLongRange ? 'UHF Vehicle Gate' : 'Main Campus Gate'));
+        const readerMode = isPed ? 'Close-Range RFID' : (isLongRange ? 'Long-Range UHF' : 'Close-Range Gate');
 
         // Masked/Formatted RFID
         const rawUid = (l.rfid_uid || '--').replace(/\s+/g, '');
@@ -2244,9 +2356,9 @@ window.renderInsideCampusTable = function() {
                 <td class="p-3.5">${catBadge}</td>
                 <td class="p-3.5">
                     <div class="flex flex-col gap-0.5">
-                        <span class="font-mono font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 text-xs w-fit">${plate}</span>
+                        ${plateDisplay}
                         <span class="text-[10px] text-slate-400 flex items-center gap-1">
-                            <i data-lucide="${vehIcon}" class="w-3 h-3"></i> ${vehType} ${vehModel ? '• ' + vehModel : ''}
+                            <i data-lucide="${vehIcon}" class="w-3 h-3"></i> ${vehDesc}
                         </span>
                     </div>
                 </td>
@@ -2297,18 +2409,11 @@ window.exportInsideCampusCSV = function() {
 
     const rows = roster.map((l, i) => {
         const cat = window.getInsideOccupantCategory(l);
-        let ownerName = l.users?.full_name;
-        let subtext = l.users?.id_number || l.users?.program || l.users?.section;
-        if (!ownerName && l.remarks) {
-            const match = l.remarks.match(/Visitor (?:Entry|Exit):\s*([^|]+)/i);
-            if (match) ownerName = match[1].trim();
-        }
-        if (!ownerName && l.is_emergency) ownerName = 'Emergency Responder';
-        if (!ownerName) ownerName = 'Cardholder ' + (l.rfid_uid || '');
-        if (!subtext) subtext = cat;
-
-        const plate = l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || 'N/A';
-        const vehType = l.vehicles?.vehicle_type || 'Vehicle';
+        const info = resolveLogDetails(l);
+        const ownerName = info.name;
+        const subtext = info.subtext;
+        const plate = info.isPed ? 'PEDESTRIAN' : (info.plate !== '--' ? info.plate : 'N/A');
+        const vehType = info.isPed ? 'Pedestrian' : (l.vehicles?.vehicle_type || 'Vehicle');
         const enterTime = new Date(l.timestamp);
         const dateStr = enterTime.toISOString().slice(0, 10);
         const timeStr = enterTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -2318,7 +2423,7 @@ window.exportInsideCampusCSV = function() {
         const diffMins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
         const durationStr = `${diffHrs}h ${diffMins}m`;
 
-        const gate = l.gate || (l.rfid_type === 'LONG_RANGE' ? 'UHF Vehicle Gate' : 'Main Gate');
+        const gate = l.gate || (info.isPed ? 'Pedestrian Gate' : (l.rfid_type === 'LONG_RANGE' ? 'UHF Vehicle Gate' : 'Main Gate'));
         const rfid = l.rfid_uid || 'N/A';
 
         return [
@@ -2370,48 +2475,18 @@ function renderUserLeaderboard(logs = getFilteredAnalyticsLogs()) {
     const userVisits = {};
 
     logs.forEach(l => {
-        let name = l.users?.full_name;
-        let role = l.users?.role || 'Other';
-        let subtext = l.users?.program || l.users?.section || '--';
-        let plate = l.vehicles?.plate_number || '--';
+        // Exclude DENIED or REJECTED scans from User Access Leaderboard
+        if (l.status === 'DENIED' || l.status === 'REJECTED') return;
 
-        if (!name && l.remarks) {
-            if (l.remarks.includes('Visitor')) {
-                const match = l.remarks.match(/Visitor (?:Exit|Entry):\s*([^|]+)(?:\s*\|\s*Plate:\s*([^|]+))?/i);
-                name = match ? match[1]?.trim() : 'Visitor';
-                if (match?.[2]?.trim() && match[2].trim() !== 'N/A') plate = match[2].trim();
-                role = 'Visitor';
-                subtext = 'Campus Visitor';
-            } else if (l.remarks.includes('Emergency') || l.remarks.includes('EMERGENCY')) {
-                const match = l.remarks.match(/Emergency (?:tag|Response):\s*(.+)/i);
-                name = match ? match[1].trim() : 'Emergency Response';
-                role = 'Emergency';
-                subtext = 'Emergency Vehicle';
-                plate = 'EMERGENCY';
-            }
-        }
+        const info = resolveLogDetails(l);
+        const name = info.name;
+        const role = info.role || 'Other';
+        const subtext = info.subtext || '--';
+        const plate = info.isPed ? 'Pedestrian' : (info.plate !== '--' ? info.plate : '--');
 
-        if (!name && adminState.specialTags) {
-            const cleanUid = (l.rfid_uid || '').replace(/\s+/g, '').toUpperCase();
-            const spec = adminState.specialTags.find(s => s.rfid_uid === l.rfid_uid || (s.rfid_uid && s.rfid_uid.replace(/\s+/g, '').toUpperCase() === cleanUid));
-            if (spec) {
-                if (spec.type === 'EMERGENCY') {
-                    name = spec.label || 'Emergency Response';
-                    role = 'Emergency';
-                    subtext = 'First Responder';
-                    plate = 'EMERGENCY';
-                } else if (spec.type === 'VISITOR') {
-                    name = (spec.label && spec.label !== 'Reusable Visitor Tag') ? spec.label : 'Visitor Pass';
-                    role = 'Visitor';
-                    subtext = 'Visitor';
-                    plate = spec.description?.match(/Plate:\s*([^|]+)/)?.[1]?.trim() || 'VISITOR';
-                }
-            }
-        }
-
-        if (!name) {
-            name = l.status === 'DENIED' ? 'Unregistered Card' : 'Authorized User';
-            role = 'General';
+        // Do not rank unregistered cards, generic authorized placeholders, or unlinked Cardholder tags in Leaderboard
+        if (!name || name === 'Unregistered Card' || name === 'Authorized User' || name.startsWith('Cardholder')) {
+            return;
         }
 
         const key = name + '|' + role;
@@ -2523,14 +2598,32 @@ function renderAnalyticsCharts(filteredLogs = getFilteredAnalyticsLogs()) {
             entryData = sortedDays.map(d => daysMap[d].entry);
             exitData = sortedDays.map(d => daysMap[d].exit);
         } else if (trafficGranularity === 'weekly') {
-            labels = ['Week 1', 'Week 2', 'Week 3', 'Week 4'];
-            entryData = [Math.floor(filteredLogs.length * 0.2), Math.floor(filteredLogs.length * 0.25), Math.floor(filteredLogs.length * 0.3), Math.floor(filteredLogs.length * 0.25)];
-            exitData = [Math.floor(filteredLogs.length * 0.18), Math.floor(filteredLogs.length * 0.24), Math.floor(filteredLogs.length * 0.28), Math.floor(filteredLogs.length * 0.23)];
+            labels = ['Week 1', 'Week 2', 'Week 3', 'Week 4', 'Week 5'];
+            const wEntries = [0, 0, 0, 0, 0];
+            const wExits = [0, 0, 0, 0, 0];
+            filteredLogs.forEach(l => {
+                if (!l.timestamp) return;
+                const d = new Date(l.timestamp);
+                const dayOfMonth = d.getDate();
+                const weekIdx = Math.min(4, Math.floor((dayOfMonth - 1) / 7));
+                if (l.direction === 'ENTRY' && l.status === 'AUTHORIZED') wEntries[weekIdx]++;
+                else if (l.direction === 'EXIT' && l.status === 'AUTHORIZED') wExits[weekIdx]++;
+            });
+            entryData = wEntries;
+            exitData = wExits;
         } else {
             labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-            const curMonth = new Date().getMonth();
-            entryData = labels.map((_, i) => i === curMonth ? filteredLogs.filter(l => l.direction === 'ENTRY').length : 0);
-            exitData = labels.map((_, i) => i === curMonth ? filteredLogs.filter(l => l.direction === 'EXIT').length : 0);
+            const mEntries = Array(12).fill(0);
+            const mExits = Array(12).fill(0);
+            filteredLogs.forEach(l => {
+                if (!l.timestamp) return;
+                const d = new Date(l.timestamp);
+                const mIdx = d.getMonth();
+                if (l.direction === 'ENTRY' && l.status === 'AUTHORIZED') mEntries[mIdx]++;
+                else if (l.direction === 'EXIT' && l.status === 'AUTHORIZED') mExits[mIdx]++;
+            });
+            entryData = mEntries;
+            exitData = mExits;
         }
 
         chartTraffic = new Chart(ctxTraffic, {
@@ -2611,7 +2704,7 @@ function renderAnalyticsCharts(filteredLogs = getFilteredAnalyticsLogs()) {
             data: {
                 labels: hourLabels,
                 datasets: [{
-                    label: 'Vehicles',
+                    label: 'Campus Volume',
                     data: hours,
                     backgroundColor: bgColors,
                     borderRadius: 6
@@ -2630,25 +2723,38 @@ function renderAnalyticsCharts(filteredLogs = getFilteredAnalyticsLogs()) {
     }
 
     // ──────────────────────────────────────────
-    // Chart 3: Vehicle Types Distribution
+    // Chart 3: Transit Modes & Vehicle Types Distribution
     // ──────────────────────────────────────────
     const ctxVeh = el('chartVehicleTypes');
     if (ctxVeh) {
         if (chartVehTypes) chartVehTypes.destroy();
 
-        const vehCounts = { Motorcycle: 0, Car: 0, SUV: 0, Van: 0, Truck: 0, Other: 0 };
+        const vehCounts = {
+            'Pedestrian (Walking)': 0,
+            'Motorcycle': 0,
+            'Car / Sedan': 0,
+            'SUV': 0,
+            'Van': 0,
+            'Truck': 0,
+            'Other': 0
+        };
         filteredLogs.forEach(l => {
+            const info = resolveLogDetails(l);
+            if (info.isPed) {
+                vehCounts['Pedestrian (Walking)']++;
+                return;
+            }
             const t = (l.vehicles?.vehicle_type || '').toUpperCase();
-            if (t.includes('MOTOR') || t.includes('SCOOTER')) vehCounts.Motorcycle++;
-            else if (t.includes('CAR') || t.includes('SEDAN')) vehCounts.Car++;
-            else if (t.includes('SUV')) vehCounts.SUV++;
-            else if (t.includes('VAN')) vehCounts.Van++;
-            else if (t.includes('TRUCK')) vehCounts.Truck++;
-            else vehCounts.Motorcycle++; // default prominent campus vehicle
+            if (t.includes('MOTOR') || t.includes('SCOOTER') || t.includes('BIKE')) vehCounts['Motorcycle']++;
+            else if (t.includes('CAR') || t.includes('SEDAN')) vehCounts['Car / Sedan']++;
+            else if (t.includes('SUV')) vehCounts['SUV']++;
+            else if (t.includes('VAN')) vehCounts['Van']++;
+            else if (t.includes('TRUCK')) vehCounts['Truck']++;
+            else vehCounts['Other']++;
         });
 
         const totalVeh = Math.max(1, Object.values(vehCounts).reduce((a, b) => a + b, 0));
-        const colors = ['#0E4B3A', '#10B981', '#3B82F6', '#8B5CF6', '#F2B827', '#64748B'];
+        const colors = ['#10B981', '#0E4B3A', '#3B82F6', '#8B5CF6', '#F2B827', '#F97316', '#64748B'];
 
         chartVehTypes = new Chart(ctxVeh, {
             type: 'doughnut',
@@ -2693,13 +2799,13 @@ function renderAnalyticsCharts(filteredLogs = getFilteredAnalyticsLogs()) {
 
         const userCounts = { Students: 0, Faculty: 0, Staff: 0, Visitors: 0, Emergency: 0 };
         filteredLogs.forEach(l => {
-            const role = (l.users?.role || '').toUpperCase();
+            const info = resolveLogDetails(l);
+            const role = (info.role || '').toUpperCase();
             if (role === 'STUDENT') userCounts.Students++;
             else if (role === 'FACULTY') userCounts.Faculty++;
-            else if (role === 'STAFF') userCounts.Staff++;
-            else if (l.remarks && (l.remarks.includes('Visitor') || l.remarks.includes('VISITOR'))) userCounts.Visitors++;
-            else if (l.is_emergency) userCounts.Emergency++;
-            else userCounts.Students++;
+            else if (role === 'STAFF' || role.includes('STAFF') || role.includes('ADMIN') || role.includes('GUARD')) userCounts.Staff++;
+            else if (role === 'EMERGENCY') userCounts.Emergency++;
+            else userCounts.Visitors++;
         });
 
         const totalUsers = Math.max(1, Object.values(userCounts).reduce((a, b) => a + b, 0));
@@ -3051,14 +3157,17 @@ function displayGeneratedReport(payload) {
     const hoursCount = Array(24).fill(0);
 
     payload.logs.forEach(l => {
-        const p = l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || l.rfid_uid;
-        if (p && p !== '--' && p !== 'N/A') uniquePlates.add(p);
+        const details = resolveLogDetails(l);
+        const identifier = details.plate && details.plate !== 'PEDESTRIAN' && details.plate !== '--' && details.plate !== 'N/A'
+            ? details.plate
+            : (l.user_id || l.rfid_uid || details.ownerName);
+        if (identifier) uniquePlates.add(identifier);
 
-        const role = (l.users?.role || '').toUpperCase();
+        const role = (details.role || '').toUpperCase();
         if (role === 'STUDENT') students++;
         else if (role === 'FACULTY' || role === 'STAFF') facultyStaff++;
-        else if (l.remarks && (l.remarks.includes('Visitor') || l.remarks.includes('VISITOR'))) visitors++;
-        else if (l.is_emergency || (l.remarks && l.remarks.includes('Emergency'))) emergency++;
+        else if (role === 'VISITOR' || (l.remarks && (l.remarks.includes('Visitor') || l.remarks.includes('VISITOR')))) visitors++;
+        else if (l.is_emergency || role === 'EMERGENCY' || (l.remarks && l.remarks.includes('Emergency'))) emergency++;
         else students++;
 
         if (l.timestamp) {
@@ -3098,27 +3207,13 @@ function displayGeneratedReport(payload) {
         el('repDetailedLogsTable').innerHTML = payload.logs.length ? payload.logs.map((l, index) => {
             // Complete RFID UID Tag (Uncensored for administrative reporting)
             const uidTag = (l.rfid_uid || '--').trim().toUpperCase();
-            
-            let ownerName = l.users?.full_name;
-            let plate = l.vehicles?.plate_number;
-            let role = l.users?.role || '--';
-
-            if (l.remarks) {
-                if (l.remarks.includes('Visitor')) {
-                    const match = l.remarks.match(/Visitor (?:Exit|Entry):\s*([^|]+)(?:\s*\|\s*Plate:\s*([^|]+))?/i);
-                    if (match) {
-                        ownerName = match[1]?.trim();
-                        if (match[2]?.trim()) plate = match[2].trim();
-                    } else ownerName = 'Visitor Pass';
-                    role = 'VISITOR';
-                } else if (l.remarks.includes('Emergency')) {
-                    ownerName = 'Emergency Response';
-                    plate = 'EMERGENCY';
-                    role = 'EMERGENCY';
-                }
+            const details = resolveLogDetails(l);
+            let ownerName = details.name || details.ownerName || l.users?.full_name || (l.status === 'DENIED' ? 'Unregistered Card' : 'Authorized User');
+            if (details.idNumber && details.idNumber !== '--') {
+                ownerName += ` <span class="text-[10px] text-slate-400 font-mono block">(${details.idNumber})</span>`;
             }
-            if (!ownerName) ownerName = l.status === 'DENIED' ? 'Unregistered User' : 'Cardholder';
-            if (!plate) plate = '--';
+            let plate = details.isPed ? '<span class="inline-flex items-center gap-1 text-emerald-700 font-bold">🚶 Pedestrian</span>' : (details.plate !== '--' ? details.plate : '--');
+            let role = details.role || '--';
 
             const statusBadge = l.status === 'AUTHORIZED' 
                 ? '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-green-100 text-green-800">Allowed</span>' 
@@ -3277,14 +3372,17 @@ window.downloadOfficialReportPDF = function() {
             const hoursCount = Array(24).fill(0);
 
             (payload.logs || []).forEach(l => {
-                const p = l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || l.rfid_uid;
-                if (p && p !== '--' && p !== 'N/A') uniquePlates.add(p);
+                const details = resolveLogDetails(l);
+                const identifier = details.plate && details.plate !== 'PEDESTRIAN' && details.plate !== '--' && details.plate !== 'N/A'
+                    ? details.plate
+                    : (l.user_id || l.rfid_uid || details.ownerName);
+                if (identifier) uniquePlates.add(identifier);
 
-                const role = (l.users?.role || '').toUpperCase();
+                const role = (details.role || '').toUpperCase();
                 if (role === 'STUDENT') students++;
                 else if (role === 'FACULTY' || role === 'STAFF') facultyStaff++;
-                else if (l.remarks && (l.remarks.includes('Visitor') || l.remarks.includes('VISITOR'))) visitors++;
-                else if (l.is_emergency || (l.remarks && l.remarks.includes('Emergency'))) emergency++;
+                else if (role === 'VISITOR' || (l.remarks && (l.remarks.includes('Visitor') || l.remarks.includes('VISITOR')))) visitors++;
+                else if (l.is_emergency || role === 'EMERGENCY' || (l.remarks && l.remarks.includes('Emergency'))) emergency++;
                 else students++;
 
                 if (l.timestamp) {
@@ -3314,7 +3412,7 @@ window.downloadOfficialReportPDF = function() {
             const statCards = [
                 { label: 'TOTAL ENTRIES', val: entries.toLocaleString(), color: [16, 185, 129] },
                 { label: 'TOTAL EXITS', val: exits.toLocaleString(), color: [59, 130, 246] },
-                { label: 'UNIQUE VEHICLES', val: uniquePlates.size.toLocaleString(), color: [139, 92, 246] },
+                { label: 'STAKEHOLDERS', val: uniquePlates.size.toLocaleString(), color: [139, 92, 246] },
                 { label: 'SECURITY DENIALS', val: failed.toLocaleString(), color: [239, 68, 68] }
             ];
 
@@ -3378,30 +3476,16 @@ window.downloadOfficialReportPDF = function() {
             doc.text(`Peak Activity Window: ${peakHourText}`, anX2 + 3.5, anY + 11.5);
 
             // 6. Table Data via autoTable (Uncensored Full RFID UIDs, Perfect Column Fit)
-            const headers = [['Date & Time', 'RFID UID Tag', 'Vehicle Plate', 'Owner / Driver', 'Category', 'Direction', 'Gate Location', 'Status']];
+            const headers = [['Date & Time', 'RFID UID Tag', 'Transit / Plate', 'Occupant / Person', 'Category', 'Direction', 'Gate Location', 'Status']];
             const tableRows = (payload.logs || []).map(l => {
                 const uidTag = (l.rfid_uid || '--').trim().toUpperCase();
-                
-                let ownerName = l.users?.full_name;
-                let plate = l.vehicles?.plate_number;
-                let role = l.users?.role || 'General';
-
-                if (l.remarks) {
-                    if (l.remarks.includes('Visitor')) {
-                        const match = l.remarks.match(/Visitor (?:Exit|Entry):\s*([^|]+)(?:\s*\|\s*Plate:\s*([^|]+))?/i);
-                        if (match) {
-                            ownerName = match[1]?.trim();
-                            if (match[2]?.trim()) plate = match[2].trim();
-                        } else ownerName = 'Visitor Pass';
-                        role = 'VISITOR';
-                    } else if (l.remarks.includes('Emergency')) {
-                        ownerName = 'Emergency Response';
-                        plate = 'EMERGENCY';
-                        role = 'EMERGENCY';
-                    }
+                const details = resolveLogDetails(l);
+                let ownerName = details.name || details.ownerName || l.users?.full_name || (l.status === 'DENIED' ? 'Unregistered Card' : 'Authorized User');
+                if (details.idNumber && details.idNumber !== '--') {
+                    ownerName += ` (${details.idNumber})`;
                 }
-                if (!ownerName) ownerName = l.status === 'DENIED' ? 'Unregistered User' : 'Cardholder';
-                if (!plate) plate = '--';
+                let plate = details.isPed ? 'Pedestrian' : (details.plate !== '--' ? details.plate : '--');
+                let role = details.role || 'General';
 
                 const dateStr = l.timestamp ? new Date(l.timestamp).toLocaleDateString([], {month:'short', day:'numeric'}) + ' ' + new Date(l.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '--';
                 const gateStr = l.direction === 'EXIT' ? 'Gate 2 (Exit)' : 'Gate 1 (Entry)';
@@ -3545,21 +3629,16 @@ window.exportCurrentReportCSV = function() {
         return;
     }
 
-    const headers = ['Report ID', 'Date & Time', 'RFID UID Tag', 'Plate Number', 'Owner / Driver', 'User Category', 'Direction', 'Status', 'Remarks'];
+    const headers = ['Report ID', 'Date & Time', 'RFID UID Tag', 'Transit / Plate', 'Occupant / Person', 'User Category', 'Direction', 'Status', 'Remarks'];
     const rows = currentReportPayload.logs.map(l => {
         const uidTag = (l.rfid_uid || 'N/A').trim().toUpperCase();
-        let owner = l.users?.full_name || 'Unregistered';
-        let plate = l.vehicles?.plate_number || 'N/A';
-        let role = l.users?.role || 'N/A';
-
-        if (l.remarks && l.remarks.includes('Visitor')) {
-            const match = l.remarks.match(/Visitor (?:Exit|Entry):\s*([^|]+)(?:\s*\|\s*Plate:\s*([^|]+))?/i);
-            if (match) {
-                owner = match[1]?.trim() || owner;
-                if (match[2]?.trim()) plate = match[2].trim();
-            }
-            role = 'VISITOR';
+        const details = resolveLogDetails(l);
+        let owner = details.name || details.ownerName || l.users?.full_name || (l.status === 'DENIED' ? 'Unregistered Card' : 'Authorized User');
+        if (details.idNumber && details.idNumber !== '--') {
+            owner += ` (${details.idNumber})`;
         }
+        let plate = details.isPed ? 'Pedestrian' : (details.plate !== '--' ? details.plate : 'N/A');
+        let role = details.role || 'N/A';
 
         return [
             `"${currentReportPayload.id}"`,
