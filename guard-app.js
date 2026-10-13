@@ -1189,15 +1189,17 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
 
         // Log transaction if manual scan
         if (!fromRealtimeTxn && isConnected) {
-            const isPed = result.type === 'None' || result.plate === 'PEDESTRIAN' || result.type === 'Walking / Pedestrian' || result.role === 'PEDESTRIAN';
+            const hasRealVehicle = result.vehicle_id && result.plate && result.plate !== '--' && result.plate !== 'N/A' && result.plate !== 'PEDESTRIAN' && result.plate !== 'NONE' && result.type !== 'None' && result.type !== 'Walking / Pedestrian';
+            const isPed = !hasRealVehicle || result.user_type === 'PEDESTRIAN' || result.rfid_type === 'CLOSE_RANGE' || result.type === 'None' || result.plate === 'PEDESTRIAN' || result.type === 'Walking / Pedestrian' || result.role === 'PEDESTRIAN';
             const userType = isPed ? 'PEDESTRIAN' : 'VEHICLE';
             const rfidType = isPed ? 'CLOSE_RANGE' : 'LONG_RANGE';
+            const gateName = isEntry ? (isPed ? 'CHARRMPASS_GATE_ENTRY' : 'ENTRY_GATE') : (isPed ? 'CHARRMPASS_GATE_EXIT' : 'EXIT_GATE');
 
             await supabaseClient.from('transactions').insert({
                 rfid_uid: uid,
                 direction: direction,
-                gate: isEntry ? (isPed ? 'PEDESTRIAN_ENTRY' : 'ENTRY_GATE') : (isPed ? 'PEDESTRIAN_EXIT' : 'EXIT_GATE'),
-                vehicle_id: result.vehicle_id || null,
+                gate: gateName,
+                vehicle_id: isPed ? null : (result.vehicle_id || null),
                 user_id: userId || null,
                 user_type: userType,
                 rfid_type: rfidType,
@@ -1408,10 +1410,11 @@ window.confirmDuplicateEntry = async function() {
     const effectiveGateKey = gateKey || (isEntry ? 'Entry' : 'Exit');
 
     try {
-        const isPed = result.type === 'None' || result.plate === 'PEDESTRIAN' || result.type === 'Walking / Pedestrian' || result.role === 'PEDESTRIAN';
+        const hasRealVehicle = result.vehicle_id && result.plate && result.plate !== '--' && result.plate !== 'N/A' && result.plate !== 'PEDESTRIAN' && result.plate !== 'NONE' && result.type !== 'None' && result.type !== 'Walking / Pedestrian';
+        const isPed = !hasRealVehicle || result.user_type === 'PEDESTRIAN' || result.rfid_type === 'CLOSE_RANGE' || result.type === 'None' || result.plate === 'PEDESTRIAN' || result.type === 'Walking / Pedestrian' || result.role === 'PEDESTRIAN';
         const userType = isPed ? 'PEDESTRIAN' : 'VEHICLE';
         const rfidType = isPed ? 'CLOSE_RANGE' : 'LONG_RANGE';
-        const gate = isEntry ? (isPed ? 'PEDESTRIAN_ENTRY' : 'ENTRY_GATE') : (isPed ? 'PEDESTRIAN_EXIT' : 'EXIT_GATE');
+        const gate = isEntry ? (isPed ? 'CHARRMPASS_GATE_ENTRY' : 'ENTRY_GATE') : (isPed ? 'CHARRMPASS_GATE_EXIT' : 'EXIT_GATE');
 
         const remarks = isEntry
             ? `Re-login confirmed by guard (User entered previously at ${historyDetails || 'prior time'} & forgot to tap exit)`

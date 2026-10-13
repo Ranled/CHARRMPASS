@@ -82,11 +82,13 @@ async function loadData() {
                     const vehList = usr.vehicles || [];
                     const cardList = usr.rfid_cards || [];
                     const firstVeh = vehList[0];
-                    const pedCard = cardList.find(c => !c.vehicle_id);
-                    const firstCard = pedCard || cardList[0];
-                    const isPed = usr.default_transit_mode === 'PEDESTRIAN' || firstVeh?.vehicle_type === 'None' || firstVeh?.plate_number === 'PEDESTRIAN' || firstCard?.user_type === 'PEDESTRIAN' || (vehList.length === 0 && usr.default_transit_mode !== 'VEHICLE');
-                    const userType = isPed ? 'PEDESTRIAN' : 'VEHICLE';
-                    const rfidType = firstCard?.rfid_type || (isPed ? 'CLOSE_RANGE' : 'LONG_RANGE');
+                    const hasRealVeh = vehList.some(v => v.vehicle_type && v.vehicle_type !== 'None' && v.plate_number && v.plate_number !== 'PEDESTRIAN');
+                    const assignedVehCard = cardList.find(c => (c.rfid_type === 'LONG_RANGE' || !!c.vehicle_id) && c.rfid_uid && !c.rfid_uid.startsWith('UNASSIGNED_'));
+                    const assignedPedCard = cardList.find(c => !c.vehicle_id && c.rfid_uid && !c.rfid_uid.startsWith('UNASSIGNED_'));
+                    const firstCard = assignedVehCard || assignedPedCard || cardList[0];
+                    const isPed = (!hasRealVeh && !assignedVehCard) || (usr.default_transit_mode === 'PEDESTRIAN' && !hasRealVeh);
+                    const userType = (hasRealVeh || assignedVehCard) ? 'VEHICLE' : 'PEDESTRIAN';
+                    const rfidType = firstCard?.rfid_type || (userType === 'VEHICLE' ? 'LONG_RANGE' : 'CLOSE_RANGE');
 
                     return {
                         ...usr,
@@ -542,9 +544,17 @@ function renderAdmin() {
 
         // Transit Mode Filter
         if (modeFilter === 'PEDESTRIAN') {
-            filtered = filtered.filter(u => u.user_type === 'PEDESTRIAN' || u.default_transit_mode === 'PEDESTRIAN' || (u.rfid_cards||[]).some(c => !c.vehicle_id));
+            filtered = filtered.filter(u => {
+                const hasAssignedPed = (u.rfid_cards||[]).some(c => !c.vehicle_id && c.rfid_uid && !c.rfid_uid.startsWith('UNASSIGNED_'));
+                const hasRealVeh = (u.vehicles||[]).some(v => v.vehicle_type && v.vehicle_type !== 'None' && v.plate_number && v.plate_number !== 'PEDESTRIAN');
+                return (u.default_transit_mode === 'PEDESTRIAN' && !hasRealVeh) || (hasAssignedPed && !hasRealVeh) || u.default_transit_mode === 'BOTH';
+            });
         } else if (modeFilter === 'VEHICLE') {
-            filtered = filtered.filter(u => u.user_type === 'VEHICLE' || u.default_transit_mode === 'VEHICLE' || (u.vehicles && u.vehicles.length > 0));
+            filtered = filtered.filter(u => {
+                const hasRealVeh = (u.vehicles||[]).some(v => v.vehicle_type && v.vehicle_type !== 'None' && v.plate_number && v.plate_number !== 'PEDESTRIAN');
+                const hasAssignedVehCard = (u.rfid_cards||[]).some(c => (c.rfid_type === 'LONG_RANGE' || !!c.vehicle_id) && c.rfid_uid && !c.rfid_uid.startsWith('UNASSIGNED_'));
+                return hasRealVeh || hasAssignedVehCard || u.default_transit_mode === 'VEHICLE' || u.default_transit_mode === 'BOTH';
+            });
         }
 
         // Role Filter
@@ -611,15 +621,23 @@ function renderAdmin() {
             const roleDisplay = u.role === 'Others' ? `Others: ${u.role_detail || 'Vendor'}` : (u.role || 'User');
             const cpassDisplay = u.cpass_id || u.student_id || 'NO CPASS';
 
-            // Transit passes summary
-            const hasPed = (u.rfid_cards || []).some(c => !c.vehicle_id);
+            // Transit passes summary: only count physical cards that are actually assigned
+            const hasAssignedPed = (u.rfid_cards || []).some(c => 
+                !c.vehicle_id && c.rfid_uid && !c.rfid_uid.startsWith('UNASSIGNED_') && c.authorization_status === 'AUTHORIZED'
+            );
+            const hasAssignedVeh = (u.rfid_cards || []).some(c => 
+                (c.rfid_type === 'LONG_RANGE' || !!c.vehicle_id) && c.rfid_uid && !c.rfid_uid.startsWith('UNASSIGNED_') && c.authorization_status === 'AUTHORIZED'
+            );
             const vehCount = (u.vehicles || []).length;
-            const isPedMode = u.default_transit_mode === 'PEDESTRIAN' || u.user_type === 'PEDESTRIAN';
-            const isVehMode = u.default_transit_mode === 'VEHICLE' || u.user_type === 'VEHICLE';
-            const isHybrid = (isPedMode || hasPed) && (vehCount > 0 || isVehMode) && vehCount > 0;
+            const hasRealVeh = vehCount > 0 && (u.vehicles || []).some(v => 
+                v.vehicle_type && v.vehicle_type !== 'None' && v.plate_number && v.plate_number !== 'PEDESTRIAN'
+            );
+
+            // A user is Hybrid ONLY if they have BOTH an assigned pedestrian card and an assigned vehicle / vehicle pass, or mode is explicitly BOTH
+            const isHybrid = u.default_transit_mode === 'BOTH' || (hasAssignedPed && (hasRealVeh || hasAssignedVeh));
             const transitDisplay = isHybrid 
                 ? '<span>🚶+🚗</span> Hybrid' 
-                : ((vehCount > 0 || (isVehMode && !isPedMode)) 
+                : ((hasRealVeh || hasAssignedVeh || u.default_transit_mode === 'VEHICLE') 
                     ? '<span>🚗</span> Vehicle' 
                     : '<span>🚶</span> Pedestrian');
 
@@ -1837,7 +1855,19 @@ function renderAnalytics() {
                 unregCards++;
             }
         }
-        const role = (l.users?.role || '').toUpperCase();
+        let u = l.users;
+        if (!u && l.user_id && adminState.users) {
+            u = adminState.users.find(x => x.id === l.user_id);
+        }
+        if (!u && l.rfid_uid && adminState.users) {
+            const clean = (l.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+            u = adminState.users.find(x => {
+                const uUid = (x.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+                if (uUid && uUid === clean) return true;
+                return (x.rfid_cards || []).some(c => (c.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase() === clean);
+            });
+        }
+        const role = (u?.role || '').toUpperCase();
         if (role === 'STUDENT') studentCount++;
         else if (role === 'FACULTY' || role === 'STAFF') staffCount++;
         else if (l.remarks && (l.remarks.includes('Visitor') || l.remarks.includes('VISITOR'))) visitorCount++;
@@ -1887,8 +1917,9 @@ function renderAnalytics() {
         }).join('');
     }
 
-    // 4. Vehicles Inside Breakdown & Longest Stay
+    // 4. Vehicles & Occupants Inside Breakdown & Longest Stay
     let insideStud = 0, insideStf = 0, insideVis = 0, insideEmg = 0;
+    let insideVehicles = 0, insidePedestrians = 0;
     // Map entries vs exits to find who is currently inside
     const openEntries = [];
     const sortedLogsAsc = [...adminState.logs].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
@@ -1899,12 +1930,35 @@ function renderAnalytics() {
         if (l.status !== 'AUTHORIZED') return;
         const uid = normalizeUid(l.rfid_uid);
         const plate = (l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').toUpperCase().trim();
+        const isRealPlate = plate && plate !== 'N/A' && plate !== '--' && plate !== 'PEDESTRIAN' && plate !== 'NONE';
+
+        // Attach user if missing on log
+        if (!l.users && l.user_id && adminState.users) {
+            l.users = adminState.users.find(x => x.id === l.user_id);
+        }
+        if (!l.users && uid && adminState.users) {
+            l.users = adminState.users.find(x => {
+                const uUid = normalizeUid(x.rfid_uid);
+                if (uUid && uUid === uid) return true;
+                return (x.rfid_cards || []).some(c => normalizeUid(c.rfid_uid) === uid);
+            });
+        }
+        if (!l.vehicles && l.vehicle_id && adminState.users) {
+            for (const u of adminState.users) {
+                const v = (u.vehicles || []).find(veh => veh.id === l.vehicle_id);
+                if (v) { l.vehicles = v; break; }
+            }
+        }
 
         if (l.direction === 'ENTRY') {
             const existingIdx = openEntries.findIndex(e => {
                 const eUid = normalizeUid(e.rfid_uid);
                 const ePlate = (e.vehicles?.plate_number || (e.remarks && e.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').toUpperCase().trim();
-                return (uid && eUid && uid === eUid) || (plate && ePlate && plate !== 'N/A' && plate !== '--' && plate === ePlate);
+                const eIsRealPlate = ePlate && ePlate !== 'N/A' && ePlate !== '--' && ePlate !== 'PEDESTRIAN' && ePlate !== 'NONE';
+
+                return (uid && eUid && uid === eUid) ||
+                       (l.user_id && e.user_id && l.user_id === e.user_id) ||
+                       (isRealPlate && eIsRealPlate && plate === ePlate);
             });
             if (existingIdx !== -1) {
                 openEntries[existingIdx] = l;
@@ -1915,7 +1969,11 @@ function renderAnalytics() {
             const idx = openEntries.findIndex(e => {
                 const eUid = normalizeUid(e.rfid_uid);
                 const ePlate = (e.vehicles?.plate_number || (e.remarks && e.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').toUpperCase().trim();
-                return (uid && eUid && uid === eUid) || (plate && ePlate && plate !== 'N/A' && plate !== '--' && plate === ePlate);
+                const eIsRealPlate = ePlate && ePlate !== 'N/A' && ePlate !== '--' && ePlate !== 'PEDESTRIAN' && ePlate !== 'NONE';
+
+                return (uid && eUid && uid === eUid) ||
+                       (l.user_id && e.user_id && l.user_id === e.user_id) ||
+                       (isRealPlate && eIsRealPlate && plate === ePlate);
             });
             if (idx !== -1) openEntries.splice(idx, 1);
         }
@@ -1929,7 +1987,14 @@ function renderAnalytics() {
         else if (cat === 'STAFF') insideStf++;
         else if (cat === 'EMERGENCY') insideEmg++;
         else insideVis++;
+
+        const hasRealVeh = l.vehicles && l.vehicles.plate_number && l.vehicles.plate_number !== 'PEDESTRIAN' && l.vehicles.plate_number !== 'NONE' && l.vehicles.plate_number !== 'N/A' && l.vehicles.vehicle_type !== 'None';
+        if (hasRealVeh) insideVehicles++;
+        else insidePedestrians++;
     });
+
+    adminState.activeVehicles = insideVehicles;
+    adminState.activePedestrians = insidePedestrians;
 
     if (el('insideStudents')) el('insideStudents').textContent = insideStud;
     if (el('insideStaff')) el('insideStaff').textContent = insideStf;
@@ -2021,11 +2086,25 @@ window.getInsideOccupantCategory = function(l) {
     if (l.is_emergency) return 'EMERGENCY';
     const rem = (l.remarks || '').toLowerCase();
     if (rem.includes('emergency')) return 'EMERGENCY';
-    const role = (l.users?.role || '').toUpperCase();
+
+    let u = l.users;
+    if (!u && l.user_id && adminState.users) {
+        u = adminState.users.find(x => x.id === l.user_id);
+    }
+    if (!u && l.rfid_uid && adminState.users) {
+        const clean = (l.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+        u = adminState.users.find(x => {
+            const uRfid = (x.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+            if (uRfid && uRfid === clean) return true;
+            return (x.rfid_cards || []).some(c => (c.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase() === clean);
+        });
+    }
+
+    const role = (u?.role || '').toUpperCase();
     if (role === 'STUDENT') return 'STUDENT';
     if (role === 'FACULTY' || role === 'STAFF') return 'STAFF';
     if (rem.includes('visitor') || role === 'VISITOR' || l.user_type === 'VISITOR') return 'VISITOR';
-    if (l.users) return 'STAFF';
+    if (u) return (u.role === 'Others' ? (u.role_detail ? 'STAFF' : 'VISITOR') : 'STAFF');
     return 'VISITOR';
 };
 
@@ -2187,15 +2266,31 @@ window.renderInsideCampusTable = function() {
             catBadge = `<span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-blue-100 text-blue-800 border border-blue-300 flex items-center gap-1.5 w-fit shadow-sm"><span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span> Visitor</span>`;
         }
 
-        // Vehicle info & Plate
-        const plate = l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || 'N/A';
-        const vehType = l.vehicles?.vehicle_type || 'Vehicle';
-        const vehModel = l.vehicles?.model || l.vehicles?.color || '';
+        // Vehicle info & Plate vs Pedestrian
+        const isStudent = (cat === 'STUDENT');
+        const hasRealVehicle = l.vehicles && l.vehicles.plate_number && 
+                               l.vehicles.plate_number !== 'PEDESTRIAN' && 
+                               l.vehicles.plate_number !== 'NONE' && 
+                               l.vehicles.plate_number !== 'N/A' && 
+                               l.vehicles.vehicle_type !== 'None' &&
+                               l.vehicles.vehicle_type !== 'Walking / Pedestrian';
+
+        const isPed = l.user_type === 'PEDESTRIAN' || 
+                      l.rfid_type === 'CLOSE_RANGE' ||
+                      (!hasRealVehicle);
+
+        const plate = hasRealVehicle ? (l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '--') : 'PEDESTRIAN';
+        const vehType = hasRealVehicle ? (l.vehicles?.vehicle_type || 'Vehicle') : 'Walking';
+        const vehModel = hasRealVehicle ? (l.vehicles?.vehicle_model || l.vehicles?.model || l.vehicles?.vehicle_color || '') : 'Pedestrian Access';
+
         let vehIcon = 'car-front';
-        const vLower = (vehType + ' ' + (l.user_type || '')).toLowerCase();
-        if (vLower.includes('motorcycle') || vLower.includes('motor') || vLower.includes('bike')) vehIcon = 'bike';
-        else if (vLower.includes('truck') || vLower.includes('van') || vLower.includes('bus')) vehIcon = 'truck';
-        else if (vLower.includes('pedestrian')) vehIcon = 'user';
+        if (isPed) {
+            vehIcon = 'user';
+        } else {
+            const vLower = (vehType + ' ' + (l.user_type || '')).toLowerCase();
+            if (vLower.includes('motorcycle') || vLower.includes('motor') || vLower.includes('bike')) vehIcon = 'bike';
+            else if (vLower.includes('truck') || vLower.includes('van') || vLower.includes('bus')) vehIcon = 'truck';
+        }
 
         // Entry timestamp
         const enterTime = new Date(l.timestamp);
@@ -2244,10 +2339,19 @@ window.renderInsideCampusTable = function() {
                 <td class="p-3.5">${catBadge}</td>
                 <td class="p-3.5">
                     <div class="flex flex-col gap-0.5">
-                        <span class="font-mono font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 text-xs w-fit">${plate}</span>
-                        <span class="text-[10px] text-slate-400 flex items-center gap-1">
-                            <i data-lucide="${vehIcon}" class="w-3 h-3"></i> ${vehType} ${vehModel ? '• ' + vehModel : ''}
-                        </span>
+                        ${isPed ? `
+                            <span class="font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-xs w-fit flex items-center gap-1">
+                                <i data-lucide="user" class="w-3 h-3 text-emerald-600"></i> Walking / Pedestrian
+                            </span>
+                            <span class="text-[10px] text-slate-400 flex items-center gap-1">
+                                Foot / Turnstile Access
+                            </span>
+                        ` : `
+                            <span class="font-mono font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 text-xs w-fit">${plate}</span>
+                            <span class="text-[10px] text-slate-400 flex items-center gap-1">
+                                <i data-lucide="${vehIcon}" class="w-3 h-3"></i> ${vehType} ${vehModel ? '• ' + vehModel : ''}
+                            </span>
+                        `}
                     </div>
                 </td>
                 <td class="p-3.5">

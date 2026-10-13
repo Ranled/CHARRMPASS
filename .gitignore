@@ -12,3 +12,7 @@ Thumbs.db
 .vscode/
 *.suo
 *.user
+
+# ─── LOCAL DATA BACKUPS & AUDITS ───────────────────
+*_backup_*.json
+*_audit_*.json
