@@ -1299,12 +1299,13 @@ bool checkDuplicateFast(String uid, String &conflictDetail) {
     inUid.toUpperCase();
     if (inUid == cleanUid) {
       unsigned long elapsedSec = (millis() - ramInsideList[i].timestamp) / 1000;
-      if (elapsedSec < 60) {
-        conflictDetail = "Inside (" + String(elapsedSec) + "s ago)";
-      } else {
-        conflictDetail = "Inside (" + String(elapsedSec / 60) + "m ago)";
+      // 30-second Transit Anti-Passback Debounce:
+      // Suppress duplicate scans if card was already granted entry less than 30 seconds ago
+      if (elapsedSec < 30) {
+        conflictDetail = "Wait " + String(30 - elapsedSec) + "s";
+        return true;
       }
-      return true;
+      return false; // Valid entry if more than 30 seconds have elapsed
     }
   }
   return false;

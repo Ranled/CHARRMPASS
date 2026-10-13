@@ -1407,14 +1407,13 @@ bool checkAlreadyExitedLocal(String uid, String &conflictDetail) {
     exUid.toUpperCase();
     if (exUid == cleanUid) {
       unsigned long elapsedSec = (now - ramRecentExits[i].timestamp) / 1000;
-      if (elapsedSec < 60) {
-        conflictDetail = "Out " + String(elapsedSec) + "s ago";
-      } else if (elapsedSec < 3600) {
-        conflictDetail = "Out " + String(elapsedSec / 60) + "m ago";
-      } else {
-        conflictDetail = "Out >1h ago";
+      // 30-second Transit Anti-Passback Debounce:
+      // Suppress duplicate scans if card was already granted exit less than 30 seconds ago
+      if (elapsedSec < 30) {
+        conflictDetail = "Wait " + String(30 - elapsedSec) + "s";
+        return true;
       }
-      return true;
+      return false; // Valid exit if more than 30 seconds have elapsed
     }
   }
   return false;
