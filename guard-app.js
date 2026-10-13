@@ -689,90 +689,36 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
     });
     lucide.createIcons();
 
-    // 2. Query Supabase for RFID Card and User with flexible UID / Student ID matching
+    // 2. Query Supabase for RFID Card and User
     let result = null;
     let userId = null;
-    const cleanUid = uid.replace(/[\s:-]+/g, '').toUpperCase();
-    let spacedUid = cleanUid;
-    if (cleanUid.length === 8 && /^[0-9A-F]{8}$/i.test(cleanUid)) {
-        spacedUid = cleanUid.match(/.{1,2}/g).join(' ');
-    }
 
     if (isConnected) {
         try {
-            // Check by exact UID, spaced hex UID, or unspaced clean UID
-            const { data: cards, error } = await supabaseClient
+            const { data: card, error } = await supabaseClient
                 .from('rfid_cards')
                 .select(`
-                    id, rfid_uid, authorization_status, user_type, rfid_type,
+                    id, rfid_uid, authorization_status,
                     vehicles ( id, vehicle_type, vehicle_model, plate_number, vehicle_color ),
-                    users ( id, full_name, role, role_detail, program, section, profile_image, cpass_id, student_id, default_transit_mode )
+                    users ( id, full_name, role, role_detail, program, section, profile_image, cpass_id, student_id )
                 `)
-                .or(`rfid_uid.eq.${uid},rfid_uid.eq.${spacedUid},rfid_uid.eq.${cleanUid}`)
-                .limit(1);
+                .eq('rfid_uid', uid)
+                .maybeSingle();
 
-            let card = cards && cards.length > 0 ? cards[0] : null;
-
-            // If not found by card UID, the guard may have typed the student's ID number or CPASS ID
-            if (!card) {
-                const { data: matchedUsers } = await supabaseClient
-                    .from('users')
-                    .select(`
-                        id, full_name, role, role_detail, program, section, profile_image, cpass_id, student_id, default_transit_mode,
-                        rfid_cards ( id, rfid_uid, authorization_status, user_type, rfid_type ),
-                        vehicles ( id, vehicle_type, vehicle_model, plate_number, vehicle_color )
-                    `)
-                    .or(`student_id.eq.${cleanUid},cpass_id.eq.${cleanUid},student_id.eq.${uid},cpass_id.eq.${uid}`)
-                    .limit(1);
-
-                if (matchedUsers && matchedUsers.length > 0) {
-                    const u = matchedUsers[0];
-                    const uCard = (u.rfid_cards && Array.isArray(u.rfid_cards) && u.rfid_cards[0]) ? u.rfid_cards[0] : null;
-                    const uVeh = (u.vehicles && Array.isArray(u.vehicles) && u.vehicles[0]) ? u.vehicles[0] : (u.vehicles || null);
-                    card = {
-                        id: uCard?.id,
-                        rfid_uid: uCard?.rfid_uid || uid,
-                        authorization_status: uCard?.authorization_status || 'AUTHORIZED',
-                        user_type: uCard?.user_type,
-                        rfid_type: uCard?.rfid_type,
-                        vehicles: uVeh,
-                        users: u
-                    };
-                }
-            }
-
-            if (card) {
+            if (card && !error) {
                 userId = card.users?.id;
-                const isStudent = (card.users?.role || '').toLowerCase() === 'student';
-                const hasRealVehicle = card.vehicles?.plate_number && 
-                                       card.vehicles.plate_number !== 'PEDESTRIAN' && 
-                                       card.vehicles.plate_number !== 'NONE' && 
-                                       card.vehicles.plate_number !== 'N/A' && 
-                                       card.vehicles?.vehicle_type !== 'None';
-
-                const isPedestrian = card.user_type === 'PEDESTRIAN' || 
-                                     card.rfid_type === 'CLOSE_RANGE' ||
-                                     card.users?.default_transit_mode === 'PEDESTRIAN' ||
-                                     (isStudent && !hasRealVehicle) ||
-                                     !card.vehicles || 
-                                     !card.vehicles?.id ||
-                                     card.vehicles?.vehicle_type === 'None' || 
-                                     card.vehicles?.plate_number === 'PEDESTRIAN';
-
                 result = {
-                    uid:          card.rfid_uid || uid,
+                    uid:          uid,
                     cpass_id:     card.users?.cpass_id || card.users?.student_id || '--',
-                    name:         card.users?.full_name || (isStudent ? 'Enrolled Student' : 'Registered Driver'),
-                    role:         card.users?.role === 'OTHERS' && card.users?.role_detail ? card.users.role_detail : (card.users?.role || (isStudent ? 'Student' : '--')),
+                    name:         card.users?.full_name || 'Registered Driver',
+                    role:         card.users?.role === 'OTHERS' && card.users?.role_detail ? card.users.role_detail : (card.users?.role || '--'),
                     program:      card.users?.program || '--',
                     section:      card.users?.section || '--',
-                    type:         isPedestrian ? 'Walking / Pedestrian' : (card.vehicles?.vehicle_type || 'Vehicle'),
-                    model:        isPedestrian ? 'Walking' : (card.vehicles?.vehicle_model || '--'),
-                    plate:        isPedestrian ? 'PEDESTRIAN' : (card.vehicles?.plate_number || '--'),
-                    color:        isPedestrian ? '--' : (card.vehicles?.vehicle_color || '--'),
-                    user_type:    isPedestrian ? 'PEDESTRIAN' : 'VEHICLE',
-                    rfid_type:    isPedestrian ? 'CLOSE_RANGE' : (card.rfid_type || 'LONG_RANGE'),
-                    vehicle_id:   isPedestrian ? null : (card.vehicles?.id || null),
+                    type:         card.vehicles?.vehicle_type || '--',
+                    model:        card.vehicles?.vehicle_model || '--',
+                    plate:        card.vehicles?.plate_number || '--',
+                    color:        card.vehicles?.vehicle_color || '--',
+                    vehicle_id:   card.vehicles?.id || null,
                     profileImage: card.users?.profile_image || null,
                     status:       card.authorization_status === 'AUTHORIZED' ? 'AUTHORIZED' : 'DENIED'
                 };
@@ -1243,26 +1189,15 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
 
         // Log transaction if manual scan
         if (!fromRealtimeTxn && isConnected) {
-            const isStudent = (result.role || '').toLowerCase() === 'student';
-            const hasRealVehicle = result.plate && result.plate !== 'PEDESTRIAN' && result.plate !== 'NONE' && result.plate !== 'N/A' && result.type !== 'Walking / Pedestrian';
-
-            const isPed = result.user_type === 'PEDESTRIAN' ||
-                          result.rfid_type === 'CLOSE_RANGE' ||
-                          result.type === 'None' || 
-                          result.plate === 'PEDESTRIAN' || 
-                          result.type === 'Walking / Pedestrian' || 
-                          result.role === 'PEDESTRIAN' ||
-                          (isStudent && !hasRealVehicle) ||
-                          !result.vehicle_id;
+            const isPed = result.type === 'None' || result.plate === 'PEDESTRIAN' || result.type === 'Walking / Pedestrian' || result.role === 'PEDESTRIAN';
             const userType = isPed ? 'PEDESTRIAN' : 'VEHICLE';
             const rfidType = isPed ? 'CLOSE_RANGE' : 'LONG_RANGE';
-            const gateName = isEntry ? (isPed ? 'CHARRMPASS_GATE_ENTRY' : 'ENTRY_GATE') : (isPed ? 'CHARRMPASS_GATE_EXIT' : 'EXIT_GATE');
 
             await supabaseClient.from('transactions').insert({
-                rfid_uid: result.uid || uid,
+                rfid_uid: uid,
                 direction: direction,
-                gate: gateName,
-                vehicle_id: isPed ? null : (result.vehicle_id || null),
+                gate: isEntry ? (isPed ? 'PEDESTRIAN_ENTRY' : 'ENTRY_GATE') : (isPed ? 'PEDESTRIAN_EXIT' : 'EXIT_GATE'),
+                vehicle_id: result.vehicle_id || null,
                 user_id: userId || null,
                 user_type: userType,
                 rfid_type: rfidType,
@@ -1304,13 +1239,10 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
         updateTrafficLightWidget(gateKey, 'denied');
 
         if (!fromRealtimeTxn && isConnected) {
-            const gateName = isEntry ? 'CHARRMPASS_GATE_ENTRY' : 'CHARRMPASS_GATE_EXIT';
             await supabaseClient.from('transactions').insert({
                 rfid_uid: uid,
                 direction: direction,
-                gate: gateName,
-                user_type: 'PEDESTRIAN',
-                rfid_type: 'CLOSE_RANGE',
+                gate: isEntry ? 'ENTRY_GATE' : 'EXIT_GATE',
                 status: 'DENIED',
                 remarks: 'Unauthorized RFID UID scan attempt'
             });
@@ -1476,20 +1408,10 @@ window.confirmDuplicateEntry = async function() {
     const effectiveGateKey = gateKey || (isEntry ? 'Entry' : 'Exit');
 
     try {
-        const isStudent = (result.role || '').toLowerCase() === 'student';
-        const hasRealVehicle = result.plate && result.plate !== 'PEDESTRIAN' && result.plate !== 'NONE' && result.plate !== 'N/A' && result.type !== 'Walking / Pedestrian';
-
-        const isPed = result.user_type === 'PEDESTRIAN' ||
-                      result.rfid_type === 'CLOSE_RANGE' ||
-                      result.type === 'None' || 
-                      result.plate === 'PEDESTRIAN' || 
-                      result.type === 'Walking / Pedestrian' || 
-                      result.role === 'PEDESTRIAN' ||
-                      (isStudent && !hasRealVehicle) ||
-                      !result.vehicle_id;
+        const isPed = result.type === 'None' || result.plate === 'PEDESTRIAN' || result.type === 'Walking / Pedestrian' || result.role === 'PEDESTRIAN';
         const userType = isPed ? 'PEDESTRIAN' : 'VEHICLE';
         const rfidType = isPed ? 'CLOSE_RANGE' : 'LONG_RANGE';
-        const gate = isEntry ? (isPed ? 'CHARRMPASS_GATE_ENTRY' : 'ENTRY_GATE') : (isPed ? 'CHARRMPASS_GATE_EXIT' : 'EXIT_GATE');
+        const gate = isEntry ? (isPed ? 'PEDESTRIAN_ENTRY' : 'ENTRY_GATE') : (isPed ? 'PEDESTRIAN_EXIT' : 'EXIT_GATE');
 
         const remarks = isEntry
             ? `Re-login confirmed by guard (User entered previously at ${historyDetails || 'prior time'} & forgot to tap exit)`

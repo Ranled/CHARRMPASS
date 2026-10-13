@@ -370,76 +370,35 @@ async function processManual() {
     return;
   }
 
-  const cleanUid = uid.replace(/[\s:-]+/g, '').toUpperCase();
-  let spacedUid = cleanUid;
-  if (cleanUid.length === 8 && /^[0-9A-F]{8}$/i.test(cleanUid)) {
-    spacedUid = cleanUid.match(/.{1,2}/g).join(' ');
-  }
-
-  // Look up rfid_card with flexible UID or student/cpass ID
-  let card = null;
-  const { data: cards } = await supabaseClient
+  // Look up rfid_card
+  const { data: card } = await supabaseClient
     .from('rfid_cards')
     .select(`
-      id, rfid_uid, authorization_status, vehicle_id, user_id, user_type, rfid_type,
+      id, rfid_uid, authorization_status, vehicle_id, user_id,
       vehicles ( plate_number, vehicle_type, vehicle_model ),
-      users    ( full_name, role, program, section, cpass_id, student_id, default_transit_mode )
+      users    ( full_name, role, program, section )
     `)
-    .or(`rfid_uid.eq.${uid},rfid_uid.eq.${spacedUid},rfid_uid.eq.${cleanUid}`)
-    .limit(1);
-
-  if (cards && cards.length > 0) {
-    card = cards[0];
-  } else {
-    // Check users by student_id or cpass_id
-    const { data: matchedUsers } = await supabaseClient
-      .from('users')
-      .select(`
-        id, full_name, role, program, section, cpass_id, student_id, default_transit_mode,
-        rfid_cards ( id, rfid_uid, authorization_status, user_type, rfid_type ),
-        vehicles ( plate_number, vehicle_type, vehicle_model )
-      `)
-      .or(`student_id.eq.${cleanUid},cpass_id.eq.${cleanUid},student_id.eq.${uid},cpass_id.eq.${uid}`)
-      .limit(1);
-
-    if (matchedUsers && matchedUsers.length > 0) {
-      const u = matchedUsers[0];
-      const uCard = (u.rfid_cards && Array.isArray(u.rfid_cards) && u.rfid_cards[0]) ? u.rfid_cards[0] : null;
-      const uVeh = (u.vehicles && Array.isArray(u.vehicles) && u.vehicles[0]) ? u.vehicles[0] : (u.vehicles || null);
-      card = {
-        id: uCard?.id,
-        rfid_uid: uCard?.rfid_uid || uid,
-        authorization_status: uCard?.authorization_status || 'AUTHORIZED',
-        user_type: uCard?.user_type,
-        rfid_type: uCard?.rfid_type,
-        vehicles: uVeh,
-        users: u,
-        user_id: u.id,
-        vehicle_id: uVeh?.id || null
-      };
-    }
-  }
+    .eq('rfid_uid', uid)
+    .maybeSingle();
 
   const status  = card?.authorization_status === 'AUTHORIZED' ? 'AUTHORIZED' : 'DENIED';
-  const remarks = card ? (status === 'AUTHORIZED' ? 'Manual entry – pedestrian portal' : 'Manual entry – not authorized') : 'Manual entry – unregistered';
+  const remarks = card ? (status === 'AUTHORIZED' ? 'Manual entry – guard station' : 'Manual entry – not authorized') : 'Manual entry – unregistered';
 
   // Insert transaction
   const { data: txn, error } = await supabaseClient
     .from('transactions')
     .insert({
-      rfid_uid:   card?.rfid_uid || uid,
+      rfid_uid:   uid,
       direction:  GATE_DIRECTION,
       gate:       'CHARRMPASS_GATE_ENTRY',
-      vehicle_id: null,
+      vehicle_id: card?.vehicle_id || null,
       user_id:    card?.user_id    || null,
-      user_type:  'PEDESTRIAN',
-      rfid_type:  'CLOSE_RANGE',
       status,
       remarks
     })
     .select(`
-      id, rfid_uid, direction, status, timestamp, remarks, user_type, rfid_type,
-      users   ( full_name, role, program, section, cpass_id, student_id ),
+      id, rfid_uid, direction, status, timestamp, remarks,
+      users   ( full_name, role, program, section ),
       vehicles( plate_number, vehicle_type, vehicle_model )
     `)
     .single();
