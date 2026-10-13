@@ -3,7 +3,7 @@
 ## 📌 Summary of Work Completed Today
 
 ### 1. Codebase Pushed to GitHub
-- Pushed recent updates on `main` branch: occupant tracking, pedestrian detection, gate naming consistency (`CHARRMPASS_GATE_ENTRY` / `CHARRMPASS_GATE_EXIT`), and local data audit rules in `.gitignore`.
+- Pushed recent updates on `main` branch (`1c9b019`): occupant tracking, pedestrian detection, gate naming consistency (`CHARRMPASS_GATE_ENTRY` / `CHARRMPASS_GATE_EXIT`), and local data audit rules in `.gitignore`.
 
 ### 2. Firmware Anti-Passback Fix (30-Second Debounce)
 - **Problem**: When users entered, left campus, and returned later, both the Entry and Exit ESP32 gates permanently denied them with `"ALREADY INSIDE"` or `"ALREADY EXITED"` because local in-memory RAM arrays (`ramInsideList` and `ramRecentExits`) returned `true` forever.
@@ -16,12 +16,43 @@
   - Throughput between **different cards** remains fast at **0.8 seconds**.
 - **Status**: Committed & pushed to GitHub (`f4d697e`).
 
+### 3. Safely Cleared Inside Occupants (Zero Data Loss)
+- Executed an administrative sweep that closed 14 unclosed entries from Oct 12–13.
+- **No data was deleted**: All 690 original historical `ENTRY` transactions remain 100% intact.
+- Backup saved to `cleared_inside_records_backup_20261014.json`.
+- Current open entries inside campus: **`0`**.
+
+---
+
+## 🔍 Investigation: The "Yellow Sign" Issue on Scan
+
+### The Issue Observed:
+On the Guard Dashboard, after scanning, a yellow banner appears stating:
+- At Entry: *"Previous exit logged at 5:30 PM"*
+- At Exit: *"Entry logged at 5:30 PM"*
+
+### What Causes This?
+1. **History Lookup Feature**: In [`guard-app.js` (lines 1155–1161)](file:///c:/Users/User/Desktop/THESIS%20-%20CHARRMPASS/guard-app.js#L1155-L1161), whenever someone scans, the system queries their **previous transaction** (`lastTxn`) and displays when they were last at the gate.
+2. **Hardcoded Yellow/Amber CSS**: In [`guard-dashboard.html` (lines 267, 564)](file:///c:/Users/User/Desktop/THESIS%20-%20CHARRMPASS/guard-dashboard.html#L267), the banner element (`resHistoryBanner`) is permanently styled with:
+   ```html
+   bg-amber-50 border-amber-300 text-amber-900
+   ```
+   Because it is colored in **amber/yellow**, it visually looks like an **alert / warning / error**, even though the scan was 100% verified and authorized!
+3. **Missing Date Context**: The banner only displays the time (e.g. `5:30 PM`) using `toLocaleTimeString`, without stating whether that 5:30 PM was **today**, **yesterday**, or **days ago**, confusing guards and users.
+
+### The Fix Planned for Next Session:
+- **Change Banner Color**:
+  - For normal authorized scans (`VERIFIED`): Change banner to **Emerald Green** (`bg-emerald-50 border-emerald-200 text-emerald-800`).
+  - Only use **Amber / Yellow** when there is an actual conflict (e.g., `RE-LOGIN` / `FORGOT EXIT`).
+- **Add Date Context**: Display *"Entered today at 5:30 PM"* or *"Previous exit on Oct 13, 5:30 PM"*.
+- **Option to Hide for Clean Passes**: Alternatively, hide the banner entirely on normal passes so only the clean green "AUTHORIZED" card is visible.
+
 ---
 
 ## 🧠 Brainstorming: Handling Students Who Forgot to Exit
 
 ### The Core Problem:
-Students frequently leave campus without tapping out (walking through open vehicle gates, following friends, or rushing out). Because there is no matching `EXIT` transaction, they stay listed in the **"Occupants Inside Campus"** roster indefinitely (accumulating 50+ hours inside).
+Students frequently leave campus without tapping out (walking through open vehicle gates, following friends, or rushing out). Because there is no matching `EXIT` transaction, they stay listed in the **"Occupants Inside Campus"** roster indefinitely.
 
 ### The Critical Catch: Hostel / Dormitory Residents
 - Commuter students go home every afternoon.
@@ -54,7 +85,6 @@ Students frequently leave campus without tapping out (walking through open vehic
 ---
 
 ## 📋 Checklist for Tomorrow
-- [ ] Review Option A vs Option C.
-- [ ] Decide whether to add a "Hostel Resident" field to user profiles.
-- [ ] Implement self-healing re-entry logic in `guard-app.js` and/or Supabase Edge functions if desired.
+- [ ] Fix the Yellow History Banner styling in `guard-dashboard.html` / `guard-app.js` (make green on verified scans or hide).
+- [ ] Review Option A (Self-Healing Re-Entry) vs Option C (Overnight Badges & Sweep).
 - [ ] Test the 30-second debounce on the physical ESP32 boards.
