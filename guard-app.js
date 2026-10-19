@@ -121,16 +121,29 @@ async function initState() {
                     if (!plate) plate = l.rfid_uid ? l.rfid_uid.substring(0, 12) : '--';
                     if (!role) role = '--';
 
+                    const hasRealVehicle = l.vehicles && l.vehicles.plate_number && 
+                                           l.vehicles.plate_number !== 'PEDESTRIAN' && 
+                                           l.vehicles.plate_number !== 'NONE' && 
+                                           l.vehicles.plate_number !== 'N/A' && 
+                                           l.vehicles.plate_number !== '--' && 
+                                           l.vehicles.vehicle_type !== 'None' && 
+                                           l.vehicles.vehicle_type !== 'Walking / Pedestrian';
+
                     return {
-                        uid:      l.rfid_uid,
-                        cpass_id: cpass_id,
-                        name:     name,
-                        role:     role,
-                        plate:    plate,
-                        status:   l.status || (l.status === 'DENIED' ? 'DENIED' : 'AUTHORIZED'),
-                        event:    l.direction || 'ENTRY',
-                        duration: '--',
-                        time:     new Date(l.timestamp).toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit'}),
+                        id:           l.id,
+                        uid:          l.rfid_uid,
+                        cpass_id:     cpass_id,
+                        name:         name,
+                        role:         role,
+                        plate:        plate,
+                        type:         l.vehicles?.vehicle_type || (hasRealVehicle ? 'Vehicle' : 'Walking / Pedestrian'),
+                        user_type:    l.user_type || (hasRealVehicle ? 'VEHICLE' : 'PEDESTRIAN'),
+                        rfid_type:    l.rfid_type || (hasRealVehicle ? 'LONG_RANGE' : 'CLOSE_RANGE'),
+                        gate:         l.gate,
+                        status:       l.status || (l.status === 'DENIED' ? 'DENIED' : 'AUTHORIZED'),
+                        event:        l.direction || 'ENTRY',
+                        duration:     '--',
+                        time:         new Date(l.timestamp).toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit'}),
                         rawTimestamp: l.timestamp
                     };
                 });
@@ -420,7 +433,18 @@ function renderLogsTable() {
     if (currentLogFilter === 'EXIT') filtered = filtered.filter(s => s.event === 'EXIT');
 
     if (filtered.length > 0) {
-        table.innerHTML = filtered.map(s => `
+        table.innerHTML = filtered.map(s => {
+            const isPed = s.user_type === 'PEDESTRIAN' || 
+                          s.rfid_type === 'CLOSE_RANGE' ||
+                          s.plate === 'PEDESTRIAN' || 
+                          s.type === 'Walking / Pedestrian' ||
+                          (!s.plate || s.plate === '--' || s.plate === s.uid || s.plate === s.uid?.substring(0, 12));
+            const isVeh = !isPed && s.user_type === 'VEHICLE';
+            const plateHtml = isVeh 
+                ? `<span class="font-mono font-bold text-slate-700">${s.plate || '--'}</span>`
+                : `<span class="inline-flex items-center gap-1 text-slate-500 font-semibold text-xs"><i data-lucide="user" class="w-3 h-3 text-emerald-600"></i> PEDESTRIAN</span>`;
+
+            return `
             <tr class="hover:bg-white/60 border-b border-slate-100/50 transition-colors">
                 <td class="p-4 text-slate-500 font-medium">${s.time}</td>
                 <td class="p-4 text-xs font-mono font-bold text-slate-600">${s.uid || '--'}</td>
@@ -430,7 +454,7 @@ function renderLogsTable() {
                         ${s.cpass_id ? `<span class="px-1.5 py-0.5 text-[10px] font-mono font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 rounded">CPASS: ${s.cpass_id}</span>` : ''}
                     </div>
                 </td>
-                <td class="p-4 text-xs font-mono font-bold text-slate-700">${s.plate || '--'}</td>
+                <td class="p-4 text-xs">${plateHtml}</td>
                 <td class="p-4 text-center">
                     <span class="px-2.5 py-1 rounded-full text-[10px] font-bold ${s.event === 'ENTRY' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}">${s.event || '--'}</span>
                 </td>
@@ -438,7 +462,8 @@ function renderLogsTable() {
                     <span class="px-2 py-0.5 rounded text-[10px] font-bold ${s.status === 'AUTHORIZED' ? 'bg-green-50 text-green-700 border border-green-200' : (s.status === 'PENDING_CONFIRMATION' ? 'bg-amber-50 text-amber-800 border border-amber-300' : 'bg-red-50 text-red-700 border border-red-200')}">${s.status || '--'}</span>
                 </td>
             </tr>
-        `).join('');
+            `;
+        }).join('');
     } else {
         table.innerHTML = `<tr><td colspan="6" class="p-8 text-center text-slate-400">No scan transactions found</td></tr>`;
     }
@@ -491,6 +516,20 @@ function renderRecentScanCard(s, type) {
     const icon = isPending ? 'alert-triangle' : (isAuth ? (isEntry ? 'log-in' : 'log-out') : 'x');
     const badgeBg = isPending ? 'bg-amber-100 text-amber-800 border border-amber-300' : (isAuth ? (isEntry ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700') : 'bg-red-100 text-red-700');
 
+    // Robust Pedestrian vs Vehicle check
+    const isPed = s.user_type === 'PEDESTRIAN' || 
+                  s.rfid_type === 'CLOSE_RANGE' || 
+                  s.plate === 'PEDESTRIAN' || 
+                  s.type === 'Walking / Pedestrian' || 
+                  s.type === 'None' ||
+                  (!s.plate || s.plate === '--' || s.plate === 'NONE' || s.plate === 'N/A' || s.plate === s.uid || s.plate === s.uid?.substring(0, 12));
+    const isVeh = !isPed && s.user_type === 'VEHICLE';
+
+    // Tag display: show plate for vehicles; show card UID for pedestrians
+    const tagDisplay = (isVeh && s.plate && s.plate !== 'PEDESTRIAN') 
+        ? s.plate 
+        : (s.uid ? (s.uid.length > 14 ? s.uid.substring(0, 11) + '..' : s.uid) : '--');
+
     return `
         <div class="bg-white/80 p-2.5 sm:p-3 rounded-2xl border border-white shadow-sm flex items-center gap-2.5 sm:gap-3">
             <div class="w-8 h-8 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shrink-0 ${badgeBg}">
@@ -501,8 +540,12 @@ function renderRecentScanCard(s, type) {
                     <span class="font-bold text-xs sm:text-sm text-slate-800 truncate">${s.name || '--'}</span>
                     <span class="text-[10px] font-bold text-slate-400 shrink-0">${s.time || '--'}</span>
                 </div>
-                <div class="flex items-center gap-1.5 sm:gap-2">
-                    <span class="text-[10px] sm:text-xs font-mono font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded">${s.plate || s.uid?.substring(0, 8) || '--'}</span>
+                <div class="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                    <span class="text-[10px] sm:text-xs font-mono font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded">${tagDisplay}</span>
+                    ${isVeh
+                        ? '<span class="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">🚗 VEHICLE</span>'
+                        : '<span class="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">🚶 PEDESTRIAN</span>'
+                    }
                     ${s.cpass_id ? `<span class="text-[9px] sm:text-[10px] font-mono font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">CPASS: ${s.cpass_id}</span>` : ''}
                     <span class="text-[9px] sm:text-[10px] font-bold uppercase ${isAuth ? (isEntry ? 'text-green-600' : 'text-blue-600') : 'text-red-600'}">${s.status || '--'}</span>
                 </div>
@@ -695,32 +738,52 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
 
     if (isConnected) {
         try {
+            // UHF readers may report the same tag as raw decimal, 8-digit or 10-digit zero-padded.
+            // Match all variants so the vehicle is always found.
+            const uidVariants = new Set([uid]);
+            const strippedUid = uid.replace(/^0+(?=\d)/, '');
+            uidVariants.add(strippedUid);
+            if (/^\d+$/.test(strippedUid)) {
+                uidVariants.add(strippedUid.padStart(8, '0'));
+                uidVariants.add(strippedUid.padStart(10, '0'));
+            }
             const { data: card, error } = await supabaseClient
                 .from('rfid_cards')
                 .select(`
-                    id, rfid_uid, authorization_status,
+                    id, rfid_uid, authorization_status, user_type, rfid_type,
                     vehicles ( id, vehicle_type, vehicle_model, plate_number, vehicle_color ),
-                    users ( id, full_name, role, role_detail, program, section, profile_image, cpass_id, student_id )
+                    users ( id, full_name, role, role_detail, program, section, profile_image, cpass_id, student_id, default_transit_mode )
                 `)
-                .eq('rfid_uid', uid)
+                .in('rfid_uid', Array.from(uidVariants))
+                .limit(1)
                 .maybeSingle();
 
             if (card && !error) {
                 userId = card.users?.id;
+                const hasVeh = card.vehicles && card.vehicles.plate_number && 
+                               card.vehicles.plate_number !== 'PEDESTRIAN' && 
+                               card.vehicles.plate_number !== 'NONE' && 
+                               card.vehicles.plate_number !== 'N/A' && 
+                               card.vehicles.plate_number !== '--' && 
+                               card.vehicles.vehicle_type !== 'None' &&
+                               card.vehicles.vehicle_type !== 'Walking / Pedestrian';
+
                 result = {
                     uid:          uid,
                     cpass_id:     card.users?.cpass_id || card.users?.student_id || '--',
-                    name:         card.users?.full_name || 'Registered Driver',
+                    name:         card.users?.full_name || (hasVeh ? 'Registered Driver' : 'Pedestrian User'),
                     role:         card.users?.role === 'OTHERS' && card.users?.role_detail ? card.users.role_detail : (card.users?.role || '--'),
                     program:      card.users?.program || '--',
                     section:      card.users?.section || '--',
-                    type:         card.vehicles?.vehicle_type || '--',
-                    model:        card.vehicles?.vehicle_model || '--',
-                    plate:        card.vehicles?.plate_number || '--',
-                    color:        card.vehicles?.vehicle_color || '--',
-                    vehicle_id:   card.vehicles?.id || null,
+                    type:         hasVeh ? (card.vehicles?.vehicle_type || 'Vehicle') : 'Walking / Pedestrian',
+                    model:        hasVeh ? (card.vehicles?.vehicle_model || '--') : 'No Vehicle Assigned',
+                    plate:        hasVeh ? (card.vehicles?.plate_number || '--') : 'PEDESTRIAN',
+                    color:        hasVeh ? (card.vehicles?.vehicle_color || '--') : '--',
+                    vehicle_id:   hasVeh ? card.vehicles.id : null,
                     profileImage: card.users?.profile_image || null,
-                    status:       card.authorization_status === 'AUTHORIZED' ? 'AUTHORIZED' : 'DENIED'
+                    status:       card.authorization_status === 'AUTHORIZED' ? 'AUTHORIZED' : 'DENIED',
+                    user_type:    hasVeh ? 'VEHICLE' : 'PEDESTRIAN',
+                    rfid_type:    card.rfid_type || (hasVeh ? 'LONG_RANGE' : 'CLOSE_RANGE')
                 };
             }
         } catch (e) {
@@ -771,41 +834,6 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
             let visitorPlate = specialTag.description?.match(/Plate:\s*([^|]+)/)?.[1]?.trim() || 'VISITOR PASS';
 
             if (isEntry) {
-                // Check if visitor is already inside
-                let lastTxn = null;
-                if (isConnected) {
-                    const { data: lt } = await supabaseClient
-                        .from('transactions').select('direction, timestamp, status')
-                        .eq('rfid_uid', uid).eq('status', 'AUTHORIZED')
-                        .order('timestamp', { ascending: false }).limit(1).maybeSingle();
-                    lastTxn = lt;
-                }
-
-                if (lastTxn && lastTxn.direction === 'ENTRY' && !fromRealtimeTxn) {
-                    // Duplicate entry warning for visitor
-                    const prevTime = new Date(lastTxn.timestamp);
-                    const formattedString = `${prevTime.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} at ${prevTime.toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit' })}`;
-                    
-                    result = {
-                        uid,
-                        name: visitorName,
-                        role: 'VISITOR',
-                        plate: visitorPlate,
-                        type: 'Visitor Vehicle',
-                        model: 'Campus Visitor',
-                        program: 'Campus Visitor',
-                        section: '--',
-                        color: '--',
-                        status: 'AUTHORIZED',
-                        isVisitor: true
-                    };
-                    
-                    pendingDuplicate = { uid, result, userId: null, prevTimestamp: lastTxn.timestamp, gateKey };
-                    openDuplicateModal(result, formattedString, uid);
-                    populateScanResultCard(result, gateKey);
-                    return;
-                }
-
                 // If unassigned visitor tag, open the registration modal for guard input
                 if (!isAssigned) {
                     openVisitorModal(uid, 'Entry');
@@ -907,6 +935,8 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                 updateTrafficLightWidget('Exit', 'done');
 
                 // Populate Exit card
+                result.historyNotice = `Exit logged at ${new Date().toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit' })}`;
+                result.historyBadge = 'VERIFIED';
                 populateScanResultCard(result, 'Exit');
                 result.event = 'EXIT';
                 result.time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
@@ -918,6 +948,19 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                 return;
             }
         }
+    }
+
+    if (!result && fromRealtimeTxn && fromRealtimeTxn.status === 'AUTHORIZED' && fromRealtimeTxn.rfid_type === 'LONG_RANGE') {
+        // Card lookup missed (e.g. RLS or UID format) - rebuild vehicle info from the ESP32's own remarks
+        const m = String(fromRealtimeTxn.remarks || '').match(/UHF Vehicle Entry:\s*([^|]+?)(?:\s*\|\s*Driver:\s*(.+))?$/i);
+        const rtPlate = m?.[1]?.trim() || 'VEHICLE';
+        const rtName = m?.[2]?.trim() || 'Registered Driver';
+        result = {
+            uid, cpass_id: '--', name: rtName, role: '--', program: '--', section: '--',
+            type: 'Vehicle', model: '--', plate: rtPlate, color: '--',
+            vehicle_id: fromRealtimeTxn.vehicle_id || null,
+            status: 'AUTHORIZED', user_type: 'VEHICLE', rfid_type: 'LONG_RANGE'
+        };
     }
 
     if (!result) {
@@ -934,231 +977,43 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
         if (scanData) scanData.classList.remove('opacity-70');
     });
 
-    const isPendingConfirm = fromRealtimeTxn && fromRealtimeTxn.status === 'PENDING_CONFIRMATION';
-    const isAuth = (result.status === 'AUTHORIZED' || (fromRealtimeTxn && fromRealtimeTxn.status === 'AUTHORIZED')) && !isPendingConfirm;
+    // Hands-free operation with 30-second anti-passback:
+    // If scan came from ESP32 realtime, trust its AUTHORIZED/DENIED verdict directly.
+    // If scan was entered manually on the web dashboard (!fromRealtimeTxn), apply the same 30-second anti-passback window.
+    let isAuth = (result.status === 'AUTHORIZED' && (!fromRealtimeTxn || fromRealtimeTxn.status === 'AUTHORIZED' || fromRealtimeTxn.status === 'PENDING_CONFIRMATION'));
+    let lastTxn = null;
 
-    if (isPendingConfirm) {
-        const remarksMsg = fromRealtimeTxn.remarks || 'Awaiting guard verification';
-        const formattedDate = new Date(fromRealtimeTxn.timestamp).toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit' });
-        const conflictType = isEntry
-            ? 'RE_ENTRY_FORGOT_EXIT'
-            : (remarksMsg.includes('Duplicate') || remarksMsg.includes('already recorded') ? 'RE_EXIT_DUPLICATE' : 'EXIT_NO_ENTRY');
-
-        // Extract prior timestamp from remarks if present
-        let historyStamp = formattedDate;
-        const matchTime = remarksMsg.match(/(?:inside since|exited at|entry at)\s*([^\.]+)/i);
-        if (matchTime) historyStamp = matchTime[1].trim();
-
-        pendingDuplicate = {
-            uid,
-            result,
-            userId,
-            prevTimestamp: fromRealtimeTxn.timestamp,
-            gateKey,
-            direction,
-            conflictType,
-            historyDetails: historyStamp
-        };
-
-        result.historyNotice = isEntry
-            ? `User entered previously at ${historyStamp} (No exit logged — forgot to tap out)`
-            : (conflictType === 'EXIT_NO_ENTRY' ? 'No prior entry record on file (Forgot to tap in?)' : `Prior exit logged at ${historyStamp}`);
-        result.historyBadge = isEntry ? 'RE-LOGIN' : (conflictType === 'EXIT_NO_ENTRY' ? 'NO ENTRY' : 'RE-EXIT');
-
-        ['', 'Dual'].forEach(prefix => {
-            const radar = document.getElementById(`radarContainer${prefix}${gateKey}`);
-            const scanStatusText = document.getElementById(`scanStatusText${prefix}${gateKey}`);
-            const scanSubtext = document.getElementById(`scanSubtext${prefix}${gateKey}`);
-            const radarCenter = document.getElementById(`radarCenter${prefix}${gateKey}`);
-            const statusLabel = document.getElementById(`resStatusLabel${prefix}${gateKey}`);
-
-            if (radar) radar.parentElement.classList.add('status-authorized');
-            if (scanStatusText) {
-                scanStatusText.textContent = isEntry ? 'RE-LOGIN ATTEMPT' : (conflictType === 'EXIT_NO_ENTRY' ? 'NO ENTRY RECORD' : 'RE-EXIT ATTEMPT');
-                scanStatusText.className = 'text-sm sm:text-xl font-bold font-display text-amber-600 mb-1 sm:mb-2';
+    if (isAuth && !fromRealtimeTxn && isConnected && !result.isEmergency) {
+        try {
+            const { data: lt } = await supabaseClient
+                .from('transactions')
+                .select('id, direction, timestamp, status, remarks')
+                .eq('rfid_uid', uid)
+                .eq('status', 'AUTHORIZED')
+                .order('timestamp', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+            lastTxn = lt;
+            if (lastTxn && lastTxn.direction === direction && lastTxn.timestamp) {
+                const elapsedSec = Math.floor((Date.now() - new Date(lastTxn.timestamp).getTime()) / 1000);
+                if (elapsedSec >= 0 && elapsedSec < 30) {
+                    isAuth = false;
+                    result.status = 'DENIED';
+                    result.denialReason = `Passback violation: Already ${isEntry ? 'entered' : 'exited'} (${30 - elapsedSec}s cooldown remaining)`;
+                }
             }
-            if (scanSubtext) scanSubtext.textContent = result.historyNotice;
-            if (radarCenter) radarCenter.innerHTML = '<i data-lucide="alert-triangle" class="w-6 h-6 sm:w-10 sm:h-10 text-amber-500"></i>';
-
-            if (statusLabel) {
-                statusLabel.className = 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-amber-50 border-amber-300 text-amber-800 animate-pulse';
-                statusLabel.innerHTML = isEntry ? '⚠️ RE-LOGIN (FORGOT EXIT)' : '⚠️ EXIT REQUIRES CHECK';
-            }
-        });
-
-        // Traffic Light: Keep YELLOW (Needs guard attention)
-        updateTrafficLightWidget(gateKey, 'scanning');
-
-        result.status = 'PENDING_CONFIRMATION';
-        result.event = direction;
-        populateScanResultCard(result, gateKey);
-        openDuplicateModal(result, historyStamp, uid, direction, conflictType);
-        return;
+        } catch(e) {
+            console.warn('Last txn fetch error:', e);
+        }
     }
 
     if (isAuth) {
-        // Query the latest authorized transaction for this UID to verify state history
-        let lastTxn = null;
-        if (isConnected) {
-            try {
-                const { data: lt } = await supabaseClient
-                    .from('transactions')
-                    .select('id, direction, timestamp, status, remarks')
-                    .eq('rfid_uid', uid)
-                    .eq('status', 'AUTHORIZED')
-                    .order('timestamp', { ascending: false })
-                    .limit(1)
-                    .maybeSingle();
-                lastTxn = lt;
-            } catch(e) {
-                console.warn('Last txn fetch error:', e);
-            }
-        }
 
-        if (isEntry && lastTxn && lastTxn.direction === 'ENTRY' && !fromRealtimeTxn) {
-            // USER IS RE-LOGGING IN AT ENTRY: Already entered previously, forgot to tap exit!
-            const prevTime = new Date(lastTxn.timestamp);
-            const formattedDate = prevTime.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-            const formattedTime = prevTime.toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit' });
-            const historyStamp = `${formattedDate} at ${formattedTime}`;
-
-            pendingDuplicate = {
-                uid,
-                result,
-                userId,
-                prevTimestamp: lastTxn.timestamp,
-                gateKey,
-                direction: 'ENTRY',
-                conflictType: 'RE_ENTRY_FORGOT_EXIT',
-                historyDetails: historyStamp
-            };
-
-            result.historyNotice = `Entered earlier on ${historyStamp} without exit record (Forgot to tap exit)`;
-            result.historyBadge = 'RE-LOGIN';
-
-            ['', 'Dual'].forEach(prefix => {
-                const radar = document.getElementById(`radarContainer${prefix}${gateKey}`);
-                const scanStatusText = document.getElementById(`scanStatusText${prefix}${gateKey}`);
-                const scanSubtext = document.getElementById(`scanSubtext${prefix}${gateKey}`);
-                const radarCenter = document.getElementById(`radarCenter${prefix}${gateKey}`);
-                const statusLabel = document.getElementById(`resStatusLabel${prefix}${gateKey}`);
-
-                if (radar) radar.parentElement.classList.add('status-authorized');
-                if (scanStatusText) {
-                    scanStatusText.textContent = 'RE-LOGIN ATTEMPT';
-                    scanStatusText.className = 'text-sm sm:text-xl font-bold font-display text-amber-600 mb-1 sm:mb-2';
-                }
-                if (scanSubtext) scanSubtext.textContent = `Entered ${historyStamp}. User forgot to tap exit?`;
-                if (radarCenter) radarCenter.innerHTML = '<i data-lucide="alert-triangle" class="w-6 h-6 sm:w-10 sm:h-10 text-amber-500"></i>';
-
-                if (statusLabel) {
-                    statusLabel.className = 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-amber-50 border-amber-300 text-amber-800 animate-pulse';
-                    statusLabel.innerHTML = '⚠️ RE-LOGIN (ALREADY INSIDE)';
-                }
-            });
-
-            populateScanResultCard(result, gateKey);
-            openDuplicateModal(result, historyStamp, uid, 'ENTRY', 'RE_ENTRY_FORGOT_EXIT');
-            return;
-        }
-
-        if (!isEntry && !fromRealtimeTxn) {
-            // USER SCAN AT EXIT GATE
-            if (!lastTxn) {
-                // No prior entry recorded
-                pendingDuplicate = {
-                    uid,
-                    result,
-                    userId,
-                    prevTimestamp: null,
-                    gateKey,
-                    direction: 'EXIT',
-                    conflictType: 'EXIT_NO_ENTRY',
-                    historyDetails: 'None recorded'
-                };
-
-                result.historyNotice = 'No prior entry record on file (User may have entered without tapping)';
-                result.historyBadge = 'NO ENTRY RECORD';
-
-                ['', 'Dual'].forEach(prefix => {
-                    const radar = document.getElementById(`radarContainer${prefix}${gateKey}`);
-                    const scanStatusText = document.getElementById(`scanStatusText${prefix}${gateKey}`);
-                    const scanSubtext = document.getElementById(`scanSubtext${prefix}${gateKey}`);
-                    const radarCenter = document.getElementById(`radarCenter${prefix}${gateKey}`);
-                    const statusLabel = document.getElementById(`resStatusLabel${prefix}${gateKey}`);
-
-                    if (radar) radar.parentElement.classList.add('status-authorized');
-                    if (scanStatusText) {
-                        scanStatusText.textContent = 'NO ENTRY RECORDED';
-                        scanStatusText.className = 'text-sm sm:text-xl font-bold font-display text-amber-600 mb-1 sm:mb-2';
-                    }
-                    if (scanSubtext) scanSubtext.textContent = 'No entry scan found for this card. Forgot to tap in?';
-                    if (radarCenter) radarCenter.innerHTML = '<i data-lucide="alert-triangle" class="w-6 h-6 sm:w-10 sm:h-10 text-amber-500"></i>';
-
-                    if (statusLabel) {
-                        statusLabel.className = 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-amber-50 border-amber-300 text-amber-800 animate-pulse';
-                        statusLabel.innerHTML = '⚠️ NO PRIOR ENTRY';
-                    }
-                });
-
-                populateScanResultCard(result, gateKey);
-                openDuplicateModal(result, 'No Entry Record', uid, 'EXIT', 'EXIT_NO_ENTRY');
-                return;
-            } else if (lastTxn.direction === 'EXIT') {
-                // Already recorded exit
-                const prevTime = new Date(lastTxn.timestamp);
-                const formattedDate = prevTime.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-                const formattedTime = prevTime.toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit' });
-                const historyStamp = `${formattedDate} at ${formattedTime}`;
-
-                pendingDuplicate = {
-                    uid,
-                    result,
-                    userId,
-                    prevTimestamp: lastTxn.timestamp,
-                    gateKey,
-                    direction: 'EXIT',
-                    conflictType: 'RE_EXIT_DUPLICATE',
-                    historyDetails: historyStamp
-                };
-
-                result.historyNotice = `Already logged exit on ${historyStamp} (Double exit scan)`;
-                result.historyBadge = 'RE-EXIT';
-
-                ['', 'Dual'].forEach(prefix => {
-                    const radar = document.getElementById(`radarContainer${prefix}${gateKey}`);
-                    const scanStatusText = document.getElementById(`scanStatusText${prefix}${gateKey}`);
-                    const scanSubtext = document.getElementById(`scanSubtext${prefix}${gateKey}`);
-                    const radarCenter = document.getElementById(`radarCenter${prefix}${gateKey}`);
-                    const statusLabel = document.getElementById(`resStatusLabel${prefix}${gateKey}`);
-
-                    if (radar) radar.parentElement.classList.add('status-authorized');
-                    if (scanStatusText) {
-                        scanStatusText.textContent = 'RE-EXIT / DUPLICATE';
-                        scanStatusText.className = 'text-sm sm:text-xl font-bold font-display text-amber-600 mb-1 sm:mb-2';
-                    }
-                    if (scanSubtext) scanSubtext.textContent = `User already recorded exit at ${historyStamp}.`;
-                    if (radarCenter) radarCenter.innerHTML = '<i data-lucide="alert-triangle" class="w-6 h-6 sm:w-10 sm:h-10 text-amber-500"></i>';
-
-                    if (statusLabel) {
-                        statusLabel.className = 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-amber-50 border-amber-300 text-amber-800 animate-pulse';
-                        statusLabel.innerHTML = '⚠️ DUPLICATE EXIT';
-                    }
-                });
-
-                populateScanResultCard(result, gateKey);
-                openDuplicateModal(result, historyStamp, uid, 'EXIT', 'RE_EXIT_DUPLICATE');
-                return;
-            }
-        }
-
-        // Normal Authorized Pass: attach history notice if prior transaction exists
-        if (lastTxn) {
-            const prevTime = new Date(lastTxn.timestamp);
-            const historyStamp = prevTime.toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit' });
-            result.historyNotice = isEntry ? `Previous exit logged at ${historyStamp}` : `Entry logged at ${historyStamp}`;
-            result.historyBadge = 'VERIFIED';
-        }
+        // Normal Authorized Pass: attach status confirmation notice
+        const passTime = fromRealtimeTxn?.timestamp ? new Date(fromRealtimeTxn.timestamp) : (lastTxn?.timestamp ? new Date(lastTxn.timestamp) : new Date());
+        const historyStamp = passTime.toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit' });
+        result.historyNotice = isEntry ? `Entry logged at ${historyStamp}` : `Exit logged at ${historyStamp}`;
+        result.historyBadge = 'VERIFIED';
 
         ['', 'Dual'].forEach(prefix => {
             const radar = document.getElementById(`radarContainer${prefix}${gateKey}`);
@@ -1167,10 +1022,23 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
             const scanSubtext = document.getElementById(`scanSubtext${prefix}${gateKey}`);
             const statusLabel = document.getElementById(`resStatusLabel${prefix}${gateKey}`);
 
+            const hasRealVehicle = result.user_type === 'VEHICLE' && 
+                                   result.plate && 
+                                   result.plate !== '--' && 
+                                   result.plate !== 'N/A' && 
+                                   result.plate !== 'PEDESTRIAN' && 
+                                   result.plate !== 'NONE' &&
+                                   result.type !== 'Walking / Pedestrian';
+
             if (radar) radar.parentElement.classList.add('status-authorized');
             if (scanStatusText) {
-                scanStatusText.textContent = isEntry ? 'ENTRY AUTHORIZED' : 'EXIT AUTHORIZED';
-                scanStatusText.className = `text-sm sm:text-xl font-bold font-display ${isEntry ? 'text-green-600' : 'text-blue-600'} mb-1 sm:mb-2`;
+                if (isEntry) {
+                    scanStatusText.textContent = hasRealVehicle ? 'VEHICLE ENTRY AUTHORIZED' : 'PEDESTRIAN ENTRY AUTHORIZED';
+                    scanStatusText.className = 'text-sm sm:text-xl font-bold font-display text-green-600 mb-1 sm:mb-2';
+                } else {
+                    scanStatusText.textContent = hasRealVehicle ? 'VEHICLE EXIT AUTHORIZED' : 'PEDESTRIAN EXIT AUTHORIZED';
+                    scanStatusText.className = 'text-sm sm:text-xl font-bold font-display text-blue-600 mb-1 sm:mb-2';
+                }
             }
             if (radarCenter) radarCenter.innerHTML = '<i data-lucide="check" class="w-6 h-6 sm:w-10 sm:h-10 text-white"></i>';
 
@@ -1178,10 +1046,18 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                 statusLabel.className = isEntry
                     ? 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-green-50 border-green-200 text-green-700'
                     : 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-blue-50 border-blue-200 text-blue-700';
-                statusLabel.innerHTML = isEntry ? '✓ ENTRY AUTHORIZED' : '✓ EXIT AUTHORIZED';
+                statusLabel.innerHTML = isEntry 
+                    ? (hasRealVehicle ? '✓ VEHICLE ENTRY AUTHORIZED' : '✓ ENTRY AUTHORIZED') 
+                    : (hasRealVehicle ? '✓ VEHICLE EXIT AUTHORIZED' : '✓ EXIT AUTHORIZED');
             }
 
-            if (scanSubtext) scanSubtext.textContent = isEntry ? 'Welcome to campus! Entry logged.' : 'Vehicle departure recorded. Safe travels!';
+            if (scanSubtext) {
+                if (isEntry) {
+                    scanSubtext.textContent = hasRealVehicle ? 'Vehicle entry logged. Barrier gate open!' : 'Pedestrian turnstile entry logged. Welcome!';
+                } else {
+                    scanSubtext.textContent = hasRealVehicle ? 'Vehicle departure recorded. Safe travels!' : 'Pedestrian departure recorded. Have a great day!';
+                }
+            }
         });
 
         // Traffic Light: DONE (Green)
@@ -1213,6 +1089,15 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                 appState.exitsToday++;
                 appState.vehiclesInside = Math.max(0, (appState.vehiclesInside || 0) - 1);
             }
+        } else if (fromRealtimeTxn && !String(fromRealtimeTxn.remarks || '').startsWith('Guard station')) {
+            // Scan posted by an ESP32 gate (e.g. long-range UHF): update live counters
+            if (isEntry) {
+                appState.entriesToday++;
+                appState.vehiclesInside = (appState.vehiclesInside || 0) + 1;
+            } else {
+                appState.exitsToday++;
+                appState.vehiclesInside = Math.max(0, (appState.vehiclesInside || 0) - 1);
+            }
         }
         result.event = direction;
     } else {
@@ -1229,7 +1114,7 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                 scanStatusText.className = 'text-sm sm:text-xl font-bold font-display text-red-600 mb-1 sm:mb-2';
             }
             if (radarCenter) radarCenter.innerHTML = '<i data-lucide="x" class="w-6 h-6 sm:w-10 sm:h-10 text-white"></i>';
-            if (scanSubtext) scanSubtext.textContent = 'Unauthorized or unregistered RFID card.';
+            if (scanSubtext) scanSubtext.textContent = result.denialReason || 'Unauthorized or unregistered RFID card.';
 
             if (statusLabel) {
                 statusLabel.className = 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-red-50 border-red-200 text-red-700';
@@ -1294,6 +1179,29 @@ function populateScanResultCard(result, gateKey) {
         if(el(`resVehModel${prefix}${gateKey}`)) el(`resVehModel${prefix}${gateKey}`).textContent = result.model;
         if(el(`resColor${prefix}${gateKey}`))    el(`resColor${prefix}${gateKey}`).textContent = result.color;
 
+        // Transit Mode Badge (VEHICLE vs PEDESTRIAN)
+        const tmBadge = el(`resTransitMode${prefix}${gateKey}`);
+        const hasRealVehicle = result.user_type === 'VEHICLE' && 
+                               result.plate && 
+                               result.plate !== '--' && 
+                               result.plate !== 'N/A' && 
+                               result.plate !== 'PEDESTRIAN' && 
+                               result.plate !== 'NONE' &&
+                               result.type !== 'Walking / Pedestrian';
+        if (tmBadge) {
+            if (result.status === 'DENIED' && (!result.name || result.name === 'Unregistered RFID')) {
+                tmBadge.classList.add('hidden');
+            } else if (hasRealVehicle) {
+                tmBadge.classList.remove('hidden');
+                tmBadge.className = (prefix === 'Dual' ? 'px-2 py-0.5 text-[10px]' : 'px-2.5 py-0.5 text-xs') + ' rounded-full font-extrabold uppercase bg-emerald-100 text-emerald-800 border border-emerald-300 inline-flex items-center gap-1 shadow-sm';
+                tmBadge.innerHTML = '<i data-lucide="car" class="w-3 h-3 inline"></i> VEHICLE';
+            } else {
+                tmBadge.classList.remove('hidden');
+                tmBadge.className = (prefix === 'Dual' ? 'px-2 py-0.5 text-[10px]' : 'px-2.5 py-0.5 text-xs') + ' rounded-full font-extrabold uppercase bg-blue-100 text-blue-800 border border-blue-300 inline-flex items-center gap-1 shadow-sm';
+                tmBadge.innerHTML = '<i data-lucide="user" class="w-3 h-3 inline"></i> PEDESTRIAN';
+            }
+        }
+
         // Re-login / Scan History Notice Banner
         const banner = el(`resHistoryBanner${prefix}${gateKey}`);
         const text = el(`resHistoryText${prefix}${gateKey}`);
@@ -1301,14 +1209,39 @@ function populateScanResultCard(result, gateKey) {
         if (banner && text) {
             if (result.historyNotice) {
                 text.textContent = result.historyNotice;
+                const icon = banner.querySelector('svg, i');
                 if (badge) {
                     badge.textContent = result.historyBadge || 'HISTORY';
-                    if (result.historyBadge === 'RE-LOGIN' || result.status === 'PENDING_CONFIRMATION') {
-                        badge.className = 'shrink-0 px-2 py-0.5 rounded font-mono font-bold bg-amber-200 text-amber-900 text-[10px] uppercase';
+                    if (result.historyBadge === 'RE-LOGIN' || result.status === 'PENDING_CONFIRMATION' || result.historyBadge === 'NO ENTRY RECORD' || result.historyBadge === 'RE-EXIT') {
+                        banner.className = (prefix === 'Dual' ? 'mt-2 p-2 text-[11px]' : 'mt-3 p-3 text-xs') + ' rounded-xl bg-amber-50 border border-amber-300 flex items-center justify-between text-amber-900';
+                        badge.className = (prefix === 'Dual' ? 'px-1.5 py-0.5 text-[9px]' : 'px-2 py-0.5 text-[10px]') + ' shrink-0 rounded font-mono font-bold bg-amber-200 text-amber-900 uppercase';
+                        if (icon) {
+                            icon.classList.remove('text-emerald-600', 'text-blue-600');
+                            icon.classList.add('text-amber-600');
+                        }
                     } else if (result.historyBadge === 'VERIFIED') {
-                        badge.className = 'shrink-0 px-2 py-0.5 rounded font-mono font-bold bg-emerald-100 text-emerald-800 text-[10px] uppercase';
+                        if (gateKey === 'Entry') {
+                            banner.className = (prefix === 'Dual' ? 'mt-2 p-2 text-[11px]' : 'mt-3 p-3 text-xs') + ' rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-between text-emerald-900';
+                            badge.className = (prefix === 'Dual' ? 'px-1.5 py-0.5 text-[9px]' : 'px-2 py-0.5 text-[10px]') + ' shrink-0 rounded font-mono font-bold bg-emerald-200 text-emerald-800 uppercase';
+                            if (icon) {
+                                icon.classList.remove('text-amber-600', 'text-blue-600');
+                                icon.classList.add('text-emerald-600');
+                            }
+                        } else {
+                            banner.className = (prefix === 'Dual' ? 'mt-2 p-2 text-[11px]' : 'mt-3 p-3 text-xs') + ' rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-between text-blue-900';
+                            badge.className = (prefix === 'Dual' ? 'px-1.5 py-0.5 text-[9px]' : 'px-2 py-0.5 text-[10px]') + ' shrink-0 rounded font-mono font-bold bg-blue-200 text-blue-800 uppercase';
+                            if (icon) {
+                                icon.classList.remove('text-amber-600', 'text-emerald-600');
+                                icon.classList.add('text-blue-600');
+                            }
+                        }
                     } else {
-                        badge.className = 'shrink-0 px-2 py-0.5 rounded font-mono font-bold bg-blue-100 text-blue-800 text-[10px] uppercase';
+                        banner.className = (prefix === 'Dual' ? 'mt-2 p-2 text-[11px]' : 'mt-3 p-3 text-xs') + ' rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between text-slate-800';
+                        badge.className = (prefix === 'Dual' ? 'px-1.5 py-0.5 text-[9px]' : 'px-2 py-0.5 text-[10px]') + ' shrink-0 rounded font-mono font-bold bg-slate-200 text-slate-800 uppercase';
+                        if (icon) {
+                            icon.classList.remove('text-amber-600', 'text-emerald-600', 'text-blue-600');
+                            icon.classList.add('text-slate-500');
+                        }
                     }
                 }
                 banner.classList.remove('hidden');
@@ -1519,6 +1452,9 @@ function resetGateScanner(gateKey) {
 
         const banner = document.getElementById(`resHistoryBanner${prefix}${gateKey}`);
         if (banner) banner.classList.add('hidden');
+
+        const tmBadge = document.getElementById(`resTransitMode${prefix}${gateKey}`);
+        if (tmBadge) tmBadge.classList.add('hidden');
     });
 
     // Reset Traffic Light back to RED STANDBY

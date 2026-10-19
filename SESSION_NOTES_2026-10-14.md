@@ -40,12 +40,13 @@ On the Guard Dashboard, after scanning, a yellow banner appears stating:
    Because it is colored in **amber/yellow**, it visually looks like an **alert / warning / error**, even though the scan was 100% verified and authorized!
 3. **Missing Date Context**: The banner only displays the time (e.g. `5:30 PM`) using `toLocaleTimeString`, without stating whether that 5:30 PM was **today**, **yesterday**, or **days ago**, confusing guards and users.
 
-### The Fix Planned for Next Session:
-- **Change Banner Color**:
-  - For normal authorized scans (`VERIFIED`): Change banner to **Emerald Green** (`bg-emerald-50 border-emerald-200 text-emerald-800`).
-  - Only use **Amber / Yellow** when there is an actual conflict (e.g., `RE-LOGIN` / `FORGOT EXIT`).
-- **Add Date Context**: Display *"Entered today at 5:30 PM"* or *"Previous exit on Oct 13, 5:30 PM"*.
-- **Option to Hide for Clean Passes**: Alternatively, hide the banner entirely on normal passes so only the clean green "AUTHORIZED" card is visible.
+### Status: ✅ RESOLVED (Oct 16, 2026)
+- **Fixed wording**:
+  - At Exit: *"Exit logged at [time]"* (previously erroneously showed *"Entry logged at [time]"*).
+  - At Entry: *"Entry logged at [time]"*.
+- **Dynamic Theming**:
+  - Normal `VERIFIED` passes now show in matching theme colors: **Emerald Green** for Entry and **Sky/Blue** for Exit, eliminating confusion with warning alerts.
+  - The warning **Amber / Yellow** styling is now reserved exclusively for actual duplicate / conflict alerts (`RE-LOGIN`, `RE-EXIT`, `NO ENTRY RECORD`).
 
 ---
 

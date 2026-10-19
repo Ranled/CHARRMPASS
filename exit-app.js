@@ -50,12 +50,47 @@ async function doLogin() {
 
   try {
     let account = null;
+    let isOfflineAuth = false;
     const client = typeof supabaseClient !== 'undefined' ? supabaseClient : null;
-    if (client) {
-      const { data } = await client
-        .from('system_accounts').select('*')
-        .eq('username', user).eq('password', pass).maybeSingle();
-      account = data;
+    if (client && isConnected) {
+      try {
+        const { data, error } = await client
+          .from('system_accounts').select('*')
+          .eq('username', user).eq('password', pass).maybeSingle();
+        if (!error && data) {
+          account = data;
+          try {
+            const cached = JSON.parse(localStorage.getItem('charrmpass_cached_accounts') || '{}');
+            cached[user] = { username: data.username, password: pass, role: data.role, id: data.id };
+            localStorage.setItem('charrmpass_cached_accounts', JSON.stringify(cached));
+          } catch (_) {}
+        }
+      } catch (dbErr) {
+        console.warn('Online auth check failed, checking offline credentials:', dbErr);
+      }
+    }
+
+    // Offline / fallback authentication
+    if (!account) {
+      try {
+        const cached = JSON.parse(localStorage.getItem('charrmpass_cached_accounts') || '{}');
+        if (cached[user] && cached[user].password === pass) {
+          account = cached[user];
+          isOfflineAuth = true;
+        }
+      } catch (_) {}
+
+      // Built-in emergency accounts if offline or database unreachable
+      if (!account) {
+        if ((user === 'guard' && pass === 'guard123') || (user === 'admin' && pass === 'admin123')) {
+          account = {
+            username: user,
+            role: user === 'admin' ? 'ADMIN' : 'GUARD',
+            id: 'local-' + user
+          };
+          isOfflineAuth = true;
+        }
+      }
     }
 
     if (!account) {
@@ -69,13 +104,23 @@ async function doLogin() {
     document.getElementById('loginScreen').style.display = 'none';
     document.getElementById('dashboard').classList.remove('hidden');
 
-    showToast('Welcome, ' + guardName + '!', 'success');
+    try {
+      sessionStorage.setItem('charrmpass_session', JSON.stringify({
+        id: account.id,
+        username: account.username,
+        role: account.role,
+        loginTime: Date.now(),
+        timestamp: Date.now()
+      }));
+    } catch (_) {}
+
+    showToast(isOfflineAuth ? 'Welcome, ' + guardName + '! (Offline Mode)' : 'Welcome, ' + guardName + '!', 'success');
     await loadRecentExits();
     await refreshInsideCount();
     setupRealtime();
 
   } catch (e) {
-    errEl.textContent = 'Connection error.';
+    errEl.textContent = 'Login error. Try again.';
     btn.textContent = 'SIGN IN'; btn.disabled = false;
   }
 }
@@ -127,10 +172,17 @@ window.addEventListener('supabase:disconnected', () => setTrafficLightUI('offlin
 window.addEventListener('offline', () => setTrafficLightUI('offline'));
 window.addEventListener('online', () => setTrafficLightUI('connected'));
 
+// ─── DATE HELPER ──────────────────────────────────────────────
+function getLocalStartOfDayIso() {
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  return startOfDay.toISOString();
+}
+
 // ─── LOAD RECENT EXITS ───────────────────────────────────────
 async function loadRecentExits() {
   if (!isConnected) return;
-  const today = new Date().toISOString().split('T')[0];
+  const todayStart = getLocalStartOfDayIso();
   const { data, error } = await supabaseClient
     .from('transactions')
     .select(`
@@ -139,7 +191,7 @@ async function loadRecentExits() {
       vehicles( plate_number )
     `)
     .eq('direction', GATE_DIRECTION)
-    .gte('timestamp', today + 'T00:00:00')
+    .gte('timestamp', todayStart)
     .order('timestamp', { ascending: false })
     .limit(30);
 
@@ -149,38 +201,67 @@ async function loadRecentExits() {
 }
 
 // ─── CURRENTLY INSIDE COUNT ────────────────────────────────────
-// inside = total ENTRY transactions - total EXIT transactions
+// Uses database view/function get_active_inside_entities with fallback to today's net balance
 async function refreshInsideCount() {
   if (!isConnected) return;
 
-  const { count: entries } = await supabaseClient
-    .from('transactions').select('id', { count: 'exact', head: true })
-    .eq('direction', 'ENTRY').eq('status', 'AUTHORIZED');
+  try {
+    const { data, error } = await supabaseClient.rpc('get_active_inside_entities');
+    if (!error && Array.isArray(data)) {
+      insideCount = data.length;
+      const el = document.getElementById('insideCount');
+      if (el) el.textContent = insideCount;
+      return;
+    }
+  } catch (e) {
+    console.warn('RPC get_active_inside_entities error, falling back:', e);
+  }
 
-  const { count: exits } = await supabaseClient
-    .from('transactions').select('id', { count: 'exact', head: true })
-    .eq('direction', 'EXIT').eq('status', 'AUTHORIZED');
+  // Fallback: today's local entries minus exits
+  try {
+    const todayIso = getLocalStartOfDayIso();
+    const { count: entries } = await supabaseClient
+      .from('transactions').select('id', { count: 'exact', head: true })
+      .eq('direction', 'ENTRY').eq('status', 'AUTHORIZED')
+      .gte('timestamp', todayIso);
 
-  insideCount = Math.max(0, (entries || 0) - (exits || 0));
-  const el = document.getElementById('insideCount');
-  if (el) el.textContent = insideCount;
+    const { count: exits } = await supabaseClient
+      .from('transactions').select('id', { count: 'exact', head: true })
+      .eq('direction', 'EXIT').eq('status', 'AUTHORIZED')
+      .gte('timestamp', todayIso);
+
+    insideCount = Math.max(0, (entries || 0) - (exits || 0));
+    const el = document.getElementById('insideCount');
+    if (el) el.textContent = insideCount;
+  } catch (err) {
+    console.warn('Fallback inside count error:', err);
+  }
 }
 
 // ─── CHECK PRIOR ENTRY for a UID ─────────────────────────────
 // Returns: 'valid' (has open entry), 'ghost' (already exited), 'none' (never entered)
-async function checkPriorEntry(uid) {
+// Excludes current transaction ID to avoid false double-exit warnings on newly inserted rows
+async function checkPriorEntry(uid, excludeTxnId, beforeTimestamp) {
   if (!isConnected) return 'unknown';
 
-  // Get the most recent transaction for this UID
-  const { data } = await supabaseClient
+  let query = supabaseClient
     .from('transactions')
-    .select('direction, status, timestamp')
+    .select('id, direction, status, timestamp')
     .eq('rfid_uid', uid)
-    .eq('status', 'AUTHORIZED')
+    .eq('status', 'AUTHORIZED');
+
+  if (excludeTxnId && !String(excludeTxnId).startsWith('manual-')) {
+    query = query.neq('id', excludeTxnId);
+  }
+  if (beforeTimestamp) {
+    query = query.lte('timestamp', beforeTimestamp);
+  }
+
+  const { data, error } = await query
     .order('timestamp', { ascending: false })
     .limit(1);
 
-  if (!data || data.length === 0) return 'none';       // Never entered
+  if (error || !data || data.length === 0) return 'none';       // Never entered
   if (data[0].direction === 'ENTRY')  return 'valid';  // Entered and not yet exited
   if (data[0].direction === 'EXIT')   return 'ghost';  // Already exited (double exit)
   return 'unknown';
@@ -271,8 +352,8 @@ async function handleNewTransaction(txn, priorEntryStatus) {
     if (data) full = data;
   }
 
-  // Check prior entry if not already known
-  const entryStatus = priorEntryStatus || await checkPriorEntry(full.rfid_uid);
+  // Check prior entry if not already known, excluding current transaction
+  const entryStatus = priorEntryStatus || await checkPriorEntry(full.rfid_uid, full.id, full.timestamp);
 
   // Deduplicate if already present in recentExits
   const existingIdx = recentExits.findIndex(e => e.id && full.id && e.id === full.id);
@@ -289,8 +370,8 @@ async function handleNewTransaction(txn, priorEntryStatus) {
 function showScanResult(txn, entryStatus) {
   currentScanData = txn;
   const ok        = txn.status === 'AUTHORIZED';
-  const isPending = txn.status === 'PENDING_CONFIRMATION';
-  const hasWarn   = (ok && (entryStatus === 'ghost' || entryStatus === 'none')) || isPending;
+  const isPending = false;
+  const hasWarn   = false; // Hands-free operation governed by 30s anti-passback
   let name    = txn.users?.full_name;
   let plate   = txn.vehicles?.plate_number;
   let role    = txn.users?.role;
@@ -451,8 +532,10 @@ async function processManual() {
   card = c;
 
   let isVisitor = false;
+  let isEmergency = false;
   let visitorName = 'Visitor';
   let visitorPlate = 'VISITOR PASS';
+  let emergencyLabel = 'Emergency Response';
 
   if (!card) {
     const { data: spec } = await supabaseClient
@@ -465,14 +548,20 @@ async function processManual() {
         isVisitor = true;
         visitorName = spec.label || 'Visitor';
         visitorPlate = spec.description?.match(/Plate:\s*([^|]+)/)?.[1]?.trim() || 'VISITOR PASS';
+      } else if (spec.type === 'EMERGENCY') {
+        isEmergency = true;
+        emergencyLabel = spec.label || 'Emergency Response';
       }
     }
   }
 
-  const status  = (card?.authorization_status === 'AUTHORIZED' || isVisitor) ? 'AUTHORIZED' : 'DENIED';
+  const isSpecial = isVisitor || isEmergency;
+  const status  = (card?.authorization_status === 'AUTHORIZED' || isSpecial) ? 'AUTHORIZED' : 'DENIED';
   let remarks = card ? (status === 'AUTHORIZED' ? 'Manual exit – guard station' : 'Manual exit – not authorized') : 'Manual exit – unregistered';
   if (isVisitor) {
     remarks = `Visitor Exit: ${visitorName} | Plate: ${visitorPlate}`;
+  } else if (isEmergency) {
+    remarks = `Emergency Response: ${emergencyLabel}`;
   }
 
   // Check prior entry BEFORE inserting
@@ -481,15 +570,25 @@ async function processManual() {
   const { data: txn, error } = await supabaseClient
     .from('transactions')
     .insert({
-      rfid_uid:   uid, direction: GATE_DIRECTION, gate: 'CHARRMPASS_GATE_EXIT',
-      vehicle_id: card?.vehicle_id || null, user_id: card?.user_id || null,
-      status, remarks
+      rfid_uid:   uid,
+      direction:  GATE_DIRECTION,
+      gate:       'CHARRMPASS_GATE_EXIT',
+      user_type:  'PEDESTRIAN',
+      rfid_type:  'CLOSE_RANGE',
+      vehicle_id: card?.vehicle_id || null,
+      user_id:    card?.user_id || null,
+      status,
+      remarks
     })
     .select(`id, rfid_uid, direction, status, timestamp, remarks,
              users(full_name,role,program,section), vehicles(plate_number,vehicle_type,vehicle_model)`)
     .single();
 
-  if (error) { showToast('DB error: ' + error.message, 'error'); return; }
+  if (error) {
+    showToast('DB error: ' + error.message, 'error');
+    setTrafficLightUI('standby');
+    return;
+  }
 
   if (isVisitor) {
     await supabaseClient.from('special_tags').update({

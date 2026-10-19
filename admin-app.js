@@ -4987,7 +4987,7 @@ function handleBleNotification(event) {
     try {
         const value = event.target.value;
         const decoder = new TextDecoder('utf-8');
-        const text = decoder.decode(value);
+        const text = decoder.decode(value).trim();
         appendBleLog(`ESP32 Notification: ${text}`, 'rx');
 
         try {
@@ -5006,12 +5006,42 @@ function handleBleNotification(event) {
                 appendBleLog(`ESP32 received credentials for "${data.ssid || 'network'}". Testing connection (up to 15s)...`, 'info');
                 showToast(`ESP32 testing connection to "${data.ssid || 'Wi-Fi'}"...`, 'info');
             } else if (data.event === 'SAVED' || data.status === 'SAVED') {
-                appendBleLog(`ESP32 verified & stored credentials to NVS and SD backup for: "${data.ssid}"`, 'success');
+                bleState.provisioningHandedOffToWifi = true;
+                appendBleLog(`ESP32 verified & stored credentials to SD Card (/wifi.cfg) and NVS for: "${data.ssid || 'network'}"`, 'success');
+                showToast('Credentials saved to ESP32 SD Card! Connecting to Wi-Fi...', 'success');
+                if (el('flowStepEsp')) el('flowStepEsp').classList.add('border-emerald-500', 'bg-emerald-50/50');
+                if (typeof loadData === 'function') {
+                    setTimeout(() => loadData(), 5000);
+                    setTimeout(() => loadData(), 10000);
+                }
             }
         } catch(pe) {
-            // Raw text response
-            if (text.includes('CONNECTED') || text.includes('ONLINE')) {
-                appendBleLog(`ESP32 Status Update: ${text}`, 'success');
+            // Raw text response from ESP32 (SAVED, CONNECTED:<ssid>, FAILED, FORGOT)
+            if (text === 'SAVED' || text.startsWith('SAVED')) {
+                bleState.provisioningHandedOffToWifi = true;
+                appendBleLog('ESP32 saved credentials to SD Card (/wifi.cfg) & NVS! Now connecting to Wi-Fi...', 'success');
+                showToast('Saved to ESP32 SD Card! Connecting to Wi-Fi...', 'success');
+                if (el('flowStepEsp')) el('flowStepEsp').classList.add('border-emerald-500', 'bg-emerald-50/50');
+                if (typeof loadData === 'function') {
+                    setTimeout(() => loadData(), 5000);
+                    setTimeout(() => loadData(), 10000);
+                }
+            } else if (text.includes('CONNECTED') || text.includes('ONLINE')) {
+                const connectedSsid = text.includes(':') ? text.split(':').slice(1).join(':') : '';
+                appendBleLog(`ESP32 Connected to Wi-Fi${connectedSsid ? ' (' + connectedSsid + ')' : ''}! Syncing with cloud...`, 'success');
+                showToast(`ESP32 connected to Wi-Fi${connectedSsid ? ': ' + connectedSsid : ''}!`, 'success');
+                if (el('flowStepRouter')) el('flowStepRouter').classList.add('border-emerald-500', 'bg-emerald-50/50');
+                if (el('flowStepCloud')) el('flowStepCloud').classList.add('border-emerald-500', 'bg-emerald-50/50');
+                if (typeof loadData === 'function') setTimeout(() => loadData(), 1500);
+            } else if (text === 'FAILED' || text.includes('FAILED')) {
+                bleState.provisioningHandedOffToWifi = false;
+                appendBleLog('ESP32 Wi-Fi Connection Failed (saved on SD Card, check SSID/Password or 2.4GHz signal).', 'error');
+                showToast('ESP32 could not connect to Wi-Fi. Please verify SSID & Password.', 'error');
+                if (el('flowStepRouter')) el('flowStepRouter').classList.remove('border-emerald-500', 'bg-emerald-50/50');
+            } else if (text === 'FORGOT' || text.includes('FORGOT')) {
+                bleState.provisioningHandedOffToWifi = false;
+                appendBleLog('ESP32 erased previous Wi-Fi from SD Card & NVS. Ready for new credentials over Bluetooth.', 'warn');
+                showToast('ESP32 forgot old Wi-Fi. Enter new SSID & Password now.', 'info');
             }
         }
     } catch(err) {
@@ -5043,7 +5073,9 @@ window.connectBluetoothDevice = async function() {
         try {
             device = await navigator.bluetooth.requestDevice({
                 filters: [
-                    { namePrefix: 'CHARRMPASS' }
+                    { namePrefix: 'CHARRMPASS' },
+                    { namePrefix: 'CHARRM' },
+                    { services: [BLE_SERVICE_UUID] }
                 ],
                 optionalServices: allowedServices
             });
@@ -5176,14 +5208,27 @@ window.connectBluetoothDevice = async function() {
 };
 
 function onBleDisconnected() {
-    appendBleLog(`Device "${bleState.deviceName || 'ESP32'}" disconnected from Bluetooth.`, 'warn');
+    const devName = bleState.deviceName || 'ESP32';
+    const handedOff = !!bleState.provisioningHandedOffToWifi;
+    bleState.provisioningHandedOffToWifi = false;
     bleState.device = null;
     bleState.server = null;
     bleState.service = null;
     bleState.characteristic = null;
     bleState.isConnected = false;
     updateBleUiDisconnected();
-    showToast('ESP32 Bluetooth disconnected.', 'warning');
+
+    if (handedOff) {
+        appendBleLog(`ESP32 "${devName}" closed Bluetooth to dedicate RAM & 2.4GHz antenna to Wi-Fi connection (from SD Card /wifi.cfg)...`, 'info');
+        showToast(`${devName} saved Wi-Fi to SD Card & switched radio to Wi-Fi!`, 'success');
+        if (typeof loadData === 'function') {
+            setTimeout(() => loadData(), 4000);
+            setTimeout(() => loadData(), 9000);
+        }
+    } else {
+        appendBleLog(`Device "${devName}" disconnected from Bluetooth.`, 'warn');
+        showToast('ESP32 Bluetooth disconnected.', 'warning');
+    }
 }
 
 window.disconnectBluetoothDevice = function() {
@@ -5199,6 +5244,43 @@ window.fillCampusPresetWifi = function() {
     appendBleLog('Then enter your 2.4GHz Wi-Fi SSID and password to send them directly over BLE.', 'info');
     showToast('Click "Scan & Connect via Bluetooth" then enter your network credentials.', 'info');
     if (el('wifiSsidInput')) el('wifiSsidInput').focus();
+};
+
+window.writeBlePayloadReliable = async function(characteristic, rawString) {
+    const encoder = new TextEncoder();
+    const fullBuffer = encoder.encode(rawString);
+
+    const writeChunk = async (buf) => {
+        if (typeof characteristic.writeValueWithResponse === 'function') {
+            try {
+                await characteristic.writeValueWithResponse(buf);
+                return;
+            } catch (wErr) {
+                if (typeof characteristic.writeValueWithoutResponse === 'function') {
+                    await characteristic.writeValueWithoutResponse(buf);
+                    return;
+                } else if (typeof characteristic.writeValue === 'function') {
+                    await characteristic.writeValue(buf);
+                    return;
+                }
+                throw wErr;
+            }
+        } else if (typeof characteristic.writeValue === 'function') {
+            await characteristic.writeValue(buf);
+        }
+    };
+
+    try {
+        await writeChunk(fullBuffer);
+    } catch (singleWriteErr) {
+        // Fallback to 20-byte GATT MTU chunks (reassembled by ESP32 bleRxBuffer)
+        const chunkSize = 20;
+        for (let offset = 0; offset < fullBuffer.length; offset += chunkSize) {
+            const slice = fullBuffer.slice(offset, offset + chunkSize);
+            await writeChunk(slice);
+            await new Promise(r => setTimeout(r, 40));
+        }
+    }
 };
 
 window.handleWifiProvisionSubmit = async function(event) {
@@ -5243,36 +5325,19 @@ window.handleWifiProvisionSubmit = async function(event) {
     }
 
     try {
-        appendBleLog(`Transmitting payload (${rawPayload.length} bytes) to ESP32 characteristic...`, 'tx');
+        appendBleLog(`Transmitting payload (${rawPayload.length} bytes) to ESP32 -> SD Card...`, 'tx');
 
         if (!bleState.characteristic) {
             throw new Error('Bluetooth characteristic not available. Please reconnect to your ESP32.');
         }
 
-        const encoder = new TextEncoder();
-        const dataBuffer = encoder.encode(rawPayload);
-        
-        if (typeof bleState.characteristic.writeValueWithResponse === 'function') {
-            try {
-                await bleState.characteristic.writeValueWithResponse(dataBuffer);
-            } catch (wErr) {
-                if (typeof bleState.characteristic.writeValueWithoutResponse === 'function') {
-                    await bleState.characteristic.writeValueWithoutResponse(dataBuffer);
-                } else if (typeof bleState.characteristic.writeValue === 'function') {
-                    await bleState.characteristic.writeValue(dataBuffer);
-                } else {
-                    throw wErr;
-                }
-            }
-        } else if (typeof bleState.characteristic.writeValue === 'function') {
-            await bleState.characteristic.writeValue(dataBuffer);
-        }
-        appendBleLog('GATT Write Acknowledgement received: Payload successfully written to ESP32.', 'rx');
+        await window.writeBlePayloadReliable(bleState.characteristic, rawPayload);
+        appendBleLog('GATT Write Acknowledgement received: Payload sent to ESP32 for SD Card storage & Wi-Fi connection.', 'rx');
 
-        appendBleLog(`[ESP32] Received new Wi-Fi credentials for "${ssid}". Connecting to network...`, 'info');
-        showToast(`Wi-Fi credentials transmitted to ESP32 (${gateId})!`, 'success');
+        appendBleLog(`[ESP32] Saving "${ssid}" to SD Card (/wifi.cfg) & NVS, then connecting to Wi-Fi...`, 'info');
+        showToast(`Wi-Fi credentials sent to ESP32 (${gateId})! Saving to SD Card...`, 'success');
 
-        if (el('flowStepRouter')) el('flowStepRouter').classList.add('border-emerald-500', 'bg-emerald-50/50');
+        if (el('flowStepEsp')) el('flowStepEsp').classList.add('border-emerald-500', 'bg-emerald-50/50');
 
     } catch (err) {
         appendBleLog(`Provisioning transmission error: ${err.message}`, 'error');
@@ -5555,8 +5620,8 @@ window.renderEsp32DevicesTable = function() {
                 <td class="p-3.5 text-center">${d.statusBadge}</td>
                 <td class="p-3.5 text-right">
                     <div class="flex items-center justify-end gap-1.5 flex-wrap">
-                        <button onclick="openChangeGateWifiModal('${d.id}', '${(d.device_name || d.esp32_identifier).replace(/'/g, "\\'")}', '${d.esp32_identifier}')" class="px-2.5 py-1 bg-charm-dark text-white hover:bg-charm-mid rounded-lg font-bold text-xs flex items-center gap-1 transition-colors shadow-sm" title="Change Wi-Fi Over-The-Air (1-Click)">
-                            <i data-lucide="wifi" class="w-3.5 h-3.5 text-charm-yellow"></i> Change Wi-Fi
+                        <button onclick="openChangeGateWifiModal('${d.id}', '${(d.device_name || d.esp32_identifier).replace(/'/g, "\\'")}', '${d.esp32_identifier}')" class="px-2.5 py-1 bg-charm-dark text-white hover:bg-charm-mid rounded-lg font-bold text-xs flex items-center gap-1 transition-colors shadow-sm" title="Reset Wi-Fi & Reconfigure via Bluetooth">
+                            <i data-lucide="bluetooth" class="w-3.5 h-3.5 text-charm-yellow"></i> Change Wi-Fi
                         </button>
                         <button onclick="openDeviceModal('${d.id}')" class="p-1.5 text-slate-400 hover:text-blue-600 rounded-lg transition-colors" title="Edit Gate Unit"><i data-lucide="edit-2" class="w-3.5 h-3.5"></i></button>
                         <button onclick="deleteDevice('${d.id}')" class="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition-colors" title="Delete Gate Unit"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
@@ -5809,9 +5874,6 @@ window.openChangeGateWifiModal = function(deviceId = null, deviceName = '', esp3
         }
     }
 
-    if (el('changeWifiSsid')) el('changeWifiSsid').value = '';
-    if (el('changeWifiPass')) el('changeWifiPass').value = '';
-
     modal.classList.remove('hidden');
     setTimeout(() => {
         modal.classList.remove('opacity-0');
@@ -5828,94 +5890,117 @@ window.closeChangeGateWifiModal = function() {
     setTimeout(() => modal.classList.add('hidden'), 300);
 };
 
-window.submitChangeGateWifi = async function(event) {
-    if (event) event.preventDefault();
-
+window.forgetGateWifiRemote = async function() {
     const devSelect = el('changeWifiDeviceId');
-    const deviceId = devSelect?.value;
-    const selectedOption = devSelect?.options[devSelect.selectedIndex];
-    const deviceName = selectedOption?.getAttribute('data-name') || 'Gate Unit';
-    const esp32Identifier = selectedOption?.getAttribute('data-identifier') || '';
+    const selectedOpt = devSelect && devSelect.selectedIndex >= 0 ? devSelect.options[devSelect.selectedIndex] : null;
+    const deviceId = devSelect ? devSelect.value : null;
+    const esp32Identifier = selectedOpt ? (selectedOpt.getAttribute('data-identifier') || '') : '';
+    const deviceText = selectedOpt ? selectedOpt.text : 'Gate Unit';
 
-    const newSsid = el('changeWifiSsid')?.value?.trim();
-    const newPass = el('changeWifiPass')?.value || '';
-
-    if (!newSsid) {
-        showToast('Please enter the new Wi-Fi SSID network name.', 'warning');
-        return;
+    const btn = el('btnForgetAndOpenBle');
+    const origHtml = btn ? btn.innerHTML : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin text-white"></i> Sending Reset...`;
+        if (window.lucide) lucide.createIcons();
     }
-
-    const submitBtn = el('btnSubmitChangeWifi');
-    const originalBtnHtml = submitBtn ? submitBtn.innerHTML : '';
-    if (submitBtn) {
-        submitBtn.disabled = true;
-        submitBtn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin text-charm-yellow"></i> Sending Command...`;
-        lucide.createIcons();
-    }
-
-    appendBleLog(`[OTA Wi-Fi] Initiating remote Wi-Fi command for "${deviceName}" (${esp32Identifier})...`, 'system');
-    appendBleLog(`[OTA Wi-Fi] Target SSID: "${newSsid}" (Password: ${newPass ? '••••••••' : 'Open'})`, 'info');
 
     try {
+        appendBleLog(`[OTA Wi-Fi] Sending FORGET command to ${deviceText}...`, 'system');
+
+        // 1. If already connected via Bluetooth, also dispatch {"cmd":"FORGET"} directly over BLE
+        if (bleState.isConnected && bleState.characteristic && typeof window.writeBlePayloadReliable === 'function') {
+            try {
+                await window.writeBlePayloadReliable(bleState.characteristic, JSON.stringify({ cmd: 'FORGET' }));
+                appendBleLog(`[BLE] Sent direct {"cmd":"FORGET"} to paired ESP32.`, 'tx');
+            } catch (bleForgetErr) {
+                console.warn('Direct BLE FORGET error:', bleForgetErr);
+            }
+        }
+
+        // 2. Dispatch FORGET via Supabase so online ESP32 picks it up within 5s via checkRemoteWifiCommand()
         if (isConnected && supabaseClient) {
-            let updateQuery;
-            if (deviceId && deviceId !== 'DEFAULT_GATE') {
-                updateQuery = supabaseClient
+            const resetFields = {
+                target_ssid: 'FORGET',
+                target_pass: null,
+                updated_at: new Date().toISOString()
+            };
+
+            let updateError = null;
+            if (esp32Identifier) {
+                const { error } = await supabaseClient
                     .from('devices')
-                    .update({
-                        target_ssid: newSsid,
-                        target_pass: newPass,
-                        updated_at: new Date().toISOString()
-                    })
-                    .eq('id', deviceId);
-            } else if (esp32Identifier) {
-                updateQuery = supabaseClient
-                    .from('devices')
-                    .update({
-                        target_ssid: newSsid,
-                        target_pass: newPass,
-                        updated_at: new Date().toISOString()
-                    })
+                    .update(resetFields)
                     .eq('esp32_identifier', esp32Identifier);
-            } else {
-                updateQuery = supabaseClient
+                updateError = error;
+            } else if (deviceId && !['DEFAULT_GATE', 'GATE_ENTRY', 'GATE_EXIT', 'GATE_01'].includes(deviceId)) {
+                const { error } = await supabaseClient
                     .from('devices')
-                    .update({
-                        target_ssid: newSsid,
-                        target_pass: newPass,
-                        updated_at: new Date().toISOString()
-                    })
-                    .eq('gate_type', 'ENTRY');
+                    .update(resetFields)
+                    .eq('id', deviceId);
+                updateError = error;
+            } else {
+                const fallbackId = (deviceId === 'GATE_EXIT') ? 'CHARRMPASS_GATE_EXIT' : 'CHARRMPASS_GATE_ENTRY';
+                const { error } = await supabaseClient
+                    .from('devices')
+                    .update(resetFields)
+                    .eq('esp32_identifier', fallbackId);
+                updateError = error;
             }
 
-            const { data, error } = await updateQuery;
-            if (error) throw error;
-
-            appendBleLog(`[OTA Wi-Fi] ✅ Wi-Fi update command delivered to Supabase queue for ${deviceName}! ESP32 will switch within seconds.`, 'success');
-            showToast(`Wi-Fi update command sent to ${deviceName}! It will connect to "${newSsid}" automatically.`, 'success');
-        } else {
-            appendBleLog(`[OTA Wi-Fi] Simulation: Stored target Wi-Fi (${newSsid}) locally for ${deviceName}.`, 'info');
-            showToast(`Wi-Fi update command queued locally for ${deviceName}.`, 'info');
+            if (updateError) throw updateError;
+        } else if (!bleState.isConnected) {
+            showToast('Database offline: Hold BOOT button on ESP32 for 3s to forget Wi-Fi, then scan via Bluetooth.', 'warning');
         }
+
+        showToast(`Wi-Fi reset sent! ESP32 is forgetting current Wi-Fi and opening Bluetooth setup mode.`, 'success');
+        appendBleLog(`[OTA Wi-Fi] ✅ "FORGET" command delivered to ${deviceText}. ESP32 will erase SD/NVS Wi-Fi and advertise on Bluetooth.`, 'success');
 
         closeChangeGateWifiModal();
         if (window.pingAllGates) setTimeout(() => window.pingAllGates(), 1500);
 
-    } catch (err) {
-        console.error('Error dispatching OTA Wi-Fi update:', err);
-        const isColumnMissing = err.message && (err.message.includes('target_pass') || err.message.includes('target_ssid') || err.message.includes('schema cache'));
-        if (isColumnMissing) {
-            appendBleLog(`[OTA Wi-Fi] ❌ Supabase Schema Update Required: Run 'ALTER TABLE public.devices ADD COLUMN IF NOT EXISTS target_pass TEXT;' in Supabase SQL Editor.`, 'error');
-            showToast("Missing 'target_pass' column in Supabase devices table. Please run the SQL migration snippet in your Supabase SQL Editor.", 'error');
-        } else {
-            appendBleLog(`[OTA Wi-Fi] ❌ Failed to dispatch Wi-Fi command: ${err.message}`, 'error');
-            showToast('Failed to send Wi-Fi command: ' + err.message, 'error');
+        // Automatically switch to the Bluetooth BLE provisioning tab
+        if (typeof adminView === 'function') {
+            adminView('wifi');
         }
+
+        // Pre-select matching target in Bluetooth provisioning form
+        const bleTarget = el('bleTargetDeviceType');
+        if (bleTarget) {
+            const lowerText = (deviceText + ' ' + esp32Identifier).toLowerCase();
+            if (lowerText.includes('entry')) bleTarget.value = 'ENTRY';
+            else if (lowerText.includes('exit')) bleTarget.value = 'EXIT';
+            else if (lowerText.includes('01') || lowerText.includes('uhf')) bleTarget.value = 'UHF';
+        }
+
+        // Clear SSID/Password inputs & focus so user can encode new credentials right away
+        if (el('wifiSsidInput')) el('wifiSsidInput').value = '';
+        if (el('wifiPassInput')) el('wifiPassInput').value = '';
+
+        // Smooth scroll to the Scan & Connect button (or SSID input if already connected via BLE)
+        setTimeout(() => {
+            if (bleState.isConnected && el('wifiSsidInput')) {
+                el('wifiSsidInput').scrollIntoView({ behavior: 'smooth', block: 'center' });
+                el('wifiSsidInput').focus();
+            } else {
+                const scanBtn = el('btnScanBle');
+                if (scanBtn) {
+                    scanBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    scanBtn.classList.add('ring-4', 'ring-blue-400');
+                    setTimeout(() => scanBtn.classList.remove('ring-4', 'ring-blue-400'), 2500);
+                }
+            }
+        }, 350);
+
+    } catch (err) {
+        console.error('Error sending FORGET command:', err);
+        showToast('Failed to send FORGET command: ' + err.message, 'error');
+        appendBleLog(`[OTA Wi-Fi] ❌ Failed to dispatch FORGET command: ${err.message}`, 'error');
     } finally {
-        if (submitBtn) {
-            submitBtn.disabled = false;
-            submitBtn.innerHTML = originalBtnHtml;
-            lucide.createIcons();
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = origHtml;
+            if (window.lucide) lucide.createIcons();
         }
     }
 };

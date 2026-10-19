@@ -1,9 +1,9 @@
 // ====================================================================
-// CHARRMPASS PWA Service Worker (v1.0.0)
+// CHARRMPASS PWA Service Worker (v2.0.0)
 // High-performance caching for App Shell with bypass for Live Cloud APIs
 // ====================================================================
 
-const CACHE_NAME = 'charrmpass-cache-v1';
+const CACHE_NAME = 'charrmpass-cache-v2';
 const APP_SHELL_ASSETS = [
     '/',
     '/index.html',
@@ -12,6 +12,11 @@ const APP_SHELL_ASSETS = [
     '/entry-dashboard.html',
     '/exit-dashboard.html',
     '/styles.css',
+    '/supabase-config.js',
+    '/guard-app.js',
+    '/entry-app.js',
+    '/exit-app.js',
+    '/admin-app.js',
     '/manifest.json',
     '/logocharrmpark.png',
     '/landingbg.jpg'
@@ -73,7 +78,7 @@ self.addEventListener('fetch', (event) => {
             })
             .catch(() => {
                 // Network failed (offline): serve from cache
-                return caches.match(event.request).then((cachedResponse) => {
+                return caches.match(event.request, { ignoreSearch: true }).then((cachedResponse) => {
                     if (cachedResponse) {
                         return cachedResponse;
                     }

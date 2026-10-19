@@ -55,15 +55,50 @@ async function doLogin() {
 
   try {
     let account = null;
+    let isOfflineAuth = false;
     const client = typeof supabaseClient !== 'undefined' ? supabaseClient : null;
-    if (client) {
-      const { data } = await client
-        .from('system_accounts')
-        .select('*')
-        .eq('username', user)
-        .eq('password', pass)
-        .maybeSingle();
-      account = data;
+    if (client && isConnected) {
+      try {
+        const { data, error } = await client
+          .from('system_accounts')
+          .select('*')
+          .eq('username', user)
+          .eq('password', pass)
+          .maybeSingle();
+        if (!error && data) {
+          account = data;
+          try {
+            const cached = JSON.parse(localStorage.getItem('charrmpass_cached_accounts') || '{}');
+            cached[user] = { username: data.username, password: pass, role: data.role, id: data.id };
+            localStorage.setItem('charrmpass_cached_accounts', JSON.stringify(cached));
+          } catch (_) {}
+        }
+      } catch (dbErr) {
+        console.warn('Online auth check failed, checking offline credentials:', dbErr);
+      }
+    }
+
+    // Offline / fallback authentication
+    if (!account) {
+      try {
+        const cached = JSON.parse(localStorage.getItem('charrmpass_cached_accounts') || '{}');
+        if (cached[user] && cached[user].password === pass) {
+          account = cached[user];
+          isOfflineAuth = true;
+        }
+      } catch (_) {}
+
+      // Built-in emergency accounts if offline or database unreachable
+      if (!account) {
+        if ((user === 'guard' && pass === 'guard123') || (user === 'admin' && pass === 'admin123')) {
+          account = {
+            username: user,
+            role: user === 'admin' ? 'ADMIN' : 'GUARD',
+            id: 'local-' + user
+          };
+          isOfflineAuth = true;
+        }
+      }
     }
 
     if (!account) {
@@ -77,12 +112,22 @@ async function doLogin() {
     document.getElementById('loginScreen').style.display = 'none';
     document.getElementById('dashboard').classList.remove('hidden');
 
-    showToast('Welcome, ' + guardName + '!', 'success');
+    try {
+      sessionStorage.setItem('charrmpass_session', JSON.stringify({
+        id: account.id,
+        username: account.username,
+        role: account.role,
+        loginTime: Date.now(),
+        timestamp: Date.now()
+      }));
+    } catch (_) {}
+
+    showToast(isOfflineAuth ? 'Welcome, ' + guardName + '! (Offline Mode)' : 'Welcome, ' + guardName + '!', 'success');
     await loadRecentEntries();
     setupRealtime();
 
   } catch (e) {
-    errEl.textContent = 'Connection error. Try again.';
+    errEl.textContent = 'Login error. Try again.';
     btn.textContent = 'SIGN IN'; btn.disabled = false;
   }
 }
@@ -134,19 +179,26 @@ window.addEventListener('supabase:disconnected', () => setTrafficLightUI('offlin
 window.addEventListener('offline', () => setTrafficLightUI('offline'));
 window.addEventListener('online', () => setTrafficLightUI('connected'));
 
+// ─── DATE HELPER ──────────────────────────────────────────────
+function getLocalStartOfDayIso() {
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  return startOfDay.toISOString();
+}
+
 // ─── LOAD RECENT ENTRIES ─────────────────────────────────────
 async function loadRecentEntries() {
   if (!isConnected) return;
-  const today = new Date().toISOString().split('T')[0];
+  const todayStart = getLocalStartOfDayIso();
   const { data, error } = await supabaseClient
     .from('transactions')
     .select(`
-      id, rfid_uid, direction, status, timestamp, remarks,
+      id, rfid_uid, direction, status, timestamp, remarks, user_type, rfid_type,
       users   ( full_name, role, program, section ),
-      vehicles( plate_number )
+      vehicles( plate_number, vehicle_type, vehicle_model, vehicle_color )
     `)
     .eq('direction', GATE_DIRECTION)
-    .gte('timestamp', today + 'T00:00:00')
+    .gte('timestamp', todayStart)
     .order('timestamp', { ascending: false })
     .limit(30);
 
@@ -167,6 +219,7 @@ function renderRecentList() {
     const isPending = t.status === 'PENDING_CONFIRMATION';
     let name    = t.users?.full_name;
     let plate   = t.vehicles?.plate_number;
+    const vtype = t.vehicles?.vehicle_type;
 
     if (!name && t.remarks) {
       if (t.remarks.includes('Visitor')) {
@@ -184,17 +237,28 @@ function renderRecentList() {
       }
     }
 
-    if (!name) name = ok ? 'Authorized Driver' : (isPending ? 'Duplicate Entry Scan' : 'Unregistered RFID');
-    if (!plate) plate = t.rfid_uid?.substring(0, 12) || '--';
+    // Determine whether this entry transaction is a Vehicle
+    const hasRealPlate = plate && plate !== '--' && plate !== 'PEDESTRIAN' && plate !== 'NONE' && plate !== 'N/A' && plate !== '—' && plate !== t.rfid_uid?.substring(0, 12);
+    const hasVehType   = vtype && vtype !== 'None' && vtype !== 'Walking / Pedestrian' && vtype !== 'PEDESTRIAN';
+    const isPed        = t.user_type === 'PEDESTRIAN' || t.rfid_type === 'CLOSE_RANGE' || (!hasRealPlate && !hasVehType);
+    const isVehicle    = !isPed && (hasRealPlate || hasVehType);
+
+    if (!name) name = ok ? (isVehicle ? 'Authorized Driver' : 'Authorized Pedestrian') : (isPending ? 'Duplicate Entry Scan' : 'Unregistered RFID');
+    if (!plate) plate = isVehicle ? (t.rfid_uid?.substring(0, 12) || '--') : 'PEDESTRIAN';
     const timeStr = new Date(t.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
     const dotColor = ok ? 'ok' : (isPending ? 'pending' : 'deny');
     const badgeIcon = ok ? '✓' : (isPending ? '⚠' : '✕');
     const badgeColor = ok ? 'color:#22c55e' : (isPending ? 'color:#d97706' : 'color:#ef4444');
+
+    const modeBadge = isVehicle
+      ? '<span class="scan-row-badge vehicle">🚗 VEHICLE</span>'
+      : '<span class="scan-row-badge pedestrian">🚶 PEDESTRIAN</span>';
+
     return `
       <div class="scan-row">
         <div class="scan-row-dot ${dotColor}"></div>
         <div class="scan-row-info">
-          <div class="scan-row-name">${htmlEsc(name)}</div>
+          <div class="scan-row-name">${htmlEsc(name)}${ok || isPending ? modeBadge : ''}</div>
           <div class="scan-row-plate">${htmlEsc(plate)}</div>
         </div>
         <div class="scan-row-time">${timeStr}</div>
@@ -225,7 +289,7 @@ async function handleNewTransaction(txn) {
     const { data } = await supabaseClient
       .from('transactions')
       .select(`
-        id, rfid_uid, direction, status, timestamp, remarks,
+        id, rfid_uid, direction, status, timestamp, remarks, user_type, rfid_type,
         users   ( full_name, role, program, section ),
         vehicles( plate_number, vehicle_type, vehicle_model, vehicle_color )
       `)
@@ -275,11 +339,18 @@ function showScanResult(txn) {
     section = 'Priority Pass';
   }
 
-  if (!name) name = isPending ? 'Registered User (Duplicate Scan)' : (ok ? 'Authorized User' : 'Unknown Card');
-  if (!plate) plate = '—';
-  if (!role) role = '--';
   const vtype   = txn.vehicles?.vehicle_type || '';
   const vmodel  = txn.vehicles?.vehicle_model|| '';
+
+  // Determine whether this entrant is a Vehicle
+  const hasRealPlate = plate && plate !== '—' && plate !== '--' && plate !== 'PEDESTRIAN' && plate !== 'NONE' && plate !== 'N/A';
+  const hasVehType   = vtype && vtype !== 'None' && vtype !== 'Walking / Pedestrian' && vtype !== 'PEDESTRIAN';
+  const isPed        = txn.user_type === 'PEDESTRIAN' || txn.rfid_type === 'CLOSE_RANGE' || (!hasRealPlate && !hasVehType);
+  const isVehicle    = !isPed && (hasRealPlate || hasVehType);
+
+  if (!name) name = isPending ? 'Registered User (Duplicate Scan)' : (ok ? (isVehicle ? 'Authorized Driver' : 'Authorized Pedestrian') : 'Unknown Card');
+  if (!plate) plate = isVehicle ? '—' : 'PEDESTRIAN';
+  if (!role) role = '--';
   const timeStr = new Date(txn.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
   const avatarBg = ok ? '16a34a' : (isPending ? 'd97706' : 'b91c1c');
   const avatar  = `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=${avatarBg}&color=fff&size=200&bold=true`;
@@ -306,13 +377,23 @@ function showScanResult(txn) {
       </div>
     </div>
 
+    ${ok || isPending ? `
+      <div class="scan-transit-pill ${isVehicle ? 'vehicle' : 'pedestrian'}">
+        <i data-lucide="${isVehicle ? 'car' : 'user'}" style="width:14px; height:14px;"></i>
+        <span>${isVehicle ? '🚗 VEHICLE ENTRY' : '🚶 PEDESTRIAN ENTRY'}</span>
+      </div>
+    ` : ''}
+
     <div class="scan-name">${htmlEsc(name)}</div>
 
     <div class="scan-details">
       ${ok || isPending ? `
         <div class="scan-detail-row"><strong>${htmlEsc(role)}</strong> · ${htmlEsc(program)} ${htmlEsc(section)}</div>
-        <div class="scan-plate">${htmlEsc(plate)}</div>
-        ${vtype ? `<div class="scan-detail-row">${htmlEsc(vtype)} ${htmlEsc(vmodel)}</div>` : ''}
+        <div class="scan-plate">
+          ${isVehicle ? '<span style="display:block; font-size:10px; opacity:0.75; letter-spacing:1px; text-transform:uppercase; margin-bottom:2px;">Vehicle Plate</span>' : ''}
+          ${htmlEsc(plate)}
+        </div>
+        ${vtype ? `<div class="scan-detail-row"><strong>Vehicle:</strong> ${htmlEsc(vtype)} ${htmlEsc(vmodel)}</div>` : (isVehicle ? '<div class="scan-detail-row"><strong>Vehicle:</strong> Registered Campus Vehicle</div>' : '<div class="scan-detail-row" style="color:var(--muted)">Foot / Turnstile Passage</div>')}
         ${isPending ? `<div class="scan-detail-row" style="color:#d97706; font-size:12px; font-weight:600;">⚠️ ${htmlEsc(txn.remarks || 'Already logged inside campus')}</div>` : ''}
       ` : `
         <div class="scan-detail-row" style="color: var(--denied)">Not registered or unauthorized</div>
@@ -322,15 +403,19 @@ function showScanResult(txn) {
 
     <div class="scan-verdict ${ok ? 'ok' : (isPending ? 'warn' : 'deny')}">
       ${ok
-        ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> ENTRY GRANTED'
+        ? `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> ${isVehicle ? 'VEHICLE ENTRY GRANTED' : 'ENTRY GRANTED'}`
         : (isPending
-          ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg> ALREADY ENTERED (AWAITING GUARD)'
+          ? `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg> ${isVehicle ? 'ALREADY ENTERED (VEHICLE)' : 'ALREADY ENTERED (AWAITING GUARD)'}`
           : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> ACCESS DENIED')
       }
     </div>
 
     <div class="scan-time">${timeStr}</div>
   `;
+
+  if (window.lucide && typeof lucide.createIcons === 'function') {
+    lucide.createIcons();
+  }
 
   // Auto-reset after 10 seconds
   clearTimeout(scanTimeout);
@@ -371,7 +456,8 @@ async function processManual() {
   }
 
   // Look up rfid_card
-  const { data: card } = await supabaseClient
+  let card = null;
+  const { data: c } = await supabaseClient
     .from('rfid_cards')
     .select(`
       id, rfid_uid, authorization_status, vehicle_id, user_id,
@@ -380,9 +466,49 @@ async function processManual() {
     `)
     .eq('rfid_uid', uid)
     .maybeSingle();
+  card = c;
 
-  const status  = card?.authorization_status === 'AUTHORIZED' ? 'AUTHORIZED' : 'DENIED';
-  const remarks = card ? (status === 'AUTHORIZED' ? 'Manual entry – guard station' : 'Manual entry – not authorized') : 'Manual entry – unregistered';
+  let isVisitor = false;
+  let isEmergency = false;
+  let visitorName = 'Visitor';
+  let visitorPlate = 'VISITOR PASS';
+  let emergencyLabel = 'Emergency Response';
+
+  if (!card) {
+    const { data: spec } = await supabaseClient
+      .from('special_tags')
+      .select('*')
+      .eq('rfid_uid', uid)
+      .maybeSingle();
+    if (spec) {
+      if (spec.type === 'VISITOR') {
+        isVisitor = true;
+        visitorName = spec.label || 'Visitor';
+        visitorPlate = spec.description?.match(/Plate:\s*([^|]+)/)?.[1]?.trim() || 'VISITOR PASS';
+      } else if (spec.type === 'EMERGENCY') {
+        isEmergency = true;
+        emergencyLabel = spec.label || 'Emergency Response';
+      }
+    }
+  }
+
+  const isSpecial = isVisitor || isEmergency;
+  const status  = (card?.authorization_status === 'AUTHORIZED' || isSpecial) ? 'AUTHORIZED' : 'DENIED';
+  let remarks = card ? (status === 'AUTHORIZED' ? 'Manual entry – guard station' : 'Manual entry – not authorized') : 'Manual entry – unregistered';
+  if (isVisitor) {
+    remarks = `Visitor Entry: ${visitorName} | Plate: ${visitorPlate}`;
+  } else if (isEmergency) {
+    remarks = `Emergency Response: ${emergencyLabel}`;
+  }
+
+  // Determine whether this manual entry is for a Vehicle
+  const isVehicleCard = (card?.vehicles?.plate_number && card.vehicles.plate_number !== 'PEDESTRIAN' && card.vehicles.plate_number !== 'NONE' && card.vehicles.plate_number !== 'N/A') ||
+                        (card?.vehicles?.vehicle_type && card.vehicles.vehicle_type !== 'None' && card.vehicles.vehicle_type !== 'Walking / Pedestrian') ||
+                        (card?.user_type === 'VEHICLE') ||
+                        (isVisitor && visitorPlate && visitorPlate !== 'N/A' && visitorPlate !== 'VISITOR PASS');
+  const user_type = isVehicleCard ? 'VEHICLE' : 'PEDESTRIAN';
+  const rfid_type = isVehicleCard ? 'LONG_RANGE' : 'CLOSE_RANGE';
+  const gateName  = isVehicleCard ? 'ENTRY_GATE' : 'CHARRMPASS_GATE_ENTRY';
 
   // Insert transaction
   const { data: txn, error } = await supabaseClient
@@ -390,20 +516,26 @@ async function processManual() {
     .insert({
       rfid_uid:   uid,
       direction:  GATE_DIRECTION,
-      gate:       'CHARRMPASS_GATE_ENTRY',
+      gate:       gateName,
+      user_type:  user_type,
+      rfid_type:  rfid_type,
       vehicle_id: card?.vehicle_id || null,
       user_id:    card?.user_id    || null,
       status,
-      remarks
+      remarks: card ? `${remarks} (${isVehicleCard ? 'Vehicle' : 'Pedestrian'})` : remarks
     })
     .select(`
-      id, rfid_uid, direction, status, timestamp, remarks,
+      id, rfid_uid, direction, status, timestamp, remarks, user_type, rfid_type,
       users   ( full_name, role, program, section ),
-      vehicles( plate_number, vehicle_type, vehicle_model )
+      vehicles( plate_number, vehicle_type, vehicle_model, vehicle_color )
     `)
     .single();
 
-  if (error) { showToast('DB error: ' + error.message, 'error'); return; }
+  if (error) {
+    showToast('DB error: ' + error.message, 'error');
+    setTrafficLightUI('standby');
+    return;
+  }
 
   handleNewTransaction(txn);
   showToast(status === 'AUTHORIZED' ? 'Entry granted!' : 'Access denied.', status === 'AUTHORIZED' ? 'success' : 'error');
