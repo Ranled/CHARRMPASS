@@ -154,6 +154,70 @@ ALTER TABLE public.transactions DROP CONSTRAINT IF EXISTS transactions_status_ch
 ALTER TABLE public.transactions ADD CONSTRAINT transactions_status_check CHECK (status IN ('AUTHORIZED', 'DENIED', 'PENDING', 'PENDING_CONFIRMATION'));
 
 -- ============================================================
+-- 4.1 OPTION A: SELF-HEALING RE-ENTRY TRIGGER (ZERO TIMERS)
+--     When an AUTHORIZED ENTRY is logged and the cardholder's
+--     previous session was an unclosed ENTRY (> 30s ago),
+--     automatically create an AUTO_RESOLVED_EXIT right before the new entry.
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.handle_self_healing_reentry()
+RETURNS TRIGGER AS $$
+DECLARE
+    last_tx RECORD;
+BEGIN
+    -- Only evaluate on newly inserted AUTHORIZED ENTRY transactions
+    -- Skip system auto-resolved exits to avoid any recursion
+    IF NEW.direction = 'ENTRY' AND NEW.status = 'AUTHORIZED' AND (NEW.remarks IS NULL OR NEW.remarks NOT LIKE '%[AUTO_RESOLVED_EXIT]%') THEN
+        -- Find the latest AUTHORIZED transaction for this RFID tag
+        SELECT t.id, t.direction, t.timestamp, t.gate, t.user_id, t.vehicle_id, t.user_type, t.rfid_type
+        INTO last_tx
+        FROM public.transactions t
+        WHERE t.rfid_uid = NEW.rfid_uid
+          AND t.status = 'AUTHORIZED'
+        ORDER BY t.timestamp DESC
+        LIMIT 1;
+
+        -- If an unclosed ENTRY exists:
+        IF FOUND AND last_tx.direction = 'ENTRY' THEN
+            -- Apply 30-second debounce check
+            IF (COALESCE(NEW.timestamp, NOW()) - last_tx.timestamp) > INTERVAL '30 seconds' THEN
+                INSERT INTO public.transactions (
+                    rfid_uid,
+                    direction,
+                    gate,
+                    user_type,
+                    rfid_type,
+                    vehicle_id,
+                    user_id,
+                    status,
+                    timestamp,
+                    remarks
+                ) VALUES (
+                    NEW.rfid_uid,
+                    'EXIT',
+                    COALESCE(last_tx.gate, 'AUTO_RESOLVED_EXIT'),
+                    COALESCE(last_tx.user_type, NEW.user_type, 'PEDESTRIAN'),
+                    COALESCE(last_tx.rfid_type, NEW.rfid_type, 'CLOSE_RANGE'),
+                    COALESCE(last_tx.vehicle_id, NEW.vehicle_id),
+                    COALESCE(last_tx.user_id, NEW.user_id),
+                    'AUTHORIZED',
+                    COALESCE(NEW.timestamp, NOW()) - INTERVAL '1 second',
+                    '[AUTO_RESOLVED_EXIT] Unclosed session from ' || to_char(last_tx.timestamp AT TIME ZONE 'Asia/Manila', 'YYYY-MM-DD HH12:MI AM') || ' auto-closed upon re-entry'
+                );
+            END IF;
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_self_healing_reentry ON public.transactions;
+CREATE TRIGGER trg_self_healing_reentry
+    BEFORE INSERT ON public.transactions
+    FOR EACH ROW
+    EXECUTE FUNCTION public.handle_self_healing_reentry();
+
+-- ============================================================
 -- 5. SPECIAL TAGS TABLE (Visitor & Emergency passes)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS public.special_tags (

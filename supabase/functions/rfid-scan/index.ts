@@ -280,46 +280,36 @@ serve(async (req) => {
     if (direction === 'ENTRY') {
       if (lastTxn && lastTxn.direction === 'ENTRY') {
         const prevEntryDate = new Date(lastTxn.timestamp)
+        const elapsedSec = Math.floor((now.getTime() - prevEntryDate.getTime()) / 1000)
         const prevTimeStr = prevEntryDate.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' })
         const prevDateStr = prevEntryDate.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit' })
         const formattedStamp = `${prevTimeStr} ${prevDateStr}`
 
+        if (elapsedSec >= 0 && elapsedSec < 30) {
+          // Rapid double-tap debounce rejection (< 30s)
+          return new Response(JSON.stringify({
+            status:  'WAIT_COOLDOWN',
+            message: `Double-scan suppressed. Please wait ${30 - elapsedSec}s before scanning again.`,
+            plate:   plate,
+            ...lcdPayload('PLEASE WAIT', `COOLDOWN ${30 - elapsedSec}s`, plate, 'ALREADY SCANNED')
+          }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 429 })
+        }
+
+        // ─── OPTION A: SELF-HEALING NEXT-DAY / RE-ENTRY RESOLUTION ──────────────
+        // The user entered previously without logging an exit (commuter or overnight resident).
+        // Automatically close the prior unclosed session with an AUTO_RESOLVED_EXIT so campus
+        // occupancy headcounts remain accurate, and proceed to grant the new ENTRY pass!
         await supabase.from('transactions').insert({
           rfid_uid:   uid,
           vehicle_id: vehicle?.id || null,
           user_id:    user?.id    || null,
-          direction:  'ENTRY',
-          gate:       device_id   || direction,
+          direction:  'EXIT',
+          gate:       'AUTO_RESOLVED_EXIT',
           user_type:  userType,
           rfid_type:  rfidType,
-          status:     'PENDING_CONFIRMATION',
-          remarks:    `Duplicate entry scan - already inside since ${formattedStamp}`
+          status:     'AUTHORIZED',
+          remarks:    `[AUTO_RESOLVED_EXIT] Unclosed session from ${formattedStamp} auto-closed upon re-entry`
         })
-
-        return new Response(JSON.stringify({
-          status:          'ALREADY_INSIDE',
-          action:          'ENTRY_ALERT',
-          message:         `Already granted entry at ${formattedStamp}. Guard confirmation needed.`,
-          previous_entry:  lastTxn.timestamp,
-          plate:           plate,
-          user_type:       userType,
-          rfid_type:       rfidType,
-          user: {
-            name:          user?.full_name,
-            cpass_id:      user?.cpass_id || user?.student_id,
-            role:          user?.role,
-            program:       user?.program,
-            section:       user?.section,
-            profile_image: user?.profile_image,
-          },
-          vehicle: {
-            type:  vehicle?.vehicle_type,
-            model: vehicle?.vehicle_model,
-            plate: plate,
-            color: vehicle?.vehicle_color,
-          },
-          ...lcdPayload('ALREADY ENTERED', 'INSIDE SINCE:', formattedStamp, 'WAIT FOR GUARD')
-        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
       }
     } else if (direction === 'EXIT') {
       if (!lastTxn) {

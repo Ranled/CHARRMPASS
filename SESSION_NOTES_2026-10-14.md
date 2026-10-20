@@ -61,31 +61,27 @@ Students frequently leave campus without tapping out (walking through open vehic
 
 ---
 
-## 🚀 Recommended Solutions for Tomorrow
-
-### Option A: "Self-Healing" Next-Day Re-Entry *(Recommended - Zero Timers)*
-- When a student taps at the **Entry Gate**:
-  - If their previous recorded transaction was an unclosed `ENTRY` from yesterday or days ago:
-  - The system recognizes they entered previously without logging an exit.
-  - Automatically marks the old session as `AUTO_RESOLVED_EXIT` (or logs a virtual exit) and opens the new entry.
-- **Why it works**: Works identically for commuters and hostel students without guessing or using arbitrary timers.
-
-### Option B: Commuter vs. Resident (Hostel) Classification
-- Add a resident tag / role check (e.g., `role_detail = 'Hostel Resident'`).
-- **Commuters**: Expire from the active roster after 16–20 hours if no exit is recorded.
-- **Hostel Residents**: Remain inside until they physically exit or re-enter.
-
-### Option C: Admin Dashboard "End-of-Day Sweep" & Overnight Badges
-- In [`admin-dashboard.html`](file:///c:/Users/User/Desktop/THESIS%20-%20CHARRMPASS/admin-dashboard.html#L890-L910) on the Inside Campus roster:
-  - Add duration badges:
-    - 🟢 `Active (< 12h)`
-    - 🟡 `Overnight / Hostel (12h - 48h)`
-    - 🔴 `Unclosed Visit (> 48h)`
-  - Add a **"Clear Overnight Roster"** button or individual **"Sign Out"** button per row for manual administrative control.
+## 🚀 Implemented Solution: Option A ("Self-Healing" Next-Day Re-Entry)
+- **Status**: ✅ **IMPLEMENTED & DEPLOYED**
+- **How it works**:
+  - When a student taps at the **Entry Gate**:
+    - If their previous recorded transaction was an unclosed `ENTRY` (> 30s debounce):
+    - The system detects they left campus previously without logging an exit.
+    - **Self-Healing Resolution**: Automatically logs an `[AUTO_RESOLVED_EXIT]` transaction right before the new entry, pairing and closing the previous phantom visit.
+    - **Immediate Access**: Authorizes the new `ENTRY` pass without delay or manual guard override.
+- **Why it is superior**:
+  - **Zero timers**: No arbitrary cron jobs or timeouts that prematurely expel dorm/hostel students.
+  - **100% Data Integrity**: Retains full audit logs; does not delete history.
+  - **Multi-layer defense**:
+    1. Edge Function (`supabase/functions/rfid-scan/index.ts`)
+    2. Guard Station Dashboard (`guard-app.js`)
+    3. Entry Kiosk App (`entry-app.js`)
+    4. Database Trigger (`supabase/schema.sql` `trg_self_healing_reentry`)
+    5. Admin Audit Trail (`admin-app.js` with `AUTO EXIT` badge)
 
 ---
 
-## 📋 Checklist for Tomorrow
-- [ ] Fix the Yellow History Banner styling in `guard-dashboard.html` / `guard-app.js` (make green on verified scans or hide).
-- [ ] Review Option A (Self-Healing Re-Entry) vs Option C (Overnight Badges & Sweep).
-- [ ] Test the 30-second debounce on the physical ESP32 boards.
+## 📋 Checklist
+- [x] Fix the Yellow History Banner styling in `guard-dashboard.html` / `guard-app.js` (dynamic Emerald Green for Entry, Sky Blue for Exit).
+- [x] Implement Option A: "Self-Healing" Next-Day Re-Entry (Zero Timers) across database trigger, Edge Function, Guard Station, Entry Kiosk, and Admin Dashboard.
+- [x] Test 30-second debounce window on Entry & Exit gates.

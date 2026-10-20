@@ -26,15 +26,22 @@
                 window.location.href = 'index.html';
                 return;
             }
-            const s = JSON.parse(session);
-            if (s.role !== 'ADMIN' && s.role !== 'GUARD') {
+            try {
+                const s = JSON.parse(session);
+                if (s.role !== 'ADMIN' && s.role !== 'GUARD') {
+                    window.location.href = 'index.html';
+                    return;
+                }
+            } catch(e) {
                 window.location.href = 'index.html';
-                return;
             }
         })();
     </script>
 </head>
 <body class="bg-gray-100 text-slate-800 font-sans min-h-screen campus-bg relative overflow-y-auto overflow-x-hidden">
+    <!-- Notification Toast Container -->
+    <div id="toastContainer" class="fixed top-5 right-5 z-50 flex flex-col gap-3 pointer-events-none"></div>
+
     <div class="fixed inset-0 bg-white/80 backdrop-blur-xl z-0 pointer-events-none"></div>
     <div class="relative z-10 min-h-screen flex flex-col pb-12">
         <header class="glass-header border-b border-white/40 px-6 py-4 flex items-center justify-between shadow-sm">
@@ -59,7 +66,7 @@
             <div class="flex justify-between items-center mb-8">
                 <div>
                     <h2 class="font-display font-extrabold text-3xl text-slate-800">System Settings</h2>
-                    <p class="text-slate-500 text-sm font-medium mt-1">Configure dual-gate hardware gateways, alerts, and account credentials.</p>
+                    <p class="text-slate-500 text-sm font-medium mt-1">Configure campus security alerts, administrator credentials, and emergency recovery keys.</p>
                 </div>
             </div>
 
@@ -68,75 +75,20 @@
                 <h3 class="font-display font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
                     <i data-lucide="info" class="w-5 h-5 text-charm-dark"></i> System Status
                 </h3>
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div class="p-3 bg-white/60 rounded-xl border border-slate-100">
-                        <div class="text-[10px] font-bold text-slate-400 uppercase">System</div>
-                        <div class="text-sm font-bold text-slate-800 mt-1">CHARRMPASS 2.0</div>
-                    </div>
-                    <div class="p-3 bg-white/60 rounded-xl border border-slate-100">
-                        <div class="text-[10px] font-bold text-slate-400 uppercase">Database</div>
-                        <div class="text-sm font-bold text-green-600 mt-1" id="settingsDbStatus">Connected</div>
-                    </div>
-                    <div class="p-3 bg-white/60 rounded-xl border border-slate-100">
-                        <div class="text-[10px] font-bold text-slate-400 uppercase">Entry Gate</div>
-                        <div class="text-sm font-bold text-green-600 mt-1" id="settingsEntryStatus">Online (Ready)</div>
-                    </div>
-                    <div class="p-3 bg-white/60 rounded-xl border border-slate-100">
-                        <div class="text-[10px] font-bold text-slate-400 uppercase">Exit Gate</div>
-                        <div class="text-sm font-bold text-blue-600 mt-1" id="settingsExitStatus">Online (Ready)</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Dual-Gate ESP32 Hardware Configuration -->
-            <div class="settings-card mb-6 admin-only bg-white/80 backdrop-blur-md rounded-3xl p-6 border border-white/60 shadow-glass">
-                <h3 class="font-display font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
-                    <i data-lucide="cpu" class="w-5 h-5 text-charm-dark"></i> Dual-Gate ESP32 Gateways
-                </h3>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
-                    <!-- Entry Gate Reader -->
-                    <div class="p-4 rounded-2xl bg-green-50/50 border border-green-200">
-                        <div class="flex items-center gap-2 text-xs font-bold text-green-800 uppercase mb-3">
-                            <i data-lucide="log-in" class="w-4 h-4 text-green-600"></i> Entry Gate Reader
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="p-4 bg-white/60 rounded-xl border border-slate-100 flex items-center justify-between">
+                        <div>
+                            <div class="text-[10px] font-bold text-slate-400 uppercase">System Platform</div>
+                            <div class="text-base font-bold text-slate-800 mt-0.5">CHARRMPASS 2.0</div>
                         </div>
-                        <div class="space-y-3">
-                            <div>
-                                <label class="text-[10px] font-bold uppercase text-slate-400 block mb-1">Device Name</label>
-                                <input type="text" class="form-input text-sm" value="Campus Main Entrance Gate" id="entryGateName">
-                            </div>
-                            <div>
-                                <label class="text-[10px] font-bold uppercase text-slate-400 block mb-1">ESP32 Identifier</label>
-                                <input type="text" class="form-input text-sm font-mono" value="ESP32-CHARRMPASS-ENTRY" id="entryGateId">
-                            </div>
-                        </div>
+                        <span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">Production</span>
                     </div>
-
-                    <!-- Exit Gate Reader -->
-                    <div class="p-4 rounded-2xl bg-blue-50/50 border border-blue-200">
-                        <div class="flex items-center gap-2 text-xs font-bold text-blue-800 uppercase mb-3">
-                            <i data-lucide="log-out" class="w-4 h-4 text-blue-600"></i> Exit Gate Reader
+                    <div class="p-4 bg-white/60 rounded-xl border border-slate-100 flex items-center justify-between">
+                        <div>
+                            <div class="text-[10px] font-bold text-slate-400 uppercase">Supabase Cloud Database</div>
+                            <div class="text-base font-bold text-green-600 mt-0.5" id="settingsDbStatus">Connecting...</div>
                         </div>
-                        <div class="space-y-3">
-                            <div>
-                                <label class="text-[10px] font-bold uppercase text-slate-400 block mb-1">Device Name</label>
-                                <input type="text" class="form-input text-sm" value="Campus Main Departure Gate" id="exitGateName">
-                            </div>
-                            <div>
-                                <label class="text-[10px] font-bold uppercase text-slate-400 block mb-1">ESP32 Identifier</label>
-                                <input type="text" class="form-input text-sm font-mono" value="ESP32-CHARRMPASS-EXIT" id="exitGateId">
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-slate-100">
-                    <div>
-                        <label class="text-xs font-bold text-slate-500 block mb-1">Scan Cooldown (Seconds)</label>
-                        <input type="number" class="form-input" value="3" id="scanCooldown" min="1" max="15">
-                    </div>
-                    <div>
-                        <label class="text-xs font-bold text-slate-500 block mb-1">WiFi SSID (Firmware Reference)</label>
-                        <input type="text" class="form-input" value="FTTx-4a6210" id="wifiSSID">
+                        <span class="w-3 h-3 rounded-full bg-emerald-500 animate-pulse"></span>
                     </div>
                 </div>
             </div>
@@ -174,9 +126,9 @@
             <!-- System Accounts (RBAC) -->
             <div class="settings-card mb-6 admin-only bg-white/80 backdrop-blur-md rounded-3xl p-6 border border-white/60 shadow-glass">
                 <h3 class="font-display font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
-                    <i data-lucide="shield-check" class="w-5 h-5 text-charm-dark"></i> System Accounts &amp; Credentials
+                    <i data-lucide="shield-check" class="w-5 h-5 text-charm-dark"></i> Administrator Credentials &amp; Recovery
                 </h3>
-                <div class="space-y-6">
+                <div class="space-y-5">
                     <!-- Admin Account -->
                     <div class="p-4 bg-white/60 rounded-2xl border border-slate-100">
                         <div class="flex items-center gap-3 mb-4">
@@ -185,18 +137,18 @@
                             </div>
                             <div>
                                 <div class="text-sm font-bold text-slate-800">Administrator Account</div>
-                                <div class="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Full Control &amp; Approvals</div>
+                                <div class="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Full Administrative Access</div>
                             </div>
                         </div>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="text-xs font-bold text-slate-500 block mb-1">Admin Username</label>
-                                <input type="text" class="form-input" id="adminUsername" value="admin">
+                                <input type="text" class="form-input" id="adminUsername" value="admin" placeholder="e.g. admin">
                             </div>
                             <div>
                                 <label class="text-xs font-bold text-slate-500 block mb-1">Admin Password</label>
                                 <div class="relative">
-                                    <input type="password" class="form-input pr-12" id="adminPassword" value="admin123">
+                                    <input type="password" class="form-input pr-12" id="adminPassword" value="" placeholder="Enter new password">
                                     <button type="button" onclick="togglePass('adminPassword', this)" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-charm-dark">
                                         <i data-lucide="eye" class="w-4 h-4"></i>
                                     </button>
@@ -205,31 +157,28 @@
                         </div>
                     </div>
 
-                    <!-- Guard Account -->
-                    <div class="p-4 bg-white/60 rounded-2xl border border-slate-100">
-                        <div class="flex items-center gap-3 mb-4">
-                            <div class="w-10 h-10 bg-green-100 text-green-700 rounded-xl flex items-center justify-center">
-                                <i data-lucide="shield" class="w-5 h-5"></i>
+                    <!-- Emergency Master Recovery Key -->
+                    <div class="p-4 bg-amber-50/70 rounded-2xl border border-amber-200/90">
+                        <div class="flex items-center gap-3 mb-3">
+                            <div class="w-10 h-10 bg-amber-100 text-amber-700 rounded-xl flex items-center justify-center">
+                                <i data-lucide="key-round" class="w-5 h-5"></i>
                             </div>
                             <div>
-                                <div class="text-sm font-bold text-slate-800">Security Guard Account</div>
-                                <div class="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Dual-Gate Monitor &amp; Scans</div>
+                                <div class="text-sm font-bold text-slate-800">Master Emergency Recovery Key</div>
+                                <div class="text-[10px] text-amber-800 font-bold uppercase tracking-widest">Self-Service Password Recovery</div>
                             </div>
                         </div>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <label class="text-xs font-bold text-slate-500 block mb-1">Guard Username</label>
-                                <input type="text" class="form-input" id="guardUsername" value="guard">
+                        <div>
+                            <label class="text-xs font-bold text-slate-600 block mb-1">Thesis Master Secret Key</label>
+                            <div class="relative">
+                                <input type="password" class="form-input pr-12 font-mono text-sm" id="masterRecoveryKey" placeholder="e.g. CHARRMPASS-MASTER-2026">
+                                <button type="button" onclick="togglePass('masterRecoveryKey', this)" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-charm-dark">
+                                    <i data-lucide="eye" class="w-4 h-4"></i>
+                                </button>
                             </div>
-                            <div>
-                                <label class="text-xs font-bold text-slate-500 block mb-1">Guard Password</label>
-                                <div class="relative">
-                                    <input type="password" class="form-input pr-12" id="guardPassword" value="guard123">
-                                    <button type="button" onclick="togglePass('guardPassword', this)" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-charm-dark">
-                                        <i data-lucide="eye" class="w-4 h-4"></i>
-                                    </button>
-                                </div>
-                            </div>
+                            <p class="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
+                                Used on the login screen if you forget your password. No code needed—type your secret key here and click <strong>Save Settings</strong>.
+                            </p>
                         </div>
                     </div>
                 </div>
@@ -238,8 +187,9 @@
             <!-- Save Buttons -->
             <div class="flex justify-end gap-3 mb-10">
                 <button onclick="history.back()" class="px-6 py-3 rounded-xl bg-white border border-slate-200 text-sm font-bold text-slate-600 hover:bg-slate-50 transition-colors">Cancel</button>
-                <button onclick="saveSettings()" class="px-6 py-3 rounded-xl bg-charm-dark text-white text-sm font-bold hover:bg-opacity-90 shadow-lg flex items-center gap-2 transition-all">
-                    <i data-lucide="save" class="w-4 h-4"></i> Save Settings
+                <button onclick="saveSettings()" id="saveSettingsBtn" class="px-6 py-3 rounded-xl bg-charm-dark text-white text-sm font-bold hover:bg-opacity-90 shadow-lg flex items-center gap-2 transition-all">
+                    <i data-lucide="save" class="w-4 h-4"></i>
+                    <span>Save Settings</span>
                 </button>
             </div>
         </div>
@@ -247,6 +197,35 @@
 
     <script>
         lucide.createIcons();
+
+        // Custom Toast Notification
+        function showToast(message, type = 'info') {
+            let container = document.getElementById('toastContainer');
+            if (!container) {
+                container = document.createElement('div');
+                container.id = 'toastContainer';
+                container.className = 'fixed top-5 right-5 z-50 flex flex-col gap-3 pointer-events-none';
+                document.body.appendChild(container);
+            }
+            const toast = document.createElement('div');
+            const bgColor = type === 'error' ? 'bg-red-600 text-white' : (type === 'success' ? 'bg-emerald-700 text-white' : 'bg-slate-800 text-white');
+            const iconName = type === 'error' ? 'alert-circle' : (type === 'success' ? 'check-circle' : 'info');
+
+            toast.className = `${bgColor} px-4 py-3 rounded-xl shadow-xl flex items-center gap-2.5 text-xs md:text-sm font-medium transition-all duration-200 transform translate-x-full pointer-events-auto max-w-sm`;
+            toast.innerHTML = `<i data-lucide="${iconName}" class="w-4 h-4 flex-shrink-0"></i><span>${message}</span>`;
+
+            container.appendChild(toast);
+            if (window.lucide) lucide.createIcons();
+
+            requestAnimationFrame(() => {
+                toast.classList.remove('translate-x-full');
+            });
+
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'translate-x-full');
+                setTimeout(() => toast.remove(), 250);
+            }, 3500);
+        }
 
         function togglePass(id, btn) {
             const input = document.getElementById(id);
@@ -258,96 +237,146 @@
         }
 
         async function loadSettings() {
-            // 1. Load from localStorage
+            // 1. Load sound alerts from localStorage
             const saved = localStorage.getItem('charrmpass_settings');
             if (saved) {
                 try {
                     const s = JSON.parse(saved);
-                    if (s.entryGateName) document.getElementById('entryGateName').value = s.entryGateName;
-                    if (s.entryGateId) document.getElementById('entryGateId').value = s.entryGateId;
-                    if (s.exitGateName) document.getElementById('exitGateName').value = s.exitGateName;
-                    if (s.exitGateId) document.getElementById('exitGateId').value = s.exitGateId;
-                    if (s.scanCooldown) document.getElementById('scanCooldown').value = s.scanCooldown;
-                    if (s.soundAuth !== undefined) document.getElementById('toggleSoundAuth').checked = s.soundAuth;
-                    if (s.soundDenied !== undefined) document.getElementById('toggleSoundDenied').checked = s.soundDenied;
-                    if (s.dupAlert !== undefined) document.getElementById('toggleDupAlert').checked = s.dupAlert;
+                    if (s.soundAuth !== undefined && document.getElementById('toggleSoundAuth')) document.getElementById('toggleSoundAuth').checked = s.soundAuth;
+                    if (s.soundDenied !== undefined && document.getElementById('toggleSoundDenied')) document.getElementById('toggleSoundDenied').checked = s.soundDenied;
+                    if (s.dupAlert !== undefined && document.getElementById('toggleDupAlert')) document.getElementById('toggleDupAlert').checked = s.dupAlert;
                 } catch(e){}
             }
 
-            // 2. Load accounts from Supabase
-            if (isConnected) {
-                try {
-                    const { data: accounts } = await supabaseClient.from('system_accounts').select('*');
-                    if (accounts) {
-                        accounts.forEach(acc => {
-                            if (acc.role === 'ADMIN' && document.getElementById('adminUsername')) {
-                                document.getElementById('adminUsername').value = acc.username || 'admin';
-                                document.getElementById('adminPassword').value = acc.password || '';
-                            }
-                            if (acc.role === 'GUARD' && document.getElementById('guardUsername')) {
-                                document.getElementById('guardUsername').value = acc.username || 'guard';
-                                document.getElementById('guardPassword').value = acc.password || '';
-                            }
-                        });
-                    }
-                } catch(err) {
-                    console.error('Error fetching system accounts:', err);
-                }
+            // 2. Load Master Recovery Key
+            const savedMasterKey = localStorage.getItem('charrmpass_master_key') || (typeof MASTER_RECOVERY_KEY !== 'undefined' ? MASTER_RECOVERY_KEY : 'CHARRMPASS-MASTER-2026');
+            const masterKeyInput = document.getElementById('masterRecoveryKey');
+            if (masterKeyInput) {
+                masterKeyInput.value = savedMasterKey;
             }
 
-            // Guard UI restrictions
-            const session = JSON.parse(sessionStorage.getItem('charrmpass_session'));
-            if (session && session.role === 'GUARD') {
-                document.querySelectorAll('.admin-only').forEach(el => el.classList.add('hidden'));
+            // 3. Load Admin credentials from Supabase
+            const client = (typeof supabaseClient !== 'undefined' && supabaseClient) ? supabaseClient : null;
+            if (client) {
+                try {
+                    const { data: adminAcc, error: accErr } = await client
+                        .from('system_accounts')
+                        .select('username, password')
+                        .eq('role', 'ADMIN')
+                        .maybeSingle();
+
+                    if (adminAcc) {
+                        if (document.getElementById('adminUsername')) document.getElementById('adminUsername').value = adminAcc.username || 'admin';
+                        if (document.getElementById('adminPassword')) document.getElementById('adminPassword').value = adminAcc.password || '';
+                    }
+
+                    const dbStatus = document.getElementById('settingsDbStatus');
+                    if (dbStatus) {
+                        dbStatus.textContent = 'Connected (Live)';
+                        dbStatus.className = 'text-base font-bold text-emerald-600 mt-0.5';
+                    }
+                } catch(err) {
+                    console.error('Error fetching admin account:', err);
+                    const dbStatus = document.getElementById('settingsDbStatus');
+                    if (dbStatus) {
+                        dbStatus.textContent = 'Connection Error';
+                        dbStatus.className = 'text-base font-bold text-red-500 mt-0.5';
+                    }
+                }
+            } else {
+                const dbStatus = document.getElementById('settingsDbStatus');
+                if (dbStatus) {
+                    dbStatus.textContent = 'Offline / Local';
+                    dbStatus.className = 'text-base font-bold text-amber-500 mt-0.5';
+                }
             }
         }
 
         async function saveSettings() {
+            const saveBtn = document.getElementById('saveSettingsBtn');
+            const originalContent = saveBtn ? saveBtn.innerHTML : 'Save Settings';
+
+            // 1. Save sound alerts to localStorage
             const settings = {
-                entryGateName: document.getElementById('entryGateName').value,
-                entryGateId: document.getElementById('entryGateId').value,
-                exitGateName: document.getElementById('exitGateName').value,
-                exitGateId: document.getElementById('exitGateId').value,
-                scanCooldown: document.getElementById('scanCooldown').value,
-                wifiSSID: document.getElementById('wifiSSID').value,
-                soundAuth: document.getElementById('toggleSoundAuth').checked,
-                soundDenied: document.getElementById('toggleSoundDenied').checked,
-                dupAlert: document.getElementById('toggleDupAlert').checked
+                soundAuth: document.getElementById('toggleSoundAuth')?.checked ?? true,
+                soundDenied: document.getElementById('toggleSoundDenied')?.checked ?? true,
+                dupAlert: document.getElementById('toggleDupAlert')?.checked ?? true
             };
             localStorage.setItem('charrmpass_settings', JSON.stringify(settings));
 
+            // 2. Save Master Recovery Key to localStorage
+            const newMasterKey = document.getElementById('masterRecoveryKey')?.value.trim();
+            if (newMasterKey) {
+                localStorage.setItem('charrmpass_master_key', newMasterKey);
+                if (typeof window !== 'undefined') {
+                    window.MASTER_RECOVERY_KEY = newMasterKey;
+                }
+            }
+
+            // 3. Save Admin credentials to Supabase
             const adminU = document.getElementById('adminUsername')?.value.trim();
-            const adminP = document.getElementById('adminPassword')?.value.trim();
-            const guardU = document.getElementById('guardUsername')?.value.trim();
-            const guardP = document.getElementById('guardPassword')?.value.trim();
+            const adminP = document.getElementById('adminPassword')?.value;
 
-            if (isConnected) {
+            if (!adminU) {
+                showToast('Admin username cannot be blank.', 'error');
+                return;
+            }
+
+            if (adminP && adminP.length < 4) {
+                showToast('Password must be at least 4 characters long.', 'error');
+                return;
+            }
+
+            const client = (typeof supabaseClient !== 'undefined' && supabaseClient) ? supabaseClient : null;
+            if (client) {
                 try {
-                    showToast('Saving settings & updating credentials in database...', 'info');
+                    if (saveBtn) {
+                        saveBtn.disabled = true;
+                        saveBtn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 animate-spin inline-block mr-1"></i> Saving...';
+                        if (window.lucide) lucide.createIcons();
+                    }
+
                     const now = new Date().toISOString();
-
-                    if (adminU && adminP) {
-                        const { error: aErr } = await supabaseClient.from('system_accounts').upsert({
-                            username: adminU, password: adminP, role: 'ADMIN', updated_at: now
-                        }, { onConflict: 'role' });
-                        if (aErr) throw aErr;
+                    const updatePayload = {
+                        username: adminU,
+                        updated_at: now
+                    };
+                    if (adminP) {
+                        updatePayload.password = adminP;
                     }
 
-                    if (guardU && guardP) {
-                        const { error: gErr } = await supabaseClient.from('system_accounts').upsert({
-                            username: guardU, password: guardP, role: 'GUARD', updated_at: now
-                        }, { onConflict: 'role' });
-                        if (gErr) throw gErr;
+                    const { error: aErr } = await client
+                        .from('system_accounts')
+                        .update(updatePayload)
+                        .eq('role', 'ADMIN');
+
+                    if (aErr) throw aErr;
+
+                    // Update current active session username if logged in as ADMIN
+                    const sessionStr = sessionStorage.getItem('charrmpass_session');
+                    if (sessionStr) {
+                        try {
+                            const sess = JSON.parse(sessionStr);
+                            if (sess.role === 'ADMIN') {
+                                sess.username = adminU;
+                                sessionStorage.setItem('charrmpass_session', JSON.stringify(sess));
+                            }
+                        } catch(e) {}
                     }
 
-                    showToast('Settings & system credentials saved successfully!', 'success');
+                    showToast('Settings, Admin password, and Master Recovery Key saved successfully!', 'success');
                 } catch(e) {
                     console.error('Save error:', e);
-                    showToast('Database Error: ' + e.message, 'error');
-                    return;
+                    showToast('Database Error: ' + (e.message || 'Could not save credentials'), 'error');
+                } finally {
+                    if (saveBtn) {
+                        saveBtn.disabled = false;
+                        saveBtn.innerHTML = originalContent;
+                        if (window.lucide) lucide.createIcons();
+                    }
                 }
             } else {
-                showToast('Settings saved locally (Demo mode).', 'success');
+                showToast('Master Recovery Key and Alert settings saved locally.', 'success');
             }
         }
 

@@ -510,6 +510,43 @@ async function processManual() {
   const rfid_type = isVehicleCard ? 'LONG_RANGE' : 'CLOSE_RANGE';
   const gateName  = isVehicleCard ? 'ENTRY_GATE' : 'CHARRMPASS_GATE_ENTRY';
 
+  // ─── OPTION A: SELF-HEALING RE-ENTRY (AUTO-RESOLVED EXIT) ─────────────────
+  if (status === 'AUTHORIZED' && !isEmergency) {
+    try {
+      const { data: lastTxn } = await supabaseClient
+        .from('transactions')
+        .select('id, direction, timestamp, status')
+        .eq('rfid_uid', uid)
+        .eq('status', 'AUTHORIZED')
+        .order('timestamp', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (lastTxn && lastTxn.direction === 'ENTRY' && lastTxn.timestamp) {
+        const elapsedSec = Math.floor((Date.now() - new Date(lastTxn.timestamp).getTime()) / 1000);
+        if (elapsedSec >= 30) {
+          const prevEntryDate = new Date(lastTxn.timestamp);
+          const prevTimeStr = prevEntryDate.toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit' });
+          const prevDateStr = prevEntryDate.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit' });
+
+          await supabaseClient.from('transactions').insert({
+            rfid_uid: uid,
+            direction: 'EXIT',
+            gate: 'AUTO_RESOLVED_EXIT',
+            vehicle_id: card?.vehicle_id || null,
+            user_id: card?.user_id || null,
+            user_type: user_type,
+            rfid_type: rfid_type,
+            status: 'AUTHORIZED',
+            remarks: `[AUTO_RESOLVED_EXIT] Unclosed session from ${prevTimeStr} ${prevDateStr} auto-closed upon re-entry`
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('Self-healing check notice:', e);
+    }
+  }
+
   // Insert transaction
   const { data: txn, error } = await supabaseClient
     .from('transactions')

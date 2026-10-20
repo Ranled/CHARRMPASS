@@ -184,6 +184,11 @@ async function loadData() {
                 adminState.pendingUsers = [];
             }
 
+            // Sync academic programs dropdowns with users loaded from DB
+            if (typeof renderAcademicDataUI === 'function') {
+                renderAcademicDataUI();
+            }
+
             // 2. Load transactions with vehicle & user info (omit profile_image from batch 1000 logs)
             const { data: l, error: le } = await supabaseClient
                 .from('transactions')
@@ -566,7 +571,20 @@ function renderAdmin() {
         const progFilter = el('programFilter')?.value || '';
         const secFilter = el('sectionFilter')?.value || '';
         if (progFilter) {
-            filtered = filtered.filter(u => (u.program || '').toUpperCase() === progFilter.toUpperCase());
+            const pNorm = progFilter.toUpperCase().trim();
+            filtered = filtered.filter(u => {
+                const uProg = (u.program || '').toUpperCase().trim();
+                if (!uProg) return false;
+                if (uProg === pNorm) return true;
+                if (pNorm === 'BSCS' && (uProg.includes('COMPUTER SCIENCE') || uProg === 'BSCS')) return true;
+                if (pNorm === 'BSIT' && (uProg.includes('INFORMATION TECH') || uProg === 'BSIT')) return true;
+                if (pNorm === 'BSES' && (uProg.includes('ENVIRONMENTAL') || uProg === 'BSES')) return true;
+                if (pNorm === 'BEED' && (uProg.includes('ELEMENTARY') || uProg === 'BEED')) return true;
+                if (pNorm === 'BSED' && (uProg.includes('SECONDARY') || uProg === 'BSED')) return true;
+                if (pNorm === 'BSHM' && (uProg.includes('HOSPITALITY') || uProg === 'BSHM')) return true;
+                if (pNorm === 'BSCRIM' && (uProg.includes('CRIMINOLOGY') || uProg === 'BSCRIM')) return true;
+                return false;
+            });
         }
         if (secFilter) {
             filtered = filtered.filter(u => (u.section || '').toUpperCase() === secFilter.toUpperCase());
@@ -871,8 +889,9 @@ function renderAdmin() {
                 const dir      = l.direction || 'ENTRY';
                 const isEntry  = dir === 'ENTRY';
                 const isAuth   = l.status === 'AUTHORIZED';
+                const isAutoResolved = !isEntry && (l.gate === 'AUTO_RESOLVED_EXIT' || (l.remarks && l.remarks.includes('[AUTO_RESOLVED_EXIT]')));
                 const statusBg = isAuth ? 'bg-green-100 text-green-700' : (l.status === 'PENDING_CONFIRMATION' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700');
-                const gateName = l.gate || (isPed ? (isEntry ? 'PEDESTRIAN_IN' : 'PEDESTRIAN_OUT') : (isEntry ? 'VEHICLE_GATE_IN' : 'VEHICLE_GATE_OUT'));
+                const gateName = isAutoResolved ? 'Auto-Resolved Exit' : (l.gate || (isPed ? (isEntry ? 'PEDESTRIAN_IN' : 'PEDESTRIAN_OUT') : (isEntry ? 'VEHICLE_GATE_IN' : 'VEHICLE_GATE_OUT')));
 
                 return `
                     <tr class="hover:bg-white/60 border-b border-slate-100/50 transition-colors">
@@ -898,13 +917,17 @@ function renderAdmin() {
                             `}
                         </td>
                         <td class="p-4 text-center">
-                            <span class="px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase ${isEntry ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'}">${dir}</span>
+                            ${isAutoResolved ? `
+                                <span class="px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase bg-purple-100 text-purple-800 border border-purple-200 shadow-sm" title="${l.remarks || 'Auto-resolved unclosed prior session upon re-entry'}">AUTO EXIT</span>
+                            ` : `
+                                <span class="px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase ${isEntry ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'}">${dir}</span>
+                            `}
                         </td>
                         <td class="p-4 text-center">
                             <span class="px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase ${statusBg}">${l.status || '--'}</span>
                         </td>
                         <td class="p-4 text-right">
-                            <span class="text-xs font-bold font-mono ${gateName.includes('ENTRY') || gateName.includes('IN') ? 'text-emerald-600' : 'text-blue-600'}">${gateName}</span>
+                            <span class="text-xs font-bold font-mono ${isAutoResolved ? 'text-purple-600' : (gateName.includes('ENTRY') || gateName.includes('IN') ? 'text-emerald-600' : 'text-blue-600')}">${gateName}</span>
                         </td>
                     </tr>
                 `;
@@ -939,31 +962,12 @@ function renderAdmin() {
         }
     }
 
-    // Special Tags
-    if (el('specialTagsTable')) {
-        const table = el('specialTagsTable');
-        if (adminState.specialTags.length) {
-            table.innerHTML = adminState.specialTags.map(t => {
-                const typeClass = t.type === 'VISITOR' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700';
-                return `
-                    <tr class="hover:bg-white/60 border-b border-slate-100/50 transition-colors">
-                        <td class="p-4 font-mono font-bold text-slate-700">${t.rfid_uid}</td>
-                        <td class="p-4"><span class="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${typeClass}">${t.type}</span></td>
-                        <td class="p-4 text-slate-500">${t.description || '--'}</td>
-                        <td class="p-4 text-right whitespace-nowrap">
-                            <button onclick="editSpecialTag('${t.id}')" class="p-2 text-slate-400 hover:text-charm-dark transition-colors inline-block" title="Edit Tag">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
-                            </button>
-                            <button onclick="deleteSpecialTag('${t.id}')" class="p-2 text-slate-400 hover:text-red-500 transition-colors inline-block ml-1" title="Delete Tag">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
-                            </button>
-                        </td>
-                    </tr>
-                `;
-            }).join('');
-        } else {
-            table.innerHTML = '<tr><td colspan="4" class="p-8 text-center text-slate-400">No special tags configured</td></tr>';
-        }
+    // Special Tags & Visitor Management Hub
+    if (typeof window.renderSpecialTags === 'function') {
+        window.renderSpecialTags();
+    }
+    if (typeof window.renderVisitorHistoryTable === 'function') {
+        window.renderVisitorHistoryTable();
     }
     
     if (window.lucide && typeof lucide.createIcons === 'function') {
@@ -1824,16 +1828,21 @@ function renderAnalytics() {
     // 1. Primary Top 4 Statistics
     const entries = filteredLogs.filter(l => l.direction === 'ENTRY' && l.status === 'AUTHORIZED');
     const exits = filteredLogs.filter(l => l.direction === 'EXIT' && l.status === 'AUTHORIZED');
-    const uniquePlates = new Set();
+    const uniqueEntrants = new Set();
     filteredLogs.forEach(l => {
-        const plate = l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || l.rfid_uid;
-        if (plate && plate !== '--' && plate !== 'N/A') uniquePlates.add(plate.toUpperCase());
+        const entrantKey = l.user_id || 
+            (l.vehicles?.plate_number && l.vehicles.plate_number !== 'N/A' && l.vehicles.plate_number !== 'PEDESTRIAN' && l.vehicles.plate_number !== '--' && l.vehicles.plate_number) ||
+            l.rfid_uid ||
+            (l.remarks && l.remarks.match(/Visitor (?:Entry|Exit):\s*([^|]+)/i)?.[1]?.trim());
+        if (entrantKey && entrantKey !== '--' && entrantKey !== 'N/A') {
+            uniqueEntrants.add(entrantKey.toString().toUpperCase());
+        }
     });
     
     const totalEntries = entries.length;
     const totalExits = exits.length;
-    const uniqueCount = uniquePlates.size;
-    const activeInside = typeof adminState.activeVehicles === 'number' ? adminState.activeVehicles : Math.max(0, totalEntries - totalExits);
+    const uniqueCount = uniqueEntrants.size;
+    const activeInside = window.currentInsideRoster ? window.currentInsideRoster.length : (typeof adminState.activeVehicles === 'number' ? (adminState.activeVehicles + (adminState.activePedestrians || 0)) : Math.max(0, totalEntries - totalExits));
 
     if (el('anStatEntries')) el('anStatEntries').textContent = totalEntries.toLocaleString();
     if (el('anStatExits')) el('anStatExits').textContent = totalExits.toLocaleString();
@@ -2025,42 +2034,90 @@ function renderAnalytics() {
         if (el('longestStayTime')) el('longestStayTime').textContent = `Entered: ${enterTime.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}`;
     } else {
         if (el('longestStayDuration')) el('longestStayDuration').textContent = '--';
-        if (el('longestStayOwner')) el('longestStayOwner').textContent = 'No active vehicles';
+        if (el('longestStayOwner')) el('longestStayOwner').textContent = 'No occupants currently inside';
         if (el('longestStayPlate')) el('longestStayPlate').textContent = 'Plate: --';
         if (el('longestStayTime')) el('longestStayTime').textContent = 'Entered: --';
     }
 
-    // 5. Top Frequent Vehicles
-    const vehicleVisits = {};
+    // 5. Top Frequent Transit & Vehicles (Pedestrians, Visitors, and Drivers)
+    const transitVisits = {};
     filteredLogs.forEach(l => {
-        const plate = l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim());
-        if (!plate || plate === '--' || plate === 'N/A') return;
-        if (!vehicleVisits[plate]) {
-            vehicleVisits[plate] = {
-                plate: plate,
-                owner: l.users?.full_name || (l.remarks && l.remarks.match(/Visitor (?:Entry|Exit):\s*([^|]+)/i)?.[1]?.trim()) || 'Authorized User',
-                type: l.vehicles?.vehicle_type || 'Vehicle',
+        // Skip denied / unregistered card attempts from frequent transit rankings
+        if (l.status === 'DENIED') return;
+
+        let u = l.users;
+        if (!u && l.user_id && adminState.users) {
+            u = adminState.users.find(x => x.id === l.user_id);
+        }
+        if (!u && l.rfid_uid && adminState.users) {
+            const clean = (l.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+            u = adminState.users.find(x => {
+                const uUid = (x.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+                if (uUid && uUid === clean) return true;
+                return (x.rfid_cards || []).some(c => (c.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase() === clean);
+            });
+        }
+
+        const rawPlate = l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim());
+        const hasRealPlate = rawPlate && rawPlate !== '--' && rawPlate !== 'N/A' && rawPlate !== 'PEDESTRIAN' && rawPlate !== 'NONE';
+        
+        let ownerName = u?.full_name;
+        if (!ownerName && l.remarks) {
+            const match = l.remarks.match(/Visitor (?:Entry|Exit):\s*([^|]+)/i);
+            if (match) ownerName = match[1].trim();
+        }
+
+        // Only include if there is a known user, vehicle, or verified visitor
+        if (!u && !hasRealPlate && (!l.remarks || !l.remarks.includes('Visitor')) && !l.is_emergency) {
+            return;
+        }
+
+        if (!ownerName) ownerName = hasRealPlate ? 'Vehicle Driver' : ('Entrant ' + (l.rfid_uid ? l.rfid_uid.slice(-6) : ''));
+
+        const key = hasRealPlate ? `VEH_${rawPlate.toUpperCase()}` : `PED_${(u?.id || l.rfid_uid || ownerName)}`;
+        const transitLabel = hasRealPlate ? rawPlate.toUpperCase() : 'Walking / Pedestrian';
+        const transitType = hasRealPlate ? (l.vehicles?.vehicle_type || 'Vehicle') : 'Pedestrian';
+
+        if (!transitVisits[key]) {
+            transitVisits[key] = {
+                identifier: transitLabel,
+                owner: ownerName,
+                isVehicle: hasRealPlate,
+                type: transitType,
                 visits: 0,
                 lastScan: l.timestamp
             };
         }
-        vehicleVisits[plate].visits++;
+        transitVisits[key].visits++;
+        if (new Date(l.timestamp) > new Date(transitVisits[key].lastScan)) {
+            transitVisits[key].lastScan = l.timestamp;
+        }
     });
 
-    const topVehicles = Object.values(vehicleVisits).sort((a, b) => b.visits - a.visits).slice(0, 5);
+    const topTransit = Object.values(transitVisits).sort((a, b) => b.visits - a.visits).slice(0, 5);
     if (el('frequentVehiclesTable')) {
-        el('frequentVehiclesTable').innerHTML = topVehicles.length ? topVehicles.map((v, i) => `
-            <tr class="border-b border-slate-100/60 hover:bg-white/80">
+        el('frequentVehiclesTable').innerHTML = topTransit.length ? topTransit.map((v, i) => `
+            <tr class="border-b border-slate-100/60 hover:bg-white/80 transition-colors">
                 <td class="p-3 text-center font-bold text-slate-400">#${i + 1}</td>
                 <td class="p-3">
-                    <div class="font-mono font-bold text-slate-800">${v.plate}</div>
-                    <div class="text-[11px] text-slate-500">${v.owner}</div>
+                    <div class="font-mono font-bold text-slate-800 flex items-center gap-1.5">
+                        ${v.isVehicle ? '<i data-lucide="car" class="w-3.5 h-3.5 text-blue-600 inline"></i>' : '<i data-lucide="footprints" class="w-3.5 h-3.5 text-emerald-600 inline"></i>'}
+                        ${v.identifier}
+                    </div>
+                    <div class="text-[11px] text-slate-500 font-medium">${v.owner}</div>
                 </td>
-                <td class="p-3"><span class="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 uppercase">${v.type}</span></td>
-                <td class="p-3 text-center font-bold text-emerald-700">${v.visits}</td>
-                <td class="p-3 text-right text-[11px] text-slate-400">${new Date(v.lastScan).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</td>
+                <td class="p-3">
+                    <span class="px-2 py-0.5 rounded text-[10px] font-bold ${v.isVehicle ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'} uppercase">
+                        ${v.type}
+                    </span>
+                </td>
+                <td class="p-3 text-center font-bold text-emerald-700 font-mono">${v.visits}</td>
+                <td class="p-3 text-right text-[11px] text-slate-400 font-mono">${new Date(v.lastScan).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</td>
             </tr>
-        `).join('') : '<tr><td colspan="5" class="p-6 text-center text-slate-400 text-xs">No frequent vehicles recorded in this period.</td></tr>';
+        `).join('') : '<tr><td colspan="5" class="p-6 text-center text-slate-400 text-xs">No frequent entrants recorded in this period.</td></tr>';
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+            window.lucide.createIcons();
+        }
     }
 
     // 6. User Access Leaderboard (Students, Faculty, Staff/Utility, Visitors)
@@ -2323,15 +2380,19 @@ window.renderInsideCampusTable = function() {
         const maskedUid = rawUid.length > 4 ? `${rawUid.slice(0, 2)}..${rawUid.slice(-4)}` : rawUid;
 
         const avatarUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(ownerName)}&background=0E4B3A&color=fff&size=64`;
+        const isVisitor = cat === 'VISITOR' || (!l.users && !l.user_id);
 
         return `
             <tr class="hover:bg-amber-50/40 transition-colors">
                 <td class="p-3.5 text-center font-bold text-slate-400">#${index + 1}</td>
                 <td class="p-3.5">
                     <div class="flex items-center gap-3">
-                        <img src="${avatarUrl}" class="w-8 h-8 rounded-full border border-slate-200 shrink-0 shadow-sm">
+                        <img src="${avatarUrl}" class="w-8 h-8 rounded-full border border-slate-200 shrink-0 shadow-sm cursor-pointer hover:scale-105 transition-transform" onclick="${isVisitor ? `openVisitorHistoryModal(decodeURIComponent('${encodeURIComponent(ownerName)}'), '${l.rfid_uid || ''}', decodeURIComponent('${encodeURIComponent(plate || '')}'))` : `openUserHistoryModal('${l.user_id || l.users?.id || ''}')`}" title="Click to view access history">
                         <div>
-                            <div class="font-bold text-slate-800 text-xs">${ownerName}</div>
+                            <div class="font-bold text-slate-800 text-xs hover:text-blue-700 hover:underline cursor-pointer flex items-center gap-1.5" onclick="${isVisitor ? `openVisitorHistoryModal(decodeURIComponent('${encodeURIComponent(ownerName)}'), '${l.rfid_uid || ''}', decodeURIComponent('${encodeURIComponent(plate || '')}'))` : `openUserHistoryModal('${l.user_id || l.users?.id || ''}')`}" title="Click to view when and how many times this occupant entered">
+                                <span>${ownerName}</span>
+                                <i data-lucide="external-link" class="w-3 h-3 text-slate-400"></i>
+                            </div>
                             <div class="text-[10px] text-slate-400 font-medium">${subtext}</div>
                         </div>
                     </div>
@@ -2474,9 +2535,25 @@ function renderUserLeaderboard(logs = getFilteredAnalyticsLogs()) {
     const userVisits = {};
 
     logs.forEach(l => {
-        let name = l.users?.full_name;
-        let role = l.users?.role || 'Other';
-        let subtext = l.users?.program || l.users?.section || '--';
+        // Skip denied / unregistered card attempts from the user access leaderboard so only real users appear
+        if (l.status === 'DENIED') return;
+
+        let u = l.users;
+        if (!u && l.user_id && adminState.users) {
+            u = adminState.users.find(x => x.id === l.user_id);
+        }
+        if (!u && l.rfid_uid && adminState.users) {
+            const clean = (l.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+            u = adminState.users.find(x => {
+                const uUid = (x.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+                if (uUid && uUid === clean) return true;
+                return (x.rfid_cards || []).some(c => (c.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase() === clean);
+            });
+        }
+
+        let name = u?.full_name;
+        let role = u?.role;
+        let subtext = u?.program || u?.section || '--';
         let plate = l.vehicles?.plate_number || '--';
 
         if (!name && l.remarks) {
@@ -2513,16 +2590,16 @@ function renderUserLeaderboard(logs = getFilteredAnalyticsLogs()) {
             }
         }
 
-        if (!name) {
-            name = l.status === 'DENIED' ? 'Unregistered Card' : 'Authorized User';
-            role = 'General';
+        // Exclude unregistered cards or unknown cardholders from the leaderboard
+        if (!name || name === 'Unregistered Card' || role === 'General' || name.toLowerCase().includes('unregistered')) {
+            return;
         }
 
-        const key = name + '|' + role;
+        const key = (u?.id || name) + '|' + (role || 'Other');
         if (!userVisits[key]) {
             userVisits[key] = {
                 name,
-                role,
+                role: role || 'Other',
                 subtext,
                 plate,
                 count: 0,
@@ -2568,10 +2645,13 @@ function renderUserLeaderboard(logs = getFilteredAnalyticsLogs()) {
             const lastScanStr = u.lastScan ? new Date(u.lastScan).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '--';
 
             return `
-                <tr class="border-b border-slate-100/60 hover:bg-white/80 transition-colors">
+                <tr class="border-b border-slate-100/60 hover:bg-white/80 transition-colors cursor-pointer group" onclick="if ('${(u.role || '').toLowerCase()}' === 'visitor') { openVisitorHistoryModal(decodeURIComponent('${encodeURIComponent(u.name)}'), '', decodeURIComponent('${encodeURIComponent(u.plate || '')}')); } else { const matchU = adminState.users.find(x => x.full_name === decodeURIComponent('${encodeURIComponent(u.name)}')); if (matchU) openUserHistoryModal(matchU.id); else openVisitorHistoryModal(decodeURIComponent('${encodeURIComponent(u.name)}'), '', decodeURIComponent('${encodeURIComponent(u.plate || '')}')); }" title="Click to view complete visit history and frequency">
                     <td class="p-3 text-center">${rankBadge}</td>
                     <td class="p-3">
-                        <div class="font-bold text-slate-800 text-xs">${u.name}</div>
+                        <div class="font-bold text-slate-800 text-xs group-hover:text-blue-700 group-hover:underline flex items-center gap-1.5">
+                            <span>${u.name}</span>
+                            <i data-lucide="external-link" class="w-3 h-3 text-slate-300 group-hover:text-blue-500"></i>
+                        </div>
                         <div class="text-[10px] text-slate-400 font-medium">${u.subtext}</div>
                     </td>
                     <td class="p-3">
@@ -2715,7 +2795,7 @@ function renderAnalyticsCharts(filteredLogs = getFilteredAnalyticsLogs()) {
             data: {
                 labels: hourLabels,
                 datasets: [{
-                    label: 'Vehicles',
+                    label: 'Entries & Exits',
                     data: hours,
                     backgroundColor: bgColors,
                     borderRadius: 6
@@ -2734,32 +2814,52 @@ function renderAnalyticsCharts(filteredLogs = getFilteredAnalyticsLogs()) {
     }
 
     // ──────────────────────────────────────────
-    // Chart 3: Vehicle Types Distribution
+    // Chart 3: Transit & Vehicle Mode Distribution
     // ──────────────────────────────────────────
     const ctxVeh = el('chartVehicleTypes');
     if (ctxVeh) {
         if (chartVehTypes) chartVehTypes.destroy();
 
-        const vehCounts = { Motorcycle: 0, Car: 0, SUV: 0, Van: 0, Truck: 0, Other: 0 };
+        const transitCounts = {
+            'Walking / Pedestrian': 0,
+            'Motorcycle': 0,
+            'Car / Sedan': 0,
+            'SUV': 0,
+            'Van': 0,
+            'Truck / Other': 0
+        };
+
         filteredLogs.forEach(l => {
             const t = (l.vehicles?.vehicle_type || '').toUpperCase();
-            if (t.includes('MOTOR') || t.includes('SCOOTER')) vehCounts.Motorcycle++;
-            else if (t.includes('CAR') || t.includes('SEDAN')) vehCounts.Car++;
-            else if (t.includes('SUV')) vehCounts.SUV++;
-            else if (t.includes('VAN')) vehCounts.Van++;
-            else if (t.includes('TRUCK')) vehCounts.Truck++;
-            else vehCounts.Motorcycle++; // default prominent campus vehicle
+            const plate = (l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').toUpperCase();
+            const hasRealPlate = plate && plate !== '--' && plate !== 'N/A' && plate !== 'PEDESTRIAN' && plate !== 'NONE';
+
+            if (t.includes('MOTOR') || t.includes('SCOOTER')) {
+                transitCounts['Motorcycle']++;
+            } else if (t.includes('CAR') || t.includes('SEDAN')) {
+                transitCounts['Car / Sedan']++;
+            } else if (t.includes('SUV')) {
+                transitCounts['SUV']++;
+            } else if (t.includes('VAN')) {
+                transitCounts['Van']++;
+            } else if (t.includes('TRUCK')) {
+                transitCounts['Truck / Other']++;
+            } else if (hasRealPlate) {
+                transitCounts['Car / Sedan']++;
+            } else {
+                transitCounts['Walking / Pedestrian']++;
+            }
         });
 
-        const totalVeh = Math.max(1, Object.values(vehCounts).reduce((a, b) => a + b, 0));
+        const totalTransit = Math.max(1, Object.values(transitCounts).reduce((a, b) => a + b, 0));
         const colors = ['#0E4B3A', '#10B981', '#3B82F6', '#8B5CF6', '#F2B827', '#64748B'];
 
         chartVehTypes = new Chart(ctxVeh, {
             type: 'doughnut',
             data: {
-                labels: Object.keys(vehCounts),
+                labels: Object.keys(transitCounts),
                 datasets: [{
-                    data: Object.values(vehCounts),
+                    data: Object.values(transitCounts),
                     backgroundColor: colors,
                     borderWidth: 0
                 }]
@@ -2773,8 +2873,8 @@ function renderAnalyticsCharts(filteredLogs = getFilteredAnalyticsLogs()) {
         });
 
         if (el('vehTypeBreakdownList')) {
-            el('vehTypeBreakdownList').innerHTML = Object.entries(vehCounts).map(([type, count], i) => {
-                const pct = Math.round((count / totalVeh) * 100);
+            el('vehTypeBreakdownList').innerHTML = Object.entries(transitCounts).map(([type, count], i) => {
+                const pct = Math.round((count / totalTransit) * 100);
                 return `
                     <div class="flex items-center justify-between text-xs">
                         <div class="flex items-center gap-2">
@@ -2797,12 +2897,24 @@ function renderAnalyticsCharts(filteredLogs = getFilteredAnalyticsLogs()) {
 
         const userCounts = { Students: 0, Faculty: 0, Staff: 0, Visitors: 0, Emergency: 0 };
         filteredLogs.forEach(l => {
-            const role = (l.users?.role || '').toUpperCase();
+            let u = l.users;
+            if (!u && l.user_id && adminState.users) {
+                u = adminState.users.find(x => x.id === l.user_id);
+            }
+            if (!u && l.rfid_uid && adminState.users) {
+                const clean = (l.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+                u = adminState.users.find(x => {
+                    const uUid = (x.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+                    if (uUid && uUid === clean) return true;
+                    return (x.rfid_cards || []).some(c => (c.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase() === clean);
+                });
+            }
+            const role = (u?.role || '').toUpperCase();
             if (role === 'STUDENT') userCounts.Students++;
             else if (role === 'FACULTY') userCounts.Faculty++;
             else if (role === 'STAFF') userCounts.Staff++;
-            else if (l.remarks && (l.remarks.includes('Visitor') || l.remarks.includes('VISITOR'))) userCounts.Visitors++;
-            else if (l.is_emergency) userCounts.Emergency++;
+            else if ((l.remarks && (l.remarks.includes('Visitor') || l.remarks.includes('VISITOR'))) || l.user_type === 'VISITOR' || role === 'VISITOR') userCounts.Visitors++;
+            else if (l.is_emergency || (l.remarks && l.remarks.includes('Emergency'))) userCounts.Emergency++;
             else userCounts.Students++;
         });
 
@@ -3827,6 +3939,485 @@ window.deleteSpecialTag = async function(id) {
 };
 
 // ==============================================
+// 🛡️ VISITOR & EMERGENCY MANAGEMENT HUB LOGIC
+// ==============================================
+let specialActiveTab = 'fleet';
+
+window.switchSpecialViewTab = function(tab) {
+    specialActiveTab = tab;
+    const btnFleet = el('btnSpecTabFleet');
+    const btnHist = el('btnSpecTabHistory');
+    const viewFleet = el('specViewContentFleet');
+    const viewHist = el('specViewContentHistory');
+
+    if (tab === 'fleet') {
+        if (btnFleet) {
+            btnFleet.className = 'px-4 py-2 font-bold text-xs border-b-2 border-charm-dark text-charm-dark flex items-center gap-2 transition-all';
+        }
+        if (btnHist) {
+            btnHist.className = 'px-4 py-2 font-bold text-xs border-b-2 border-transparent text-slate-500 hover:text-slate-800 flex items-center gap-2 transition-all';
+        }
+        if (viewFleet) viewFleet.classList.remove('hidden');
+        if (viewHist) viewHist.classList.add('hidden');
+        renderSpecialTags();
+    } else {
+        if (btnHist) {
+            btnHist.className = 'px-4 py-2 font-bold text-xs border-b-2 border-charm-dark text-charm-dark flex items-center gap-2 transition-all';
+        }
+        if (btnFleet) {
+            btnFleet.className = 'px-4 py-2 font-bold text-xs border-b-2 border-transparent text-slate-500 hover:text-slate-800 flex items-center gap-2 transition-all';
+        }
+        if (viewHist) viewHist.classList.remove('hidden');
+        if (viewFleet) viewFleet.classList.add('hidden');
+        renderVisitorHistoryTable();
+    }
+    if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
+};
+
+window.renderSpecialTags = function() {
+    const table = el('specialTagsTable');
+    const tags = adminState.specialTags || [];
+    const insideList = window.currentInsideRoster || [];
+    const logs = adminState.logs || [];
+
+    // 1. Compute KPIs
+    const totalTags = tags.length;
+    const emergencyTags = tags.filter(t => t.type === 'EMERGENCY').length;
+    
+    // Check which tags are currently inside
+    let activeVisitorsCount = 0;
+    let vacantTagsCount = 0;
+
+    tags.forEach(t => {
+        const cleanUid = (t.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+        const isInside = insideList.some(e => (e.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase() === cleanUid);
+        if (isInside) {
+            if (t.type === 'VISITOR') activeVisitorsCount++;
+        } else {
+            vacantTagsCount++;
+        }
+    });
+
+    insideList.forEach(e => {
+        const cat = window.getInsideOccupantCategory ? window.getInsideOccupantCategory(e) : 'VISITOR';
+        if (cat === 'VISITOR') {
+            const cleanUid = (e.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+            if (!tags.some(t => (t.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase() === cleanUid)) {
+                activeVisitorsCount++;
+            }
+        }
+    });
+
+    // Count today's visitor & emergency visits
+    const todayDate = new Date().toDateString();
+    const visitsToday = logs.filter(l => {
+        if (!l.timestamp) return false;
+        const d = new Date(l.timestamp).toDateString();
+        if (d !== todayDate) return false;
+        const rem = (l.remarks || '').toLowerCase();
+        return rem.includes('visitor') || rem.includes('emergency') || l.role === 'VISITOR' || l.user_type === 'VISITOR';
+    }).length;
+
+    // Update KPI UI
+    if (el('statTotalSpecialTags')) el('statTotalSpecialTags').textContent = totalTags;
+    if (el('statVacantSpecialTags')) el('statVacantSpecialTags').textContent = vacantTagsCount;
+    if (el('statActiveVisitorsInside')) el('statActiveVisitorsInside').textContent = activeVisitorsCount;
+    if (el('statActiveEmergencyPasses')) el('statActiveEmergencyPasses').textContent = emergencyTags;
+    if (el('statVisitsToday')) el('statVisitsToday').textContent = visitsToday;
+    if (el('specFleetCount')) el('specFleetCount').textContent = totalTags;
+
+    // 2. Render Fleet Table
+    if (!table) return;
+
+    const searchTerm = (el('specFleetSearchInput')?.value || '').trim().toLowerCase();
+    const filteredTags = tags.filter(t => {
+        if (!searchTerm) return true;
+        const text = `${t.rfid_uid || ''} ${t.type || ''} ${t.label || ''} ${t.description || ''}`.toLowerCase();
+        return text.includes(searchTerm);
+    });
+
+    if (!filteredTags.length) {
+        table.innerHTML = `<tr><td colspan="6" class="p-8 text-center text-slate-400 font-medium">No special tags configured or matching criteria</td></tr>`;
+        return;
+    }
+
+    table.innerHTML = filteredTags.map(t => {
+        const cleanUid = (t.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+        const insideMatch = insideList.find(e => (e.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase() === cleanUid);
+        const isInside = !!insideMatch;
+        const isEmergency = t.type === 'EMERGENCY';
+        const typeClass = isEmergency ? 'bg-red-100 text-red-800 border-red-200' : 'bg-blue-100 text-blue-800 border-blue-200';
+
+        const label = t.label || (isEmergency ? 'Emergency Response Unit' : 'Reusable Visitor Tag');
+
+        let statusBadge = '';
+        if (isInside) {
+            let holderName = insideMatch.users?.full_name;
+            if (!holderName && insideMatch.remarks) {
+                const match = insideMatch.remarks.match(/Visitor (?:Entry|Exit):\s*([^|]+)/i);
+                if (match) holderName = match[1].trim();
+            }
+            if (!holderName) holderName = isEmergency ? 'Emergency Responder' : (t.label && t.label !== 'Reusable Visitor Tag' ? t.label : 'Active Visitor');
+            const holderPlate = insideMatch.vehicles?.plate_number || insideMatch.remarks?.match(/Plate:\s*([^|]+)/i)?.[1]?.trim() || 'N/A';
+            const enterTime = insideMatch.timestamp ? new Date(insideMatch.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--';
+
+            statusBadge = `
+                <div class="flex flex-col gap-0.5">
+                    <span class="px-2.5 py-1 rounded-full text-[10px] font-black uppercase bg-blue-100 text-blue-800 border border-blue-300 flex items-center gap-1.5 w-fit shadow-sm">
+                        <span class="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span> IN USE (Inside Campus)
+                    </span>
+                    <span class="text-[11px] font-bold text-slate-700">${holderName} <span class="font-mono text-slate-500 text-[10px]">(${holderPlate})</span></span>
+                    <span class="text-[10px] text-slate-400 font-medium">Entered: ${enterTime}</span>
+                </div>
+            `;
+        } else {
+            statusBadge = `
+                <span class="px-2.5 py-1 rounded-full text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1.5 w-fit shadow-sm">
+                    <span class="w-2 h-2 rounded-full bg-emerald-500"></span> VACANT / READY
+                </span>
+            `;
+        }
+
+        const isVacant = !isInside;
+        const canVacate = !isVacant || (t.label && t.label !== 'Reusable Visitor Tag');
+
+        let holderName = insideMatch?.users?.full_name;
+        if (!holderName && insideMatch?.remarks) {
+            const match = insideMatch.remarks.match(/Visitor (?:Entry|Exit):\s*([^|]+)/i);
+            if (match) holderName = match[1].trim();
+        }
+        if (!holderName) holderName = isEmergency ? 'Emergency Responder' : (t.label && t.label !== 'Reusable Visitor Tag' ? t.label : 'Visitor Pass');
+        const holderPlate = insideMatch?.vehicles?.plate_number || insideMatch?.remarks?.match(/Plate:\s*([^|]+)/i)?.[1]?.trim() || '';
+
+        return `
+            <tr class="hover:bg-white/60 border-b border-slate-100/50 transition-colors">
+                <td class="p-3.5 font-bold text-slate-800 text-xs">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="${isEmergency ? 'siren' : 'user-check'}" class="w-4 h-4 ${isEmergency ? 'text-red-500' : 'text-blue-500'}"></i>
+                        <span>${label}</span>
+                    </div>
+                </td>
+                <td class="p-3.5 font-mono text-xs font-bold text-slate-600">${t.rfid_uid}</td>
+                <td class="p-3.5">
+                    <span class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase border ${typeClass}">
+                        ${t.type}
+                    </span>
+                </td>
+                <td class="p-3.5">${statusBadge}</td>
+                <td class="p-3.5 text-xs text-slate-500 max-w-xs truncate">${t.description || '--'}</td>
+                <td class="p-3.5 text-right whitespace-nowrap">
+                    <div class="flex items-center justify-end gap-1">
+                        <button type="button" onclick="openVisitorHistoryModal(decodeURIComponent('${encodeURIComponent(holderName)}'), '${t.rfid_uid}', decodeURIComponent('${encodeURIComponent(holderPlate)}'), 'Tag Inventory Audit')" class="px-2 py-1 rounded-lg text-blue-700 bg-blue-50 hover:bg-blue-600 hover:text-white border border-blue-200 transition-all text-xs font-bold flex items-center gap-1 shadow-xs" title="View complete visit history and frequency">
+                            <i data-lucide="history" class="w-3.5 h-3.5"></i>
+                            <span>History</span>
+                        </button>
+                        ${canVacate && !isEmergency ? `
+                            <button onclick="resetSpecialTagToVacant('${t.id}', '${t.rfid_uid}')" class="px-2 py-1 rounded-lg text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 transition-all text-xs font-bold flex items-center gap-1 shadow-sm" title="Reset tag to Vacant / Reusable state">
+                                <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i>
+                                <span>Vacate</span>
+                            </button>
+                        ` : ''}
+                        <button onclick="editSpecialTag('${t.id}')" class="p-1.5 rounded-lg text-slate-500 hover:text-charm-dark hover:bg-slate-100 transition-colors" title="Edit Tag">
+                            <i data-lucide="pencil" class="w-4 h-4"></i>
+                        </button>
+                        <button onclick="deleteSpecialTag('${t.id}')" class="p-1.5 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete Tag">
+                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+
+    if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
+};
+
+window.renderVisitorHistoryTable = function() {
+    const table = el('visitorHistoryTable');
+    if (!table) return;
+
+    const logs = adminState.logs || [];
+    const specialTags = adminState.specialTags || [];
+    const specialUids = new Set(specialTags.map(s => (s.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase()));
+
+    // 1. Filter logs for visitor and emergency events
+    const allVisitorLogs = logs.filter(l => {
+        const cleanUid = (l.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+        if (specialUids.has(cleanUid)) return true;
+
+        const rem = (l.remarks || '').toLowerCase();
+        if (rem.includes('visitor') || rem.includes('emergency')) return true;
+
+        const role = (l.users?.role || '').toLowerCase();
+        if (role === 'visitor' || role === 'emergency') return true;
+
+        if (l.user_type === 'VISITOR' || l.user_type === 'EMERGENCY') return true;
+
+        return false;
+    });
+
+    if (el('specHistoryCount')) el('specHistoryCount').textContent = allVisitorLogs.length;
+
+    // 2. Apply Filters
+    const searchTerm = (el('specHistorySearchInput')?.value || '').trim().toLowerCase();
+    const typeFilter = el('specHistoryTypeFilter')?.value || 'ALL';
+    const dirFilter = el('specHistoryDirectionFilter')?.value || 'ALL';
+
+    const filtered = allVisitorLogs.filter(l => {
+        const rem = (l.remarks || '').toLowerCase();
+        const role = (l.users?.role || '').toLowerCase();
+        const isEmg = rem.includes('emergency') || role === 'emergency' || l.user_type === 'EMERGENCY';
+
+        if (typeFilter === 'VISITOR' && isEmg) return false;
+        if (typeFilter === 'EMERGENCY' && !isEmg) return false;
+        if (typeFilter === 'TODAY') {
+            if (!l.timestamp || new Date(l.timestamp).toDateString() !== new Date().toDateString()) {
+                return false;
+            }
+        }
+
+        if (dirFilter !== 'ALL') {
+            if (l.direction !== dirFilter) return false;
+        }
+
+        if (searchTerm) {
+            let name = l.users?.full_name || '';
+            const match = l.remarks?.match(/Visitor (?:Entry|Exit):\s*([^|]+)/i) || l.remarks?.match(/Emergency (?:tag|Response):\s*(.+)/i);
+            if (match) name = match[1];
+
+            const plate = l.vehicles?.plate_number || l.remarks?.match(/Plate:\s*([^|]+)/i)?.[1]?.trim() || '';
+            const uid = l.rfid_uid || '';
+            const gate = l.gate || '';
+            const pool = `${name} ${plate} ${uid} ${gate} ${l.remarks || ''}`.toLowerCase();
+            if (!pool.includes(searchTerm)) return false;
+        }
+
+        return true;
+    });
+
+    // Pre-calculate total authorized entries for each visitor
+    const visitorEntryCountMap = {};
+    allVisitorLogs.forEach(logItem => {
+        if (logItem.direction !== 'ENTRY' || logItem.status !== 'AUTHORIZED') return;
+        let n = logItem.users?.full_name;
+        if (!n && logItem.remarks) {
+            const vMatch = logItem.remarks.match(/Visitor (?:Entry|Exit):\s*([^|]+)/i) || logItem.remarks.match(/Emergency (?:tag|Response):\s*([^|]+)/i);
+            if (vMatch) n = vMatch[1].trim();
+        }
+        if (!n) n = (logItem.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+        if (n) {
+            const k = n.toLowerCase();
+            visitorEntryCountMap[k] = (visitorEntryCountMap[k] || 0) + 1;
+        }
+    });
+
+    if (!filtered.length) {
+        table.innerHTML = `
+            <tr>
+                <td colspan="9" class="p-8 text-center">
+                    <div class="flex flex-col items-center justify-center gap-2 text-slate-400">
+                        <i data-lucide="inbox" class="w-8 h-8 text-slate-300"></i>
+                        <div class="font-bold text-slate-600 text-sm">No visitor activity records found</div>
+                        <p class="text-xs text-slate-400">Visitor and emergency passes will be logged here as they pass campus gates.</p>
+                    </div>
+                </td>
+            </tr>
+        `;
+        if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
+        return;
+    }
+
+    table.innerHTML = filtered.map(l => {
+        const enterTime = l.timestamp ? new Date(l.timestamp) : new Date();
+        const isToday = enterTime.toDateString() === new Date().toDateString();
+        const dateStr = isToday ? 'Today' : enterTime.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+        const timeStr = enterTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+        const rem = l.remarks || '';
+        const isEmg = rem.toLowerCase().includes('emergency') || l.users?.role === 'EMERGENCY' || l.user_type === 'EMERGENCY';
+
+        let name = l.users?.full_name;
+        if (!name && rem) {
+            const vMatch = rem.match(/Visitor (?:Entry|Exit):\s*([^|]+)/i);
+            if (vMatch) name = vMatch[1].trim();
+            const eMatch = rem.match(/Emergency (?:tag|Response):\s*([^|]+)/i);
+            if (eMatch) name = eMatch[1].trim();
+        }
+        if (!name) name = isEmg ? 'Emergency Response Unit' : 'Campus Visitor';
+
+        let plate = l.vehicles?.plate_number;
+        if (!plate && rem) {
+            const pMatch = rem.match(/Plate:\s*([^|]+)/i);
+            if (pMatch) plate = pMatch[1].trim();
+        }
+        if (!plate) plate = isEmg ? 'EMERGENCY' : (l.user_type === 'PEDESTRIAN' || l.rfid_type === 'CLOSE_RANGE' ? 'Walk-in' : '--');
+
+        let purpose = 'Campus Access';
+        if (rem.includes('Purpose:')) {
+            purpose = rem.match(/Purpose:\s*([^|]+)/i)?.[1]?.trim() || purpose;
+        } else if (isEmg) {
+            purpose = 'Emergency Response & Safety Priority';
+        } else if (rem.includes('Visitor')) {
+            purpose = rem.includes('Exit') ? 'Campus Departure' : 'General Visitor Pass';
+        }
+
+        const isEntry = l.direction === 'ENTRY';
+        const isAutoResolved = !isEntry && (l.gate === 'AUTO_RESOLVED_EXIT' || rem.includes('[AUTO_RESOLVED_EXIT]'));
+        let eventBadge = '';
+        if (isAutoResolved) {
+            eventBadge = `<span class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-purple-100 text-purple-800 border border-purple-300 shadow-sm" title="${rem}">AUTO EXIT</span>`;
+        } else if (isEntry) {
+            eventBadge = `<span class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-sm flex items-center gap-1 w-fit mx-auto"><i data-lucide="arrow-down-right" class="w-3 h-3"></i> ENTRY</span>`;
+        } else {
+            eventBadge = `<span class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-blue-100 text-blue-800 border border-blue-300 shadow-sm flex items-center gap-1 w-fit mx-auto"><i data-lucide="arrow-up-right" class="w-3 h-3"></i> EXIT</span>`;
+        }
+
+        const isPed = plate === 'Walk-in' || l.user_type === 'PEDESTRIAN' || l.rfid_type === 'CLOSE_RANGE' || plate === 'PEDESTRIAN';
+        const gateLabel = isAutoResolved ? 'Auto-Resolved Exit' : (l.gate || (isEntry ? 'Gate 1 (Entry)' : 'Gate 2 (Exit)'));
+
+        const nameKey = (name || (l.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase()).toLowerCase();
+        const totalVisits = visitorEntryCountMap[nameKey] || (l.direction === 'ENTRY' ? 1 : 0);
+        const visitBadge = `${totalVisits} ${totalVisits === 1 ? 'entry' : 'entries'}`;
+
+        return `
+            <tr class="hover:bg-white/60 border-b border-slate-100/50 transition-colors">
+                <td class="p-3.5">
+                    <div class="font-bold text-slate-800 text-xs">${timeStr}</div>
+                    <div class="text-[10px] text-slate-400 font-medium">${dateStr}</div>
+                </td>
+                <td class="p-3.5">
+                    <div class="flex items-center gap-2.5">
+                        <div class="w-8 h-8 rounded-full ${isEmg ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-700'} flex items-center justify-center font-bold text-xs shrink-0 shadow-sm cursor-pointer hover:scale-105 transition-transform" onclick="openVisitorHistoryModal(decodeURIComponent('${encodeURIComponent(name)}'), '${l.rfid_uid || ''}', decodeURIComponent('${encodeURIComponent(plate || '')}'), decodeURIComponent('${encodeURIComponent(purpose || '')}'))" title="Click to view complete visit history">
+                            <i data-lucide="${isEmg ? 'siren' : 'user'}" class="w-4 h-4"></i>
+                        </div>
+                        <div>
+                            <div class="font-bold text-slate-800 text-xs hover:text-blue-700 hover:underline cursor-pointer flex items-center gap-1.5 flex-wrap" onclick="openVisitorHistoryModal(decodeURIComponent('${encodeURIComponent(name)}'), '${l.rfid_uid || ''}', decodeURIComponent('${encodeURIComponent(plate || '')}'), decodeURIComponent('${encodeURIComponent(purpose || '')}'))" title="Click to view when and how many times this visitor entered">
+                                <span>${name}</span>
+                                <span class="px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-800 text-[10px] font-black tracking-wide border border-blue-200">${visitBadge}</span>
+                            </div>
+                            <div class="text-[10px] text-slate-400 font-medium">${isEmg ? 'Emergency Pass' : 'Visitor Pass'}</div>
+                        </div>
+                    </div>
+                </td>
+                <td class="p-3.5">
+                    <span class="px-2 py-0.5 rounded-full text-[10px] font-black uppercase border ${isEmg ? 'bg-red-50 text-red-700 border-red-200' : 'bg-blue-50 text-blue-700 border-blue-200'}">
+                        ${isEmg ? 'EMERGENCY' : 'VISITOR'}
+                    </span>
+                </td>
+                <td class="p-3.5">
+                    ${isPed ? `
+                        <span class="text-xs font-semibold text-slate-500 flex items-center gap-1">
+                            <i data-lucide="footprints" class="w-3.5 h-3.5 text-slate-400"></i> Walk-in
+                        </span>
+                    ` : `
+                        <span class="font-mono text-xs font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">${plate}</span>
+                    `}
+                </td>
+                <td class="p-3.5 text-xs text-slate-600 max-w-xs truncate" title="${purpose}">${purpose}</td>
+                <td class="p-3.5 text-center">${eventBadge}</td>
+                <td class="p-3.5 text-xs font-semibold text-slate-600">${gateLabel}</td>
+                <td class="p-3.5">
+                    <span class="font-mono text-xs font-bold text-slate-600 bg-slate-50 px-2 py-0.5 rounded border border-slate-200" title="${l.rfid_uid || ''}">${l.rfid_uid || '--'}</span>
+                </td>
+                <td class="p-3.5 text-right whitespace-nowrap">
+                    <button type="button" onclick="openVisitorHistoryModal(decodeURIComponent('${encodeURIComponent(name)}'), '${l.rfid_uid || ''}', decodeURIComponent('${encodeURIComponent(plate || '')}'), decodeURIComponent('${encodeURIComponent(purpose || '')}'))" class="px-2.5 py-1.5 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white border border-blue-200 transition-all text-xs font-bold flex items-center gap-1.5 shadow-xs ml-auto cursor-pointer" title="Click to see all entry dates, times, and total campus visits">
+                        <i data-lucide="history" class="w-3.5 h-3.5"></i>
+                        <span>History (${totalVisits})</span>
+                    </button>
+                </td>
+            </tr>
+        `;
+    }).join('');
+
+    if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
+};
+
+window.resetSpecialTagToVacant = async function(id, uid) {
+    if (!confirm(`Reset visitor tag (${uid}) back to Vacant / Reusable state?`)) return;
+    try {
+        showToast('Resetting tag to Vacant state...', 'info');
+        if (isConnected && supabaseClient) {
+            const { error } = await supabaseClient.from('special_tags').update({
+                label: 'Reusable Visitor Tag',
+                description: null
+            }).eq('id', id);
+            if (error) throw error;
+        }
+
+        const tagIdx = adminState.specialTags.findIndex(t => t.id === id);
+        if (tagIdx !== -1) {
+            adminState.specialTags[tagIdx].label = 'Reusable Visitor Tag';
+            adminState.specialTags[tagIdx].description = null;
+        }
+
+        showToast('Tag reset to Vacant (Ready for next visitor)', 'success');
+        renderSpecialTags();
+        if (isConnected) await loadData();
+    } catch(err) {
+        console.error('Error resetting special tag:', err);
+        showToast('Error resetting tag: ' + err.message, 'error');
+    }
+};
+
+window.exportVisitorHistoryCSV = function() {
+    const logs = adminState.logs || [];
+    const specialTags = adminState.specialTags || [];
+    const specialUids = new Set(specialTags.map(s => (s.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase()));
+
+    const visitorLogs = logs.filter(l => {
+        const cleanUid = (l.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+        if (specialUids.has(cleanUid)) return true;
+        const rem = (l.remarks || '').toLowerCase();
+        if (rem.includes('visitor') || rem.includes('emergency')) return true;
+        const role = (l.users?.role || '').toLowerCase();
+        return role === 'visitor' || role === 'emergency' || l.user_type === 'VISITOR' || l.user_type === 'EMERGENCY';
+    });
+
+    if (!visitorLogs.length) {
+        showToast('No visitor records found to export.', 'warning');
+        return;
+    }
+
+    const headers = ['Date', 'Time', 'Visitor Name', 'Category', 'Vehicle Plate', 'Purpose', 'Event', 'Gate', 'RFID UID', 'Remarks'];
+    const rows = visitorLogs.map(l => {
+        const dt = l.timestamp ? new Date(l.timestamp) : new Date();
+        const dateStr = dt.toISOString().slice(0, 10);
+        const timeStr = dt.toLocaleTimeString([], { hour12: false });
+
+        let name = l.users?.full_name || '';
+        const vMatch = (l.remarks || '').match(/Visitor (?:Entry|Exit):\s*([^|]+)/i) || (l.remarks || '').match(/Emergency (?:tag|Response):\s*([^|]+)/i);
+        if (vMatch) name = vMatch[1].trim();
+        if (!name) name = (l.remarks || '').includes('Emergency') ? 'Emergency Response' : 'Campus Visitor';
+
+        let plate = l.vehicles?.plate_number || (l.remarks || '').match(/Plate:\s*([^|]+)/i)?.[1]?.trim() || 'N/A';
+        let purpose = (l.remarks || '').match(/Purpose:\s*([^|]+)/i)?.[1]?.trim() || ((l.remarks || '').includes('Emergency') ? 'Emergency Response' : 'Campus Visit');
+
+        return [
+            dateStr,
+            timeStr,
+            `"${name.replace(/"/g, '""')}"`,
+            (l.remarks || '').includes('Emergency') ? 'EMERGENCY' : 'VISITOR',
+            `"${plate}"`,
+            `"${purpose.replace(/"/g, '""')}"`,
+            l.direction || 'ENTRY',
+            `"${(l.gate || '').replace(/"/g, '""')}"`,
+            `"${l.rfid_uid || ''}"`,
+            `"${(l.remarks || '').replace(/"/g, '""')}"`
+        ].join(',');
+    });
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `CHARRMPASS_Visitor_History_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast(`Exported ${visitorLogs.length} visitor records to CSV!`, 'success');
+};
+
+// ==============================================
 // 📋 ENHANCED APPLICATION REVIEW & DOSSIER LOGIC
 // ==============================================
 let currentReviewUserId = null;
@@ -4443,7 +5034,7 @@ window.zoomImage = function(container) {
 
 
 // ==============================================
-// 📜 DEDICATED USER ACCESS HISTORY & AUDIT LOGS
+// 📜 DEDICATED USER & VISITOR ACCESS HISTORY & AUDIT LOGS
 // ==============================================
 let activeUserHistoryData = {
     user: null,
@@ -4451,10 +5042,147 @@ let activeUserHistoryData = {
     direction: 'ALL'
 };
 
+window.openVisitorHistoryModal = function(visitorName, rfidUid, plate, purpose) {
+    let rawName = (visitorName || '').trim();
+    if (rawName.startsWith('decodeURIComponent(')) {
+        try { rawName = decodeURIComponent(rawName); } catch(e) {}
+    }
+    const rawUid = (rfidUid || '').replace(/[\s:-]/g, '').toUpperCase();
+    let rawPlate = (plate || '').trim();
+    if (rawPlate === 'N/A' || rawPlate === '--' || rawPlate === 'Walk-in' || rawPlate === 'PEDESTRIAN') rawPlate = '';
+
+    const logs = adminState.logs || [];
+
+    // Filter all logs matching this visitor
+    let visitorLogs = logs.filter(l => {
+        const rem = l.remarks || '';
+        // 1. Check if remarks matches visitor name
+        if (rawName && rawName !== 'Campus Visitor' && rawName !== 'Visitor' && rawName !== 'Emergency Response Unit') {
+            if (rem.toLowerCase().includes(rawName.toLowerCase())) return true;
+            if (l.users?.full_name && l.users.full_name.trim().toLowerCase() === rawName.toLowerCase()) return true;
+        }
+
+        // 2. Check if RFID UID matches
+        if (rawUid) {
+            const clean = (l.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+            if (clean && clean === rawUid) return true;
+        }
+
+        // 3. Check if plate matches
+        if (rawPlate) {
+            const cleanP = rawPlate.replace(/[-\s]/g, '').toUpperCase();
+            const logPlate = (l.vehicles?.plate_number || (rem.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').replace(/[-\s]/g, '').toUpperCase();
+            if (logPlate && logPlate === cleanP) return true;
+        }
+
+        return false;
+    });
+
+    // Fallback if strict filter yields nothing
+    if (!visitorLogs.length && (rawName || rawUid)) {
+        visitorLogs = logs.filter(l => {
+            const pool = `${l.remarks || ''} ${l.rfid_uid || ''} ${l.users?.full_name || ''}`.toLowerCase();
+            if (rawName && pool.includes(rawName.toLowerCase())) return true;
+            if (rawUid && pool.includes(rawUid.toLowerCase())) return true;
+            return false;
+        });
+    }
+
+    // Sort descending by timestamp
+    visitorLogs.sort((a,b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+
+    const isEmg = (purpose || '').toLowerCase().includes('emergency') || rawName.toLowerCase().includes('emergency');
+    const displayName = rawName || (rawUid ? `Visitor (Tag ${rawUid.slice(-6)})` : 'Campus Visitor');
+    const displayPlate = rawPlate || 'Walk-in (Pedestrian)';
+
+    const authLogs = visitorLogs.filter(l => l.status === 'AUTHORIZED');
+    const totalEntries = authLogs.filter(l => l.direction === 'ENTRY').length;
+    const totalExits = authLogs.filter(l => l.direction === 'EXIT').length;
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const todayLogs = visitorLogs.filter(l => l.timestamp && l.timestamp.startsWith(todayStr));
+
+    // Check if currently inside campus
+    const insideList = window.currentInsideRoster || [];
+    const isInsideNow = insideList.some(e => {
+        const eRem = e.remarks || '';
+        if (rawName && rawName !== 'Campus Visitor' && rawName !== 'Visitor') {
+            if (eRem.toLowerCase().includes(rawName.toLowerCase()) || (e.users?.full_name && e.users.full_name.toLowerCase() === rawName.toLowerCase())) return true;
+        }
+        if (rawUid && (e.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase() === rawUid) return true;
+        return false;
+    });
+
+    const visitorObj = {
+        id: `visitor_${rawUid || encodeURIComponent(displayName)}`,
+        full_name: displayName,
+        role: isEmg ? 'EMERGENCY' : 'VISITOR',
+        program: isEmg ? 'Emergency Response Unit' : 'Campus Visitor Pass',
+        section: purpose ? `Purpose: ${purpose}` : (totalEntries > 1 ? `Frequent Visitor (${totalEntries} Entries Recorded)` : 'Official Campus Guest'),
+        plate_number: displayPlate,
+        rfid_uid: rawUid || 'Reusable Tag',
+        profile_image: `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=1E3A8A&color=fff&bold=true`
+    };
+
+    activeUserHistoryData.user = visitorObj;
+    activeUserHistoryData.logs = visitorLogs;
+    activeUserHistoryData.direction = 'ALL';
+
+    // Populate modal elements
+    if (el('histUserAvatar')) el('histUserAvatar').src = visitorObj.profile_image;
+    if (el('histUserName')) el('histUserName').textContent = displayName;
+    if (el('histUserRole')) el('histUserRole').textContent = visitorObj.role;
+    if (el('histUserProgram')) el('histUserProgram').textContent = `${visitorObj.program} • ${visitorObj.section}`;
+    if (el('histUserPlate')) el('histUserPlate').textContent = `TRANSIT: ${displayPlate}`;
+    if (el('histUserUid')) el('histUserUid').textContent = `RFID: ${rawUid || 'REUSABLE TAG'}`;
+
+    if (el('histPresencePill')) {
+        if (isInsideNow) {
+            el('histPresencePill').innerHTML = '<span class="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></span> CURRENTLY INSIDE CAMPUS';
+            el('histPresencePill').className = 'px-3 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-blue-500/20 text-blue-300 border border-blue-400/30 flex items-center gap-1.5';
+        } else {
+            el('histPresencePill').innerHTML = '⚪ OFF-CAMPUS';
+            el('histPresencePill').className = 'px-3 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-white/10 text-slate-300 border border-white/20 flex items-center gap-1.5';
+        }
+    }
+
+    if (el('histTotalEntries')) el('histTotalEntries').textContent = totalEntries;
+    if (el('histTotalExits')) el('histTotalExits').textContent = totalExits;
+    if (el('histTodayTaps')) el('histTodayTaps').textContent = todayLogs.length;
+
+    if (visitorLogs.length > 0) {
+        const lastLog = visitorLogs[0];
+        const lastTime = lastLog.timestamp ? new Date(lastLog.timestamp).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : '--';
+        const lastDate = lastLog.timestamp ? new Date(lastLog.timestamp).toLocaleDateString([], { month:'short', day:'numeric' }) : '';
+        if (el('histLastActivity')) el('histLastActivity').textContent = `${lastLog.direction || 'SCAN'} via ${lastLog.gate || 'Gate'}`;
+        if (el('histLastTimestamp')) el('histLastTimestamp').textContent = `${lastDate} at ${lastTime}`;
+    } else {
+        if (el('histLastActivity')) el('histLastActivity').textContent = 'No past scans recorded';
+        if (el('histLastTimestamp')) el('histLastTimestamp').textContent = '--';
+    }
+
+    // Reset Direction Filter and populate table
+    setUserHistDirection('ALL');
+
+    const modal = el('userHistoryModal');
+    if (modal) {
+        modal.classList.remove('hidden');
+        setTimeout(() => { 
+            modal.classList.add('opacity-100'); 
+            el('userHistoryModalContent')?.classList.remove('scale-95'); 
+        }, 10);
+    }
+    if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
+};
+
 window.openUserHistoryModal = function(userId) {
     if (!userId) return;
-    const u = adminState.users.find(x => x.id === userId) || adminState.pendingUsers.find(x => x.id === userId);
+    let u = adminState.users.find(x => x.id === userId) || adminState.pendingUsers.find(x => x.id === userId);
     if (!u) {
+        if (typeof window.openVisitorHistoryModal === 'function') {
+            window.openVisitorHistoryModal(userId);
+            return;
+        }
         showToast('User not found.', 'error');
         return;
     }
@@ -6011,30 +6739,39 @@ window.forgetGateWifiRemote = async function() {
 
 window.academicState = {
     programs: [
-        { code: 'BSIT', name: 'Bachelor of Science in Information Technology', department: 'College of Computing' },
         { code: 'BSCS', name: 'Bachelor of Science in Computer Science', department: 'College of Computing' },
+        { code: 'BSIT', name: 'Bachelor of Science in Information Technology', department: 'College of Computing' },
+        { code: 'BSES', name: 'Bachelor of Science in Environmental Science', department: 'College of Agriculture & Forestry' },
         { code: 'BSA',  name: 'Bachelor of Science in Agriculture', department: 'College of Agriculture' },
         { code: 'BSHM', name: 'Bachelor of Science in Hospitality Management', department: 'College of Hospitality & Tourism' },
         { code: 'BSED', name: 'Bachelor of Secondary Education', department: 'College of Education' },
+        { code: 'BEED', name: 'Bachelor of Elementary Education', department: 'College of Education' },
         { code: 'BSCRIM', name: 'Bachelor of Science in Criminology', department: 'College of Criminology' },
+        { code: 'BSBA', name: 'Bachelor of Science in Business Administration', department: 'College of Management Sciences' },
         { code: 'ENGINEERING', name: 'College of Engineering & Architecture', department: 'Engineering' },
         { code: 'ADMIN', name: 'Administrative & Support Staff', department: 'Administration' }
     ],
     sections: [
+        { program: 'BSCS', year: 1, section: '1A' }, { program: 'BSCS', year: 2, section: '2A' },
+        { program: 'BSCS', year: 3, section: '3A' }, { program: 'BSCS', year: 3, section: '3C' }, { program: 'BSCS', year: 4, section: '4A' },
         { program: 'BSIT', year: 1, section: '1A' }, { program: 'BSIT', year: 1, section: '1B' },
         { program: 'BSIT', year: 2, section: '2A' }, { program: 'BSIT', year: 2, section: '2B' },
         { program: 'BSIT', year: 3, section: '3A' }, { program: 'BSIT', year: 3, section: '3B' },
         { program: 'BSIT', year: 4, section: '4A' }, { program: 'BSIT', year: 4, section: '4B' },
-        { program: 'BSCS', year: 1, section: '1A' }, { program: 'BSCS', year: 2, section: '2A' },
-        { program: 'BSCS', year: 3, section: '3A' }, { program: 'BSCS', year: 4, section: '4A' },
+        { program: 'BSES', year: 1, section: '1A' }, { program: 'BSES', year: 2, section: '2A' },
+        { program: 'BSES', year: 3, section: '3A' }, { program: 'BSES', year: 3, section: '3C' }, { program: 'BSES', year: 4, section: '4A' },
         { program: 'BSA',  year: 1, section: '1A' }, { program: 'BSA',  year: 2, section: '2A' },
         { program: 'BSA',  year: 3, section: '3A' }, { program: 'BSA',  year: 4, section: '4A' },
         { program: 'BSHM', year: 1, section: '1A' }, { program: 'BSHM', year: 2, section: '2A' },
         { program: 'BSHM', year: 3, section: '3A' }, { program: 'BSHM', year: 4, section: '4A' },
         { program: 'BSED', year: 1, section: '1A' }, { program: 'BSED', year: 2, section: '2A' },
         { program: 'BSED', year: 3, section: '3A' }, { program: 'BSED', year: 4, section: '4A' },
+        { program: 'BEED', year: 1, section: '1A' }, { program: 'BEED', year: 2, section: '2A' },
+        { program: 'BEED', year: 3, section: '3A' }, { program: 'BEED', year: 4, section: '4A' },
         { program: 'BSCRIM', year: 1, section: '1A' }, { program: 'BSCRIM', year: 2, section: '2A' },
-        { program: 'BSCRIM', year: 3, section: '3A' }, { program: 'BSCRIM', year: 4, section: '4A' }
+        { program: 'BSCRIM', year: 3, section: '3A' }, { program: 'BSCRIM', year: 4, section: '4A' },
+        { program: 'BSBA', year: 1, section: '1A' }, { program: 'BSBA', year: 2, section: '2A' },
+        { program: 'BSBA', year: 3, section: '3A' }, { program: 'BSBA', year: 4, section: '4A' }
     ]
 };
 
@@ -6047,12 +6784,80 @@ window.bulkUploadState = {
 };
 
 // 1. Initialize Academic Programs and Sections
+function getDeletedAcademicPrograms() {
+    try {
+        const d = localStorage.getItem('charrmpass_deleted_programs');
+        return d ? JSON.parse(d) : [];
+    } catch(e) {
+        return [];
+    }
+}
+
+function setDeletedAcademicPrograms(arr) {
+    try {
+        localStorage.setItem('charrmpass_deleted_programs', JSON.stringify(arr));
+    } catch(e) {}
+}
+
+function getDeletedAcademicSections() {
+    try {
+        const d = localStorage.getItem('charrmpass_deleted_sections');
+        return d ? JSON.parse(d) : [];
+    } catch(e) {
+        return [];
+    }
+}
+
+function setDeletedAcademicSections(arr) {
+    try {
+        localStorage.setItem('charrmpass_deleted_sections', JSON.stringify(arr));
+    } catch(e) {}
+}
+
 function loadAcademicData() {
     try {
+        const deletedProgs = getDeletedAcademicPrograms();
+        const deletedSecs = getDeletedAcademicSections();
+
         const savedProgs = localStorage.getItem('charrmpass_academic_programs');
-        if (savedProgs) academicState.programs = JSON.parse(savedProgs);
+        if (savedProgs) {
+            const parsed = JSON.parse(savedProgs).filter(p => !deletedProgs.includes((p.code || '').toUpperCase()));
+            // Merge defaults if missing and NOT deleted
+            academicState.programs.forEach(defP => {
+                const codeUpper = (defP.code || '').toUpperCase();
+                if (!deletedProgs.includes(codeUpper) && !parsed.some(p => (p.code || '').toUpperCase() === codeUpper)) {
+                    parsed.push(defP);
+                }
+            });
+            academicState.programs = parsed;
+        } else {
+            academicState.programs = academicState.programs.filter(p => !deletedProgs.includes((p.code || '').toUpperCase()));
+        }
+
         const savedSecs = localStorage.getItem('charrmpass_academic_sections');
-        if (savedSecs) academicState.sections = JSON.parse(savedSecs);
+        if (savedSecs) {
+            const parsedS = JSON.parse(savedSecs).filter(s => {
+                const progUpper = (s.program || '').toUpperCase();
+                const secUpper = (s.section || '').toUpperCase();
+                return !deletedProgs.includes(progUpper) && !deletedSecs.includes(`${progUpper}:${secUpper}`);
+            });
+            academicState.sections.forEach(defS => {
+                const progUpper = (defS.program || '').toUpperCase();
+                const secUpper = (defS.section || '').toUpperCase();
+                const secKey = `${progUpper}:${secUpper}`;
+                if (!deletedProgs.includes(progUpper) && !deletedSecs.includes(secKey) &&
+                    !parsedS.some(s => (s.program || '').toUpperCase() === progUpper && (s.section || '').toUpperCase() === secUpper)) {
+                    parsedS.push(defS);
+                }
+            });
+            academicState.sections = parsedS;
+        } else {
+            academicState.sections = academicState.sections.filter(s => {
+                const progUpper = (s.program || '').toUpperCase();
+                const secUpper = (s.section || '').toUpperCase();
+                return !deletedProgs.includes(progUpper) && !deletedSecs.includes(`${progUpper}:${secUpper}`);
+            });
+        }
     } catch(e) {
         console.warn('Could not load academic presets from storage', e);
     }
@@ -6067,6 +6872,54 @@ function saveAcademicDataToStorage() {
 }
 
 function renderAcademicDataUI() {
+    const deletedProgs = getDeletedAcademicPrograms();
+    const deletedSecs = getDeletedAcademicSections();
+
+    // Dynamically discover and merge any other program codes present in adminState.users (excluding explicitly deleted ones)
+    if (adminState.users && Array.isArray(adminState.users)) {
+        adminState.users.forEach(u => {
+            const rawProg = (u.program || '').trim();
+            if (!rawProg || rawProg === 'N/A' || rawProg === '--' || rawProg.length < 2) return;
+            const cleanCode = rawProg.toUpperCase();
+            
+            // Respect deletion blacklist so deleted programs do not resurrect!
+            if (deletedProgs.includes(cleanCode)) return;
+
+            const exists = academicState.programs.some(p => p.code.toUpperCase() === cleanCode);
+            if (!exists) {
+                let fullName = rawProg;
+                if (cleanCode === 'BSES') fullName = 'Bachelor of Science in Environmental Science';
+                else if (cleanCode === 'BEED') fullName = 'Bachelor of Elementary Education';
+                else if (cleanCode === 'BSBA') fullName = 'Bachelor of Science in Business Administration';
+                else if (cleanCode === 'BSN') fullName = 'Bachelor of Science in Nursing';
+                else if (cleanCode === 'BSCE') fullName = 'Bachelor of Science in Civil Engineering';
+                
+                academicState.programs.push({
+                    code: cleanCode,
+                    name: fullName,
+                    department: 'Academic Department'
+                });
+            }
+
+            // Also harvest sections, unless program or section was deleted
+            const rawSec = (u.section || '').trim();
+            if (rawSec && rawSec !== 'N/A' && rawSec !== '--') {
+                const secUpper = rawSec.toUpperCase();
+                const secKey = `${cleanCode}:${secUpper}`;
+                if (deletedSecs.includes(secKey)) return;
+
+                const secExists = academicState.sections.some(s => s.program.toUpperCase() === cleanCode && s.section.toUpperCase() === secUpper);
+                if (!secExists) {
+                    academicState.sections.push({
+                        program: cleanCode,
+                        year: parseInt(rawSec[0], 10) || 1,
+                        section: secUpper
+                    });
+                }
+            }
+        });
+    }
+
     // Populate Main Filter Dropdowns
     const progFilter = el('programFilter');
     if (progFilter) {
@@ -6081,12 +6934,52 @@ function renderAcademicDataUI() {
     const secFilter = el('sectionFilter');
     if (secFilter) {
         const currentVal = secFilter.value;
-        const uniqueSections = Array.from(new Set(academicState.sections.map(s => s.section))).sort();
+        const sectionSet = new Set(academicState.sections.map(s => s.section));
+        if (adminState.users) {
+            adminState.users.forEach(u => {
+                const uProg = (u.program || '').trim().toUpperCase();
+                const uSec = (u.section || '').trim().toUpperCase();
+                if (uSec && uSec !== '--' && uSec !== 'N/A' && !deletedProgs.includes(uProg) && !deletedSecs.includes(`${uProg}:${uSec}`)) {
+                    sectionSet.add(u.section.trim());
+                }
+            });
+        }
+        const uniqueSections = Array.from(sectionSet).sort();
         let html = '<option value="">All Sections</option>';
         uniqueSections.forEach(s => {
             html += `<option value="${s}" ${currentVal === s ? 'selected' : ''}>Section ${s}</option>`;
         });
         secFilter.innerHTML = html;
+    }
+
+    // Populate User Modal Program datalist
+    const modalProgDatalist = el('programListDatalist');
+    if (modalProgDatalist) {
+        let html = '';
+        academicState.programs.forEach(p => {
+            html += `<option value="${p.code}">${p.name} (${p.department || 'Academic'})</option>`;
+        });
+        modalProgDatalist.innerHTML = html;
+    }
+
+    // Populate User Modal Section datalist
+    const modalSecDatalist = el('sectionListDatalist');
+    if (modalSecDatalist) {
+        const sectionSet = new Set(academicState.sections.map(s => s.section));
+        if (adminState.users) {
+            adminState.users.forEach(u => {
+                const uProg = (u.program || '').trim().toUpperCase();
+                const uSec = (u.section || '').trim().toUpperCase();
+                if (uSec && uSec !== '--' && uSec !== 'N/A' && !deletedProgs.includes(uProg) && !deletedSecs.includes(`${uProg}:${uSec}`)) {
+                    sectionSet.add(u.section.trim());
+                }
+            });
+        }
+        let html = '';
+        Array.from(sectionSet).sort().forEach(s => {
+            html += `<option value="${s}">Section ${s}</option>`;
+        });
+        modalSecDatalist.innerHTML = html;
     }
 
     // Populate Bulk Modal Student Program select
@@ -6123,6 +7016,28 @@ function renderAcademicDataUI() {
     updateBulkSectionOptions();
     renderAcademicBadgesList();
 }
+
+window.syncFormSectionOptions = function() {
+    const progVal = (el('formProgram')?.value || '').trim().toUpperCase();
+    const modalSecDatalist = el('sectionListDatalist');
+    if (!modalSecDatalist) return;
+
+    let matching = [];
+    if (progVal) {
+        matching = academicState.sections.filter(s => s.program.toUpperCase() === progVal);
+    }
+    if (matching.length === 0) {
+        const sectionSet = new Set(academicState.sections.map(s => s.section));
+        if (adminState.users) {
+            adminState.users.forEach(u => {
+                if (u.section && u.section !== '--' && u.section !== 'N/A') sectionSet.add(u.section.trim());
+            });
+        }
+        modalSecDatalist.innerHTML = Array.from(sectionSet).sort().map(s => `<option value="${s}">Section ${s}</option>`).join('');
+    } else {
+        modalSecDatalist.innerHTML = matching.map(s => `<option value="${s.section}">Section ${s.section}</option>`).join('');
+    }
+};
 
 function updateBulkSectionOptions() {
     const prog = el('bulkStudentProgram')?.value || 'BSIT';
@@ -6209,13 +7124,23 @@ window.saveNewAcademicProgram = function() {
         return;
     }
 
-    if (academicState.programs.some(p => p.code === code)) {
+    if (academicState.programs.some(p => p.code.toUpperCase() === code)) {
         showToast(`Program code "${code}" already exists!`, 'warning');
         return;
     }
 
+    // Un-delete if previously deleted
+    const deletedProgs = getDeletedAcademicPrograms();
+    if (deletedProgs.includes(code)) {
+        setDeletedAcademicPrograms(deletedProgs.filter(c => c !== code));
+    }
+
     academicState.programs.push({ code, name, department: dept });
-    // Add default 1A, 2A, 3A, 4A sections
+    // Add default 1A, 2A, 3A, 4A sections and ensure they are un-deleted
+    const deletedSecs = getDeletedAcademicSections();
+    const updatedDeletedSecs = deletedSecs.filter(k => !k.startsWith(`${code}:`));
+    setDeletedAcademicSections(updatedDeletedSecs);
+
     [1, 2, 3, 4].forEach(y => {
         academicState.sections.push({ program: code, year: y, section: `${y}A` });
     });
@@ -6238,9 +7163,16 @@ window.saveNewAcademicSection = function() {
         return;
     }
 
-    if (academicState.sections.some(s => s.program === prog && s.year === year && s.section === sec)) {
+    if (academicState.sections.some(s => s.program.toUpperCase() === prog && s.year === year && s.section.toUpperCase() === sec)) {
         showToast(`Section "${sec}" already exists for ${prog} Year ${year}`, 'warning');
         return;
+    }
+
+    // Un-delete if previously deleted
+    const secKey = `${prog}:${sec}`;
+    const deletedSecs = getDeletedAcademicSections();
+    if (deletedSecs.includes(secKey)) {
+        setDeletedAcademicSections(deletedSecs.filter(k => k !== secKey));
     }
 
     academicState.sections.push({ program: prog, year, section: sec });
@@ -6255,24 +7187,27 @@ window.saveNewAcademicSection = function() {
 // ==============================================
 
 window.confirmDeleteAcademicProgram = function(code) {
-    const prog = academicState.programs.find(p => p.code === code);
+    const cleanCode = (code || '').trim().toUpperCase();
+    const prog = academicState.programs.find(p => p.code.toUpperCase() === cleanCode);
     if (!prog) return;
-    const progSections = academicState.sections.filter(s => s.program === code);
+    const progSections = academicState.sections.filter(s => s.program.toUpperCase() === cleanCode);
+    const assignedUsers = (adminState.users || []).filter(u => (u.program || '').trim().toUpperCase() === cleanCode);
 
     pendingAcademicDelete = {
         type: 'PROGRAM',
-        code: code,
+        code: cleanCode,
         name: prog.name,
         dept: prog.department,
-        sectionsCount: progSections.length
+        sectionsCount: progSections.length,
+        usersCount: assignedUsers.length
     };
 
     const title = el('academicConfirmTitle');
     const msg = el('academicConfirmMessage');
     const details = el('academicConfirmDetails');
 
-    if (title) title.textContent = `Delete Program: ${code}?`;
-    if (msg) msg.textContent = `Are you sure you want to permanently delete this academic program? All associated sections will also be removed.`;
+    if (title) title.textContent = `Delete Program: ${cleanCode}?`;
+    if (msg) msg.textContent = `Are you sure you want to permanently delete this academic program? It will be removed from all program lists, dropdowns, and master presets.`;
     if (details) {
         details.innerHTML = `
             <div class="space-y-1.5 text-xs">
@@ -6292,6 +7227,15 @@ window.confirmDeleteAcademicProgram = function(code) {
                     <span class="text-red-500 font-bold">Sections to remove:</span>
                     <span class="font-bold text-red-600">${progSections.length} section(s)</span>
                 </div>
+                ${assignedUsers.length > 0 ? `
+                <div class="flex justify-between items-start gap-2 pt-1 border-t border-slate-200">
+                    <span class="text-amber-600 font-semibold">Active User Profiles:</span>
+                    <span class="font-bold text-amber-700">${assignedUsers.length} user(s) currently enrolled</span>
+                </div>
+                <div class="text-[11px] text-amber-700 bg-amber-50 p-2.5 rounded-xl border border-amber-200 mt-2 leading-relaxed">
+                    <strong>Notice:</strong> Deleting this program removes it from registration selectors and bulk upload templates. Existing user records will retain their data, but this program will no longer appear in choices or auto-reappear.
+                </div>
+                ` : ''}
             </div>
         `;
     }
@@ -6300,25 +7244,33 @@ window.confirmDeleteAcademicProgram = function(code) {
 };
 
 window.confirmDeleteAcademicSection = function(prog, year, sec) {
+    const progCode = (prog || '').trim().toUpperCase();
+    const secName = (sec || '').trim().toUpperCase();
+    const assignedUsers = (adminState.users || []).filter(u => 
+        (u.program || '').trim().toUpperCase() === progCode && 
+        (u.section || '').trim().toUpperCase() === secName
+    );
+
     pendingAcademicDelete = {
         type: 'SECTION',
-        prog: prog,
+        prog: progCode,
         year: year,
-        sec: sec
+        sec: secName,
+        usersCount: assignedUsers.length
     };
 
     const title = el('academicConfirmTitle');
     const msg = el('academicConfirmMessage');
     const details = el('academicConfirmDetails');
 
-    if (title) title.textContent = `Delete Section ${sec}?`;
-    if (msg) msg.textContent = `Are you sure you want to delete Section ${sec} from ${prog}?`;
+    if (title) title.textContent = `Delete Section ${secName}?`;
+    if (msg) msg.textContent = `Are you sure you want to delete Section ${secName} from ${progCode}?`;
     if (details) {
         details.innerHTML = `
             <div class="space-y-1.5 text-xs">
                 <div class="flex justify-between items-center">
                     <span class="text-slate-400 font-semibold">Program:</span>
-                    <span class="font-bold text-slate-800">${prog}</span>
+                    <span class="font-bold text-slate-800">${progCode}</span>
                 </div>
                 <div class="flex justify-between items-center">
                     <span class="text-slate-400 font-semibold">Year Level:</span>
@@ -6326,8 +7278,17 @@ window.confirmDeleteAcademicSection = function(prog, year, sec) {
                 </div>
                 <div class="flex justify-between items-center pt-1 border-t border-slate-200">
                     <span class="text-red-500 font-bold">Section Name:</span>
-                    <span class="font-bold text-red-600">Section ${sec}</span>
+                    <span class="font-bold text-red-600">Section ${secName}</span>
                 </div>
+                ${assignedUsers.length > 0 ? `
+                <div class="flex justify-between items-start gap-2 pt-1 border-t border-slate-200">
+                    <span class="text-amber-600 font-semibold">Active User Profiles:</span>
+                    <span class="font-bold text-amber-700">${assignedUsers.length} student(s)</span>
+                </div>
+                <div class="text-[11px] text-amber-700 bg-amber-50 p-2.5 rounded-xl border border-amber-200 mt-2 leading-relaxed">
+                    <strong>Notice:</strong> This section will be permanently removed from templates and dropdown selections.
+                </div>
+                ` : ''}
             </div>
         `;
     }
@@ -6376,18 +7337,43 @@ window.executeAcademicConfirmedDelete = function() {
     if (!pendingAcademicDelete) return;
 
     if (pendingAcademicDelete.type === 'PROGRAM') {
-        const code = pendingAcademicDelete.code;
-        academicState.programs = academicState.programs.filter(p => p.code !== code);
-        academicState.sections = academicState.sections.filter(s => s.program !== code);
+        const code = pendingAcademicDelete.code.toUpperCase();
+
+        // 1. Record in permanent deleted programs list
+        const deletedProgs = getDeletedAcademicPrograms();
+        if (!deletedProgs.includes(code)) {
+            deletedProgs.push(code);
+            setDeletedAcademicPrograms(deletedProgs);
+        }
+
+        // 2. Remove from academic state
+        academicState.programs = academicState.programs.filter(p => p.code.toUpperCase() !== code);
+        academicState.sections = academicState.sections.filter(s => s.program.toUpperCase() !== code);
+        
         saveAcademicDataToStorage();
         renderAcademicDataUI();
-        showToast(`Program "${code}" and all associated sections were deleted.`, 'success');
+        showToast(`Program "${code}" and all associated sections were permanently deleted.`, 'success');
     } else if (pendingAcademicDelete.type === 'SECTION') {
         const { prog, year, sec } = pendingAcademicDelete;
-        academicState.sections = academicState.sections.filter(s => !(s.program === prog && s.year === year && s.section === sec));
+        const progUpper = prog.toUpperCase();
+        const secUpper = sec.toUpperCase();
+        const secKey = `${progUpper}:${secUpper}`;
+
+        // 1. Record in permanent deleted sections list
+        const deletedSecs = getDeletedAcademicSections();
+        if (!deletedSecs.includes(secKey)) {
+            deletedSecs.push(secKey);
+            setDeletedAcademicSections(deletedSecs);
+        }
+
+        // 2. Remove from academic state
+        academicState.sections = academicState.sections.filter(s => 
+            !(s.program.toUpperCase() === progUpper && s.year === year && s.section.toUpperCase() === secUpper)
+        );
+        
         saveAcademicDataToStorage();
         renderAcademicDataUI();
-        showToast(`Section "${sec}" removed from ${prog}.`, 'info');
+        showToast(`Section "${secUpper}" removed from ${progUpper}.`, 'info');
     }
 
     closeAcademicConfirmModal();

@@ -6,6 +6,19 @@
 const SUPABASE_URL = 'https://xrdpgsnastqnbhvdltwt.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhyZHBnc25hc3RxbmJodmRsdHd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEzMDQxMjgsImV4cCI6MjEwNjg4MDEyOH0.1ZKaUnEmB9B7PVk8arIhkGRqoxJbv6-VzflUaB7mZiE';
 
+/**
+ * Emergency Master Recovery Key
+ * Used on index.html if an administrator or guard forgets their password.
+ * Change this string anytime to customize your emergency secret key.
+ */
+const MASTER_RECOVERY_KEY = 'CHARRMPASS-MASTER-2026';
+if (typeof window !== 'undefined') {
+    window.MASTER_RECOVERY_KEY = MASTER_RECOVERY_KEY;
+}
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { SUPABASE_URL, SUPABASE_ANON_KEY, MASTER_RECOVERY_KEY };
+}
+
 let supabaseClient = null;
 let isConnected = false;
 let isCheckingConnection = false;
@@ -297,14 +310,16 @@ function setupConnectionHeartbeat() {
     });
 }
 
-// Auto-run on script load
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
+// Auto-run on script load (Browser environment)
+if (typeof document !== 'undefined') {
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => {
+            initSupabase();
+            setupConnectionHeartbeat();
+        });
+    } else {
         initSupabase();
         setupConnectionHeartbeat();
-    });
-} else {
-    initSupabase();
-    setupConnectionHeartbeat();
+    }
 }
 

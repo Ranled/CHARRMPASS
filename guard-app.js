@@ -837,6 +837,9 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                 // If unassigned visitor tag, open the registration modal for guard input
                 if (!isAssigned) {
                     openVisitorModal(uid, 'Entry');
+                    if (!fromRealtimeTxn) {
+                        return;
+                    }
                 }
 
                 result = {
@@ -1070,6 +1073,29 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
             const userType = isPed ? 'PEDESTRIAN' : 'VEHICLE';
             const rfidType = isPed ? 'CLOSE_RANGE' : 'LONG_RANGE';
             const gateName = isEntry ? (isPed ? 'CHARRMPASS_GATE_ENTRY' : 'ENTRY_GATE') : (isPed ? 'CHARRMPASS_GATE_EXIT' : 'EXIT_GATE');
+
+            // ─── OPTION A: SELF-HEALING RE-ENTRY (AUTO-RESOLVED EXIT) ─────────────────
+            // If the user's previous transaction was an unclosed ENTRY (> 30s ago),
+            // auto-resolve their previous visit before creating the new entry session.
+            if (isEntry && lastTxn && lastTxn.direction === 'ENTRY' && !result.isEmergency) {
+                const prevEntryDate = new Date(lastTxn.timestamp);
+                const prevTimeStr = prevEntryDate.toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit' });
+                const prevDateStr = prevEntryDate.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit' });
+
+                await supabaseClient.from('transactions').insert({
+                    rfid_uid: uid,
+                    direction: 'EXIT',
+                    gate: 'AUTO_RESOLVED_EXIT',
+                    vehicle_id: isPed ? null : (result.vehicle_id || null),
+                    user_id: userId || null,
+                    user_type: userType,
+                    rfid_type: rfidType,
+                    status: 'AUTHORIZED',
+                    remarks: `[AUTO_RESOLVED_EXIT] Unclosed session from ${prevTimeStr} ${prevDateStr} auto-closed upon re-entry`
+                });
+
+                result.historyNotice = `Auto-resolved prior exit (${prevTimeStr}) • Welcome back!`;
+            }
 
             await supabaseClient.from('transactions').insert({
                 rfid_uid: uid,
