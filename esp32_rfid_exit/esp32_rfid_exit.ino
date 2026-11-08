@@ -2989,8 +2989,6 @@ void loop() {
       delay(400);
       setStage(ST_SYNC_TXN);
       syncOfflineTransactionsToCloud();
-      setStage(ST_SYNC_WL);
-      syncWhitelistToSD();
       sendDeviceHeartbeat();
       showReady();
     }
@@ -3039,18 +3037,24 @@ void loop() {
     sendDeviceHeartbeat();
   }
 
-  // Periodic Whitelist Sync when Online
-  if (wifiConnected &&
-      (millis() - lastWhitelistSync > WHITELIST_SYNC_INTERVAL)) {
-    syncWhitelistToSD();
-    showReady();
-  }
+  // Note: Automatic 5-minute periodic whitelist sync has been disabled to prevent
+  // turnstile latency / delay while students are lining up. Whitelist is synced
+  // upon boot/restart in setup() and can be refreshed manually via serial command "SYNC".
 
   // 1. Guard Manual Serial Input & Configuration
   if (Serial.available() > 0) {
     String inputStr = Serial.readStringUntil('\n');
     inputStr.trim();
     if (inputStr.length() > 0) {
+
+      // ── SYNC → Optional manual whitelist refresh via Serial Monitor ──
+      if (inputStr.equalsIgnoreCase("SYNC") ||
+          inputStr.equalsIgnoreCase("SYNC_CARDS")) {
+        Serial.println("[MANUAL SYNC] Initiating whitelist refresh from cloud...");
+        syncWhitelistToSD();
+        showReady();
+        return;
+      }
 
       // ── BLE / START_BLE → Force BLE Setup Mode ──
       if (inputStr.equalsIgnoreCase("BLE") ||

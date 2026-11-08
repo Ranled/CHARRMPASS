@@ -3325,12 +3325,8 @@ void loop() {
   flushOfflineTransactions();
   cleanupPresenceRecords();
 
-  // 2. Periodic RAM Whitelist Sync from Supabase (every 5 minutes)
-  if (wifiConnected && internetAvailable &&
-      (millis() - lastWhitelistSync >= WHITELIST_SYNC_INTERVAL)) {
-    lastWhitelistSync = millis();
-    syncWhitelistToRam();
-  }
+  // 2. Periodic RAM Whitelist Sync disabled to prevent scanning delays while vehicles or pedestrians line up.
+  // Whitelist is synced upon boot/restart in setup() and can be refreshed manually via serial command "SYNC".
 
   // 3. Reset LCD display to ready screen after scan display hold time
   if (readyDisplayAtMillis > 0 && millis() >= readyDisplayAtMillis) {
@@ -3343,6 +3339,15 @@ void loop() {
     String inputStr = Serial.readStringUntil('\n');
     inputStr.trim();
     if (inputStr.length() > 0) {
+
+      // ── SYNC → Optional manual whitelist refresh via Serial Monitor ──
+      if (inputStr.equalsIgnoreCase("SYNC") ||
+          inputStr.equalsIgnoreCase("SYNC_CARDS")) {
+        Serial.println("[MANUAL SYNC] Initiating whitelist refresh from cloud...");
+        syncWhitelistToRam();
+        showReady();
+        return;
+      }
 
       // ── WIFI:<SSID>,<PASS>  → Save to SD & NVS and connect ──
       if (inputStr.startsWith("WIFI:") || inputStr.startsWith("wifi:")) {
