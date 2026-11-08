@@ -9,11 +9,26 @@
 const GATE_DIRECTION = 'EXIT';
 
 // ─── STATE ───────────────────────────────────────────────────
-let guardName       = 'Guard';
-let recentExits     = [];
-let currentScanData = null;
-let scanTimeout     = null;
-let insideCount     = 0;
+let guardName           = 'Guard';
+let recentExits         = [];
+let currentScanData     = null;
+let scanTimeout         = null;
+let insideCount         = 0;
+let exitRealtimeChannel = null;
+const localInsertedTxnIds = new Set();
+
+function computeOfflineAuthDigest(u, p) {
+  const str = 'charrmpass:' + String(u || '').toLowerCase() + ':' + String(p || '');
+  let h1 = 0xdeadbeef ^ str.length, h2 = 0x41c6ce57 ^ str.length;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16);
+}
 
 // ─── INIT ─────────────────────────────────────────────────────
 (function init() {
@@ -54,14 +69,19 @@ async function doLogin() {
     const client = typeof supabaseClient !== 'undefined' ? supabaseClient : null;
     if (client && isConnected) {
       try {
-        const { data, error } = await client
-          .from('system_accounts').select('*')
-          .eq('username', user).eq('password', pass).maybeSingle();
-        if (!error && data) {
-          account = data;
+        const { account: verified, error } = typeof verifySystemAccount === 'function'
+          ? await verifySystemAccount(user, pass, client)
+          : await client.from('system_accounts').select('id, username, role').eq('username', user).eq('password', pass).maybeSingle().then(r => ({ account: r.data, error: r.error }));
+        if (!error && verified) {
+          account = verified;
           try {
             const cached = JSON.parse(localStorage.getItem('charrmpass_cached_accounts') || '{}');
-            cached[user] = { username: data.username, password: pass, role: data.role, id: data.id };
+            cached[user] = {
+              username: verified.username,
+              digest: computeOfflineAuthDigest(verified.username, pass),
+              role: verified.role,
+              id: verified.id
+            };
             localStorage.setItem('charrmpass_cached_accounts', JSON.stringify(cached));
           } catch (_) {}
         }
@@ -70,17 +90,17 @@ async function doLogin() {
       }
     }
 
-    // Offline / fallback authentication
-    if (!account) {
+    // Offline / fallback authentication (only when offline / unreachable)
+    if (!account && !isConnected) {
       try {
         const cached = JSON.parse(localStorage.getItem('charrmpass_cached_accounts') || '{}');
-        if (cached[user] && cached[user].password === pass) {
-          account = cached[user];
+        const entry = cached[user];
+        if (entry && (entry.digest === computeOfflineAuthDigest(user, pass) || entry.password === pass)) {
+          account = entry;
           isOfflineAuth = true;
         }
       } catch (_) {}
 
-      // Built-in emergency accounts if offline or database unreachable
       if (!account) {
         if ((user === 'guard' && pass === 'guard123') || (user === 'admin' && pass === 'admin123')) {
           account = {
@@ -95,7 +115,6 @@ async function doLogin() {
 
     if (!account) {
       errEl.textContent = 'Invalid username or password.';
-      btn.textContent = 'SIGN IN'; btn.disabled = false;
       return;
     }
 
@@ -121,12 +140,23 @@ async function doLogin() {
 
   } catch (e) {
     errEl.textContent = 'Login error. Try again.';
-    btn.textContent = 'SIGN IN'; btn.disabled = false;
+  } finally {
+    btn.textContent = 'SIGN IN';
+    btn.disabled = false;
   }
 }
 
 function doLogout() {
   if (!confirm('Sign out?')) return;
+  try { sessionStorage.removeItem('charrmpass_session'); } catch (_) {}
+  if (exitRealtimeChannel && typeof supabaseClient !== 'undefined' && supabaseClient) {
+    try { supabaseClient.removeChannel(exitRealtimeChannel); } catch (_) {}
+    exitRealtimeChannel = null;
+  }
+  const passEl = document.getElementById('loginPass');
+  if (passEl) passEl.value = '';
+  const btn = document.getElementById('btnLogin');
+  if (btn) { btn.textContent = 'SIGN IN'; btn.disabled = false; }
   document.getElementById('loginScreen').style.display = 'flex';
   document.getElementById('dashboard').classList.add('hidden');
   resetScanPanel();
@@ -174,6 +204,9 @@ window.addEventListener('online', () => setTrafficLightUI('connected'));
 
 // ─── DATE HELPER ──────────────────────────────────────────────
 function getLocalStartOfDayIso() {
+  if (typeof getManilaDayBoundsIso === 'function' && typeof getManilaDateKey === 'function') {
+    return getManilaDayBoundsIso(getManilaDateKey()).start;
+  }
   const now = new Date();
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
   return startOfDay.toISOString();
@@ -186,7 +219,7 @@ async function loadRecentExits() {
   const { data, error } = await supabaseClient
     .from('transactions')
     .select(`
-      id, rfid_uid, direction, status, timestamp, remarks,
+      id, rfid_uid, direction, status, timestamp, remarks, gate,
       users   ( full_name, role, program, section ),
       vehicles( plate_number )
     `)
@@ -196,7 +229,7 @@ async function loadRecentExits() {
     .limit(30);
 
   if (error) { console.error('Load exits error:', error); return; }
-  recentExits = data || [];
+  recentExits = (data || []).filter(r => r.gate !== 'AUTO_RESOLVED_EXIT' && !String(r.remarks || '').includes('[AUTO_RESOLVED_EXIT]'));
   renderRecentList();
 }
 
@@ -292,12 +325,18 @@ function renderRecentList() {
         const match = t.remarks.match(/Emergency (?:tag|Response):\s*(.+)/i);
         name = match ? match[1].trim() : 'Emergency Response';
         plate = 'EMERGENCY';
+      } else if (/UHF Vehicle (?:Entry|Exit):/i.test(t.remarks)) {
+        const match = t.remarks.match(/UHF Vehicle (?:Entry|Exit):\s*([^|]+?)(?:\s*\|\s*Driver:\s*(.+))?$/i);
+        if (match) {
+          if (!plate && match[1]?.trim()) plate = match[1].trim();
+          if (match[2]?.trim()) name = match[2].trim();
+        }
       }
     }
 
     if (!name) name = ok ? 'Authorized Driver' : (t.status === 'PENDING_CONFIRMATION' ? 'Exit Conflict (Verify)' : 'Unregistered RFID');
     if (!plate) plate = t.rfid_uid?.substring(0, 12) || '--';
-    const timeStr = new Date(t.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const timeStr = new Date(t.timestamp).toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit', hour12: false });
     const isPending = t.status === 'PENDING_CONFIRMATION';
     const dotClass = ok ? 'ok' : (isPending ? 'pending' : 'deny');
     const badgeColor = ok ? 'color:#3b82f6' : (isPending ? 'color:#d97706' : 'color:#ef4444');
@@ -317,15 +356,23 @@ function renderRecentList() {
 
 // ─── REALTIME ─────────────────────────────────────────────────
 function setupRealtime() {
-  if (!isConnected) return;
+  if (!isConnected || !supabaseClient) return;
+  if (exitRealtimeChannel) {
+    try { supabaseClient.removeChannel(exitRealtimeChannel); } catch (_) {}
+    exitRealtimeChannel = null;
+  }
 
   // Watch EXIT transactions for live feed
-  supabaseClient.channel('exit-txn-live')
+  exitRealtimeChannel = supabaseClient.channel('exit-txn-live')
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'transactions' }, async payload => {
       const row = payload.new;
-      if (row.direction !== GATE_DIRECTION) {
-        // An ENTRY happened — update inside count
+      if (row.direction !== GATE_DIRECTION || row.gate === 'AUTO_RESOLVED_EXIT' || String(row.remarks || '').includes('[AUTO_RESOLVED_EXIT]')) {
+        // An ENTRY or synthetic self-healing exit happened — refresh inside count only
         await refreshInsideCount();
+        return;
+      }
+      if (row.id && localInsertedTxnIds.has(row.id)) {
+        localInsertedTxnIds.delete(row.id);
         return;
       }
       console.log('[RT] New EXIT transaction:', row);
@@ -393,6 +440,15 @@ function showScanResult(txn, entryStatus) {
     role = 'EMERGENCY';
     program = 'Emergency Response';
     section = 'Priority Pass';
+  } else if (!name && /UHF Vehicle (?:Entry|Exit):/i.test(txn.remarks || '')) {
+    const match = txn.remarks.match(/UHF Vehicle (?:Entry|Exit):\s*([^|]+?)(?:\s*\|\s*Driver:\s*(.+))?$/i);
+    if (match) {
+      if (!plate && match[1]?.trim()) plate = match[1].trim();
+      if (match[2]?.trim()) name = match[2].trim();
+      role = role || 'DRIVER';
+      program = 'UHF Long-Range Pass';
+      section = 'Vehicle Exit';
+    }
   }
 
   if (!name) name = 'Unknown Card';
@@ -400,7 +456,10 @@ function showScanResult(txn, entryStatus) {
   if (!role) role = '--';
   const vtype   = txn.vehicles?.vehicle_type  || '';
   const vmodel  = txn.vehicles?.vehicle_model || '';
-  const timeStr = new Date(txn.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  const timeStr = new Date(txn.timestamp).toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  if (typeof playGateAudio === 'function') {
+    playGateAudio(ok ? 'AUTHORIZED' : 'DENIED');
+  }
 
   // Avatar color: blue=ok+valid, warning=ok+no_entry, red=denied
   const avatarColor = !ok ? 'b91c1c' : hasWarn ? 'b45309' : '1d4ed8';
@@ -525,7 +584,7 @@ async function processManual() {
   let card = null;
   const { data: c } = await supabaseClient
     .from('rfid_cards')
-    .select(`id, rfid_uid, authorization_status, vehicle_id, user_id,
+    .select(`id, rfid_uid, authorization_status, vehicle_id, user_id, user_type, rfid_type,
              vehicles ( plate_number, vehicle_type, vehicle_model ),
              users    ( full_name, role, program, section )`)
     .eq('rfid_uid', uid).maybeSingle();
@@ -564,6 +623,14 @@ async function processManual() {
     remarks = `Emergency Response: ${emergencyLabel}`;
   }
 
+  const isVehicleCard = (card?.vehicles?.plate_number && card.vehicles.plate_number !== 'PEDESTRIAN' && card.vehicles.plate_number !== 'NONE' && card.vehicles.plate_number !== 'N/A') ||
+                        (card?.vehicles?.vehicle_type && card.vehicles.vehicle_type !== 'None' && card.vehicles.vehicle_type !== 'Walking / Pedestrian') ||
+                        (card?.user_type === 'VEHICLE') ||
+                        (isVisitor && visitorPlate && visitorPlate !== 'N/A' && visitorPlate !== 'VISITOR PASS');
+  const user_type = isVehicleCard ? 'VEHICLE' : 'PEDESTRIAN';
+  const rfid_type = isVehicleCard ? 'LONG_RANGE' : 'CLOSE_RANGE';
+  const gateName  = isVehicleCard ? 'EXIT_GATE' : 'CHARRMPASS_GATE_EXIT';
+
   // Check prior entry BEFORE inserting
   const entryStatus = status === 'AUTHORIZED' ? await checkPriorEntry(uid) : 'n/a';
 
@@ -572,15 +639,15 @@ async function processManual() {
     .insert({
       rfid_uid:   uid,
       direction:  GATE_DIRECTION,
-      gate:       'CHARRMPASS_GATE_EXIT',
-      user_type:  'PEDESTRIAN',
-      rfid_type:  'CLOSE_RANGE',
+      gate:       gateName,
+      user_type:  user_type,
+      rfid_type:  rfid_type,
       vehicle_id: card?.vehicle_id || null,
       user_id:    card?.user_id || null,
       status,
-      remarks
+      remarks: card ? `${remarks} (${isVehicleCard ? 'Vehicle' : 'Pedestrian'})` : remarks
     })
-    .select(`id, rfid_uid, direction, status, timestamp, remarks,
+    .select(`id, rfid_uid, direction, status, timestamp, remarks, user_type, rfid_type,
              users(full_name,role,program,section), vehicles(plate_number,vehicle_type,vehicle_model)`)
     .single();
 
@@ -589,6 +656,8 @@ async function processManual() {
     setTrafficLightUI('standby');
     return;
   }
+
+  if (txn?.id) localInsertedTxnIds.add(txn.id);
 
   if (isVisitor) {
     await supabaseClient.from('special_tags').update({
@@ -613,15 +682,32 @@ function allowExitOverride() {
   resetScanPanel();
 }
 
-function denyLast() {
+async function denyLast() {
   if (!currentScanData) { showToast('No active scan to deny.', 'error'); return; }
-  const fakeRow = {
-    id: 'manual-deny', rfid_uid: currentScanData.rfid_uid,
-    direction: GATE_DIRECTION, status: 'DENIED',
-    timestamp: new Date().toISOString(), remarks: 'Denied by guard',
-    users: null, vehicles: null
+  const targetTxn = currentScanData;
+  if (isConnected && supabaseClient && targetTxn.id && !String(targetTxn.id).startsWith('manual-')) {
+    const { error } = await supabaseClient
+      .from('transactions')
+      .update({ status: 'DENIED', remarks: 'Denied by guard override' })
+      .eq('id', targetTxn.id);
+    if (error) console.warn('Override update warning:', error);
+    const idx = recentExits.findIndex(e => e.id === targetTxn.id);
+    if (idx !== -1) {
+      recentExits[idx] = { ...recentExits[idx], status: 'DENIED', remarks: 'Denied by guard override' };
+      renderRecentList();
+    }
+    await refreshInsideCount();
+  }
+  const deniedRow = {
+    ...targetTxn,
+    id: targetTxn.id || 'manual-deny',
+    rfid_uid: targetTxn.rfid_uid,
+    direction: GATE_DIRECTION,
+    status: 'DENIED',
+    timestamp: targetTxn.timestamp || new Date().toISOString(),
+    remarks: 'Denied by guard override'
   };
-  showScanResult(fakeRow, 'n/a');
+  showScanResult(deniedRow, 'n/a');
   showToast('Exit denied by guard.', 'error');
 }
 

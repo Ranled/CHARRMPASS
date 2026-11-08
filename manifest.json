@@ -2,7 +2,7 @@
   "name": "CHARRMPASS: Smart Entry & Exit RFID Monitoring System",
   "short_name": "CHARRMPASS",
   "description": "Smart Entry and Exit Monitoring System Using RFID Technology for Aklan State University - Ibajay Campus",
-  "start_url": "/index.html",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "background_color": "#0E4B3A",
@@ -10,13 +10,13 @@
   "orientation": "any",
   "icons": [
     {
-      "src": "logocharrmpark.png",
+      "src": "icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "logocharrmpark.png",
+      "src": "icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"

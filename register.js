@@ -31,6 +31,7 @@ let verifiedOwner = null;      // owner row returned by lookupCpass()
 let issuedCpassId = null;      // CPASS ID shown on the success screen
 let cameraStream = null;
 let cameraTarget = null;
+let cameraFacingMode = 'user';
 
 const STEP_LABELS = {
     1: 'Personal Info',
@@ -193,6 +194,10 @@ function validateCurrentStep() {
                 return flagField(id, 'Please fill in all required fields.');
             }
         }
+        const ageNum = parseInt(document.getElementById('regAge').value, 10);
+        if (isNaN(ageNum) || ageNum < 15 || ageNum > 100) {
+            return flagField('regAge', 'Please enter a valid age between 15 and 100.');
+        }
         if (document.getElementById('regRole').value === 'Others' &&
             !document.getElementById('regRoleOther').value.trim()) {
             return flagField('regRoleOther', 'Please specify your role (e.g. Vendor).');
@@ -200,6 +205,9 @@ function validateCurrentStep() {
         if (document.getElementById('regRole').value === 'Student') {
             const sid = normalizeCpass(document.getElementById('regStudentId').value);
             if (!sid) return flagField('regStudentId', 'Please enter your Student ID.');
+            if (/^CP\d+$/i.test(sid)) {
+                return flagField('regStudentId', 'Student IDs cannot use the reserved CP## format.');
+            }
             if (!isValidStudentId(sid)) {
                 return flagField('regStudentId', 'Student ID may only use letters, numbers and dashes (4-20 characters).');
             }
@@ -280,7 +288,7 @@ async function lookupCpass() {
             const { data, error } = await supabaseClient
                 .from('users')
                 .select('id, full_name, role, program, profile_image, cpass_id, approval_status')
-                .ilike('cpass_id', cpass)
+                .eq('cpass_id', cpass)
                 .limit(1);
             if (error) throw new Error(error.message);
             owner = (data && data[0]) || null;
@@ -365,17 +373,30 @@ document.getElementById('lookupCpassId').addEventListener('keydown', (e) => {
 // =====================
 // CAMERA FUNCTIONALITY
 // =====================
-function openCamera(target) {
-    cameraTarget = target;
-    const modal = document.getElementById('cameraModal');
+function stopActiveCameraStream() {
+    if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+        cameraStream = null;
+    }
     const video = document.getElementById('cameraVideo');
+    if (video) video.srcObject = null;
+}
 
-    modal.classList.remove('hidden');
-
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 480 } })
+function startCameraStream(facingMode) {
+    stopActiveCameraStream();
+    const video = document.getElementById('cameraVideo');
+    const isDoc = cameraTarget && cameraTarget !== 'profile';
+    const constraints = {
+        video: {
+            facingMode: { ideal: facingMode },
+            width: { ideal: isDoc ? 1280 : 640 },
+            height: { ideal: isDoc ? 960 : 480 }
+        }
+    };
+    navigator.mediaDevices.getUserMedia(constraints)
         .then(stream => {
             cameraStream = stream;
-            video.srcObject = stream;
+            if (video) video.srcObject = stream;
         })
         .catch(err => {
             console.error('Camera error:', err);
@@ -384,23 +405,39 @@ function openCamera(target) {
         });
 }
 
+function openCamera(target) {
+    cameraTarget = target;
+    cameraFacingMode = (target === 'profile') ? 'user' : 'environment';
+    const modal = document.getElementById('cameraModal');
+    modal.classList.remove('hidden');
+    if (typeof lucide !== 'undefined' && lucide.createIcons) lucide.createIcons();
+    startCameraStream(cameraFacingMode);
+}
+
+function switchCameraFacing() {
+    cameraFacingMode = (cameraFacingMode === 'user') ? 'environment' : 'user';
+    startCameraStream(cameraFacingMode);
+}
+window.switchCameraFacing = switchCameraFacing;
+
 function closeCamera() {
     const modal = document.getElementById('cameraModal');
-    const video = document.getElementById('cameraVideo');
-
-    if (cameraStream) {
-        cameraStream.getTracks().forEach(track => track.stop());
-        cameraStream = null;
-    }
-    video.srcObject = null;
+    stopActiveCameraStream();
     modal.classList.add('hidden');
+}
+
+function getCompressionConfig(target) {
+    // Profile avatars: compact 256px; IDs / OR-CR / Licenses: crisp 1000px so small text stays readable
+    return target === 'profile'
+        ? { maxDim: 256, quality: 0.80 }
+        : { maxDim: 1000, quality: 0.78 };
 }
 
 function capturePhoto() {
     const video = document.getElementById('cameraVideo');
     const canvas = document.getElementById('cameraCanvas');
 
-    const MAX = 600;
+    const { maxDim: MAX, quality } = getCompressionConfig(cameraTarget);
     let w = video.videoWidth || 640;
     let h = video.videoHeight || 480;
     if (w > MAX || h > MAX) {
@@ -412,8 +449,7 @@ function capturePhoto() {
     canvas.height = h;
     canvas.getContext('2d').drawImage(video, 0, 0, w, h);
 
-    // Compress to smaller size for DB storage
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+    const dataUrl = canvas.toDataURL('image/jpeg', quality);
     photoData[cameraTarget] = dataUrl;
 
     updatePhotoPreview(cameraTarget, dataUrl);
@@ -428,18 +464,17 @@ function handleFileUpload(input, target) {
     const file = input.files[0];
     if (!file) return;
 
-    if (file.size > 5 * 1024 * 1024) {
-        showToast('File too large. Maximum 5MB allowed.', 'error');
+    if (file.size > 8 * 1024 * 1024) {
+        showToast('File too large. Maximum 8MB allowed.', 'error');
         return;
     }
 
-    // Resize image before storing
+    const { maxDim: MAX, quality } = getCompressionConfig(target);
     const reader = new FileReader();
     reader.onload = (e) => {
         const img = new Image();
         img.onload = () => {
             const canvas = document.createElement('canvas');
-            const MAX = 400;
             let w = img.width, h = img.height;
             if (w > MAX || h > MAX) {
                 if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
@@ -447,7 +482,7 @@ function handleFileUpload(input, target) {
             }
             canvas.width = w; canvas.height = h;
             canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-            const compressed = canvas.toDataURL('image/jpeg', 0.5);
+            const compressed = canvas.toDataURL('image/jpeg', quality);
             photoData[target] = compressed;
             updatePhotoPreview(target, compressed);
             showToast('Photo uploaded successfully!', 'success');
@@ -623,7 +658,7 @@ async function submitPedestrian() {
         const { error: cardErr } = await supabaseClient
             .from('rfid_cards')
             .insert([{
-                rfid_uid:             'UNASSIGNED_' + Date.now(),
+                rfid_uid:             'UNASSIGNED_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6).toUpperCase(),
                 user_id:              newUser.id,
                 vehicle_id:           null,
                 rfid_type:            'CLOSE_RANGE',
@@ -704,7 +739,7 @@ async function submitVehicle() {
         const { error: cardErr } = await supabaseClient
             .from('rfid_cards')
             .insert([{
-                rfid_uid:             'UNASSIGNED_' + Date.now(),
+                rfid_uid:             'UNASSIGNED_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6).toUpperCase(),
                 vehicle_id:           newVehicle.id,
                 user_id:              verifiedOwner.id,
                 rfid_type:            'LONG_RANGE',

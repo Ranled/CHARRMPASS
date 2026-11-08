@@ -8,10 +8,26 @@
 const GATE_DIRECTION = 'ENTRY';
 
 // ─── STATE ───────────────────────────────────────────────────
-let guardName       = 'Guard';
-let recentEntries   = [];
-let currentScanUID  = null;
-let scanTimeout     = null;
+let guardName            = 'Guard';
+let recentEntries        = [];
+let currentScanUID       = null;
+let currentScanData      = null;
+let scanTimeout          = null;
+let entryRealtimeChannel = null;
+const localInsertedTxnIds = new Set();
+
+function computeOfflineAuthDigest(u, p) {
+  const str = 'charrmpass:' + String(u || '').toLowerCase() + ':' + String(p || '');
+  let h1 = 0xdeadbeef ^ str.length, h2 = 0x41c6ce57 ^ str.length;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16);
+}
 
 // ─── INIT ─────────────────────────────────────────────────────
 (function init() {
@@ -59,17 +75,19 @@ async function doLogin() {
     const client = typeof supabaseClient !== 'undefined' ? supabaseClient : null;
     if (client && isConnected) {
       try {
-        const { data, error } = await client
-          .from('system_accounts')
-          .select('*')
-          .eq('username', user)
-          .eq('password', pass)
-          .maybeSingle();
-        if (!error && data) {
-          account = data;
+        const { account: verified, error } = typeof verifySystemAccount === 'function'
+          ? await verifySystemAccount(user, pass, client)
+          : await client.from('system_accounts').select('id, username, role').eq('username', user).eq('password', pass).maybeSingle().then(r => ({ account: r.data, error: r.error }));
+        if (!error && verified) {
+          account = verified;
           try {
             const cached = JSON.parse(localStorage.getItem('charrmpass_cached_accounts') || '{}');
-            cached[user] = { username: data.username, password: pass, role: data.role, id: data.id };
+            cached[user] = {
+              username: verified.username,
+              digest: computeOfflineAuthDigest(verified.username, pass),
+              role: verified.role,
+              id: verified.id
+            };
             localStorage.setItem('charrmpass_cached_accounts', JSON.stringify(cached));
           } catch (_) {}
         }
@@ -78,17 +96,17 @@ async function doLogin() {
       }
     }
 
-    // Offline / fallback authentication
-    if (!account) {
+    // Offline / fallback authentication (only when offline / unreachable)
+    if (!account && !isConnected) {
       try {
         const cached = JSON.parse(localStorage.getItem('charrmpass_cached_accounts') || '{}');
-        if (cached[user] && cached[user].password === pass) {
-          account = cached[user];
+        const entry = cached[user];
+        if (entry && (entry.digest === computeOfflineAuthDigest(user, pass) || entry.password === pass)) {
+          account = entry;
           isOfflineAuth = true;
         }
       } catch (_) {}
 
-      // Built-in emergency accounts if offline or database unreachable
       if (!account) {
         if ((user === 'guard' && pass === 'guard123') || (user === 'admin' && pass === 'admin123')) {
           account = {
@@ -103,7 +121,6 @@ async function doLogin() {
 
     if (!account) {
       errEl.textContent = 'Invalid username or password.';
-      btn.textContent = 'SIGN IN'; btn.disabled = false;
       return;
     }
 
@@ -128,12 +145,23 @@ async function doLogin() {
 
   } catch (e) {
     errEl.textContent = 'Login error. Try again.';
-    btn.textContent = 'SIGN IN'; btn.disabled = false;
+  } finally {
+    btn.textContent = 'SIGN IN';
+    btn.disabled = false;
   }
 }
 
 function doLogout() {
   if (!confirm('Sign out?')) return;
+  try { sessionStorage.removeItem('charrmpass_session'); } catch (_) {}
+  if (entryRealtimeChannel && typeof supabaseClient !== 'undefined' && supabaseClient) {
+    try { supabaseClient.removeChannel(entryRealtimeChannel); } catch (_) {}
+    entryRealtimeChannel = null;
+  }
+  const passEl = document.getElementById('loginPass');
+  if (passEl) passEl.value = '';
+  const btn = document.getElementById('btnLogin');
+  if (btn) { btn.textContent = 'SIGN IN'; btn.disabled = false; }
   document.getElementById('loginScreen').style.display = 'flex';
   document.getElementById('dashboard').classList.add('hidden');
   resetScanPanel();
@@ -181,6 +209,9 @@ window.addEventListener('online', () => setTrafficLightUI('connected'));
 
 // ─── DATE HELPER ──────────────────────────────────────────────
 function getLocalStartOfDayIso() {
+  if (typeof getManilaDayBoundsIso === 'function' && typeof getManilaDateKey === 'function') {
+    return getManilaDayBoundsIso(getManilaDateKey()).start;
+  }
   const now = new Date();
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
   return startOfDay.toISOString();
@@ -234,6 +265,12 @@ function renderRecentList() {
         const match = t.remarks.match(/Emergency (?:tag|Response):\s*(.+)/i);
         name = match ? match[1].trim() : 'Emergency Response';
         plate = 'EMERGENCY';
+      } else if (/UHF Vehicle (?:Entry|Exit):/i.test(t.remarks)) {
+        const match = t.remarks.match(/UHF Vehicle (?:Entry|Exit):\s*([^|]+?)(?:\s*\|\s*Driver:\s*(.+))?$/i);
+        if (match) {
+          if (!plate && match[1]?.trim()) plate = match[1].trim();
+          if (match[2]?.trim()) name = match[2].trim();
+        }
       }
     }
 
@@ -245,7 +282,7 @@ function renderRecentList() {
 
     if (!name) name = ok ? (isVehicle ? 'Authorized Driver' : 'Authorized Pedestrian') : (isPending ? 'Duplicate Entry Scan' : 'Unregistered RFID');
     if (!plate) plate = isVehicle ? (t.rfid_uid?.substring(0, 12) || '--') : 'PEDESTRIAN';
-    const timeStr = new Date(t.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const timeStr = new Date(t.timestamp).toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit', hour12: false });
     const dotColor = ok ? 'ok' : (isPending ? 'pending' : 'deny');
     const badgeIcon = ok ? '✓' : (isPending ? '⚠' : '✕');
     const badgeColor = ok ? 'color:#22c55e' : (isPending ? 'color:#d97706' : 'color:#ef4444');
@@ -269,12 +306,20 @@ function renderRecentList() {
 
 // ─── REALTIME SUBSCRIPTION ────────────────────────────────────
 function setupRealtime() {
-  if (!isConnected) return;
+  if (!isConnected || !supabaseClient) return;
+  if (entryRealtimeChannel) {
+    try { supabaseClient.removeChannel(entryRealtimeChannel); } catch (_) {}
+    entryRealtimeChannel = null;
+  }
 
-  supabaseClient.channel('entry-txn-live')
+  entryRealtimeChannel = supabaseClient.channel('entry-txn-live')
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'transactions' }, payload => {
       const row = payload.new;
       if (row.direction !== GATE_DIRECTION) return; // Ignore EXIT transactions
+      if (row.id && localInsertedTxnIds.has(row.id)) {
+        localInsertedTxnIds.delete(row.id);
+        return;
+      }
       console.log('[RT] New ENTRY transaction:', row);
       handleNewTransaction(row);
     })
@@ -313,7 +358,8 @@ async function handleNewTransaction(txn) {
 
 // ─── SHOW SCAN RESULT IN PANEL ────────────────────────────────
 function showScanResult(txn) {
-  currentScanUID = txn.rfid_uid;
+  currentScanData = txn;
+  currentScanUID  = txn.rfid_uid;
   const ok        = txn.status === 'AUTHORIZED';
   const isPending = txn.status === 'PENDING_CONFIRMATION';
   let name    = txn.users?.full_name;
@@ -337,6 +383,15 @@ function showScanResult(txn) {
     role = 'EMERGENCY';
     program = 'Emergency Response';
     section = 'Priority Pass';
+  } else if (!name && /UHF Vehicle (?:Entry|Exit):/i.test(txn.remarks || '')) {
+    const match = txn.remarks.match(/UHF Vehicle (?:Entry|Exit):\s*([^|]+?)(?:\s*\|\s*Driver:\s*(.+))?$/i);
+    if (match) {
+      if (!plate && match[1]?.trim()) plate = match[1].trim();
+      if (match[2]?.trim()) name = match[2].trim();
+      role = role || 'DRIVER';
+      program = 'UHF Long-Range Pass';
+      section = 'Vehicle Entry';
+    }
   }
 
   const vtype   = txn.vehicles?.vehicle_type || '';
@@ -351,7 +406,10 @@ function showScanResult(txn) {
   if (!name) name = isPending ? 'Registered User (Duplicate Scan)' : (ok ? (isVehicle ? 'Authorized Driver' : 'Authorized Pedestrian') : 'Unknown Card');
   if (!plate) plate = isVehicle ? '—' : 'PEDESTRIAN';
   if (!role) role = '--';
-  const timeStr = new Date(txn.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  const timeStr = new Date(txn.timestamp).toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  if (typeof playGateAudio === 'function') {
+    playGateAudio(ok ? 'AUTHORIZED' : 'DENIED');
+  }
   const avatarBg = ok ? '16a34a' : (isPending ? 'd97706' : 'b91c1c');
   const avatar  = `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=${avatarBg}&color=fff&size=200&bold=true`;
 
@@ -432,6 +490,7 @@ function resetScanPanel() {
   result.innerHTML = '';
   ready.style.display = 'flex';
   currentScanUID = null;
+  currentScanData = null;
   // Return traffic light to RED STANDBY
   setTrafficLightUI('standby');
   lucide.createIcons();
@@ -526,8 +585,8 @@ async function processManual() {
         const elapsedSec = Math.floor((Date.now() - new Date(lastTxn.timestamp).getTime()) / 1000);
         if (elapsedSec >= 30) {
           const prevEntryDate = new Date(lastTxn.timestamp);
-          const prevTimeStr = prevEntryDate.toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit' });
-          const prevDateStr = prevEntryDate.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit' });
+          const prevTimeStr = prevEntryDate.toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour12: true, hour: 'numeric', minute: '2-digit' });
+          const prevDateStr = prevEntryDate.toLocaleDateString('en-US', { timeZone: 'Asia/Manila', month: '2-digit', day: '2-digit' });
 
           await supabaseClient.from('transactions').insert({
             rfid_uid: uid,
@@ -574,20 +633,37 @@ async function processManual() {
     return;
   }
 
+  if (txn?.id) localInsertedTxnIds.add(txn.id);
   handleNewTransaction(txn);
   showToast(status === 'AUTHORIZED' ? 'Entry granted!' : 'Access denied.', status === 'AUTHORIZED' ? 'success' : 'error');
 }
 
-// ─── DENY LAST ────────────────────────────────────────────────
-function denyLast() {
+// ─── DENY LAST (persists override to Supabase) ────────────────
+async function denyLast() {
   if (!currentScanUID) { showToast('No active scan to deny.', 'error'); return; }
-  const fakeRow = {
-    id: 'manual-deny', rfid_uid: currentScanUID,
-    direction: GATE_DIRECTION, status: 'DENIED',
-    timestamp: new Date().toISOString(), remarks: 'Denied by guard',
-    users: null, vehicles: null
+  const targetTxn = currentScanData;
+  if (isConnected && supabaseClient && targetTxn?.id && !String(targetTxn.id).startsWith('manual-')) {
+    const { error } = await supabaseClient
+      .from('transactions')
+      .update({ status: 'DENIED', remarks: 'Denied by guard override' })
+      .eq('id', targetTxn.id);
+    if (error) console.warn('Override update warning:', error);
+    const idx = recentEntries.findIndex(e => e.id === targetTxn.id);
+    if (idx !== -1) {
+      recentEntries[idx] = { ...recentEntries[idx], status: 'DENIED', remarks: 'Denied by guard override' };
+      renderRecentList();
+    }
+  }
+  const deniedRow = {
+    ...(targetTxn || {}),
+    id: targetTxn?.id || 'manual-deny',
+    rfid_uid: currentScanUID,
+    direction: GATE_DIRECTION,
+    status: 'DENIED',
+    timestamp: targetTxn?.timestamp || new Date().toISOString(),
+    remarks: 'Denied by guard override'
   };
-  showScanResult(fakeRow);
+  showScanResult(deniedRow);
   showToast('Entry denied by guard.', 'error');
 }
 

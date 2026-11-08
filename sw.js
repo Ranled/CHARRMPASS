@@ -1,9 +1,9 @@
 // ====================================================================
-// CHARRMPASS PWA Service Worker (v2.0.0)
+// CHARRMPASS PWA Service Worker (v3.0.0)
 // High-performance caching for App Shell with bypass for Live Cloud APIs
 // ====================================================================
 
-const CACHE_NAME = 'charrmpass-cache-v2';
+const CACHE_NAME = 'charrmpass-cache-v3';
 const APP_SHELL_ASSETS = [
     '/',
     '/index.html',
@@ -11,14 +11,18 @@ const APP_SHELL_ASSETS = [
     '/guard-dashboard.html',
     '/entry-dashboard.html',
     '/exit-dashboard.html',
+    '/register.html',
+    '/settings.html',
     '/styles.css',
     '/supabase-config.js',
     '/guard-app.js',
     '/entry-app.js',
     '/exit-app.js',
     '/admin-app.js',
+    '/register.js',
     '/manifest.json',
-    '/logocharrmpark.png',
+    '/icon-192.png',
+    '/icon-512.png',
     '/landingbg.jpg'
 ];
 
@@ -50,13 +54,27 @@ self.addEventListener('activate', (event) => {
     );
 });
 
-// Fetch: Network-first strategy with cache fallback (bypass Supabase API)
+// Fetch: Network-first strategy with cache fallback (bypass non-HTTP & Supabase API)
 self.addEventListener('fetch', (event) => {
-    const url = new URL(event.request.url);
+    let url;
+    try {
+        url = new URL(event.request.url);
+    } catch (e) {
+        return;
+    }
 
-    // Bypass caching for Supabase REST API, Auth, and WebSockets
-    if (url.hostname.includes('supabase.co')) {
-        return; // Normal network request
+    // Ignore non-HTTP(S) schemes (e.g. chrome-extension://, data:, blob:)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        return;
+    }
+
+    // Bypass caching for Supabase REST API, Auth, Storage, WebSockets, and video range requests
+    if (
+        url.hostname.includes('supabase.co') ||
+        event.request.headers.has('range') ||
+        url.pathname.endsWith('.mp4')
+    ) {
+        return;
     }
 
     // Only handle GET requests
@@ -67,22 +85,26 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
         fetch(event.request)
             .then((networkResponse) => {
-                // If valid response, clone and update cache
-                if (networkResponse && networkResponse.status === 200) {
+                if (networkResponse && networkResponse.status === 200 && (networkResponse.type === 'basic' || networkResponse.type === 'cors')) {
                     const responseClone = networkResponse.clone();
                     caches.open(CACHE_NAME).then((cache) => {
-                        cache.put(event.request, responseClone);
+                        cache.put(event.request, responseClone).catch(() => {});
                     });
                 }
                 return networkResponse;
             })
             .catch(() => {
-                // Network failed (offline): serve from cache
                 return caches.match(event.request, { ignoreSearch: true }).then((cachedResponse) => {
                     if (cachedResponse) {
                         return cachedResponse;
                     }
-                    // Offline fallback for navigation
+                    // Support Vercel cleanUrls (e.g. /admin-dashboard -> /admin-dashboard.html)
+                    if (!url.pathname.includes('.') && url.pathname !== '/') {
+                        return caches.match(url.pathname + '.html').then((cleanMatch) => {
+                            if (cleanMatch) return cleanMatch;
+                            if (event.request.mode === 'navigate') return caches.match('/index.html');
+                        });
+                    }
                     if (event.request.mode === 'navigate') {
                         return caches.match('/index.html');
                     }

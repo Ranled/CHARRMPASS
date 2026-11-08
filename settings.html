@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Settings - CHARRMPASS</title>
+    <link rel="icon" type="image/png" href="icon-192.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Poppins:wght@500;600;700;800&display=swap" rel="stylesheet">
@@ -19,23 +20,22 @@
     <script src="supabase-config.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script>
-        // RBAC Session Protection
-        (function() {
-            const session = sessionStorage.getItem('charrmpass_session');
-            if (!session) {
-                window.location.href = 'index.html';
-                return;
-            }
-            try {
-                const s = JSON.parse(session);
-                if (s.role !== 'ADMIN' && s.role !== 'GUARD') {
+        // Strict RBAC + 12-hour Session Expiration Protection
+        window.__settingsSession = (typeof enforceAuthSession === 'function')
+            ? enforceAuthSession()
+            : (function() {
+                try {
+                    const s = JSON.parse(sessionStorage.getItem('charrmpass_session') || 'null');
+                    if (!s || (s.role !== 'ADMIN' && s.role !== 'GUARD')) {
+                        window.location.href = 'index.html';
+                        return null;
+                    }
+                    return s;
+                } catch (e) {
                     window.location.href = 'index.html';
-                    return;
+                    return null;
                 }
-            } catch(e) {
-                window.location.href = 'index.html';
-            }
-        })();
+            })();
     </script>
 </head>
 <body class="bg-gray-100 text-slate-800 font-sans min-h-screen campus-bg relative overflow-y-auto overflow-x-hidden">
@@ -66,7 +66,7 @@
             <div class="flex justify-between items-center mb-8">
                 <div>
                     <h2 class="font-display font-extrabold text-3xl text-slate-800">System Settings</h2>
-                    <p class="text-slate-500 text-sm font-medium mt-1">Configure campus security alerts, administrator credentials, and emergency recovery keys.</p>
+                    <p class="text-slate-500 text-sm font-medium mt-1" id="settingsSubtitle">Configure campus security alerts, administrator credentials, and emergency recovery keys.</p>
                 </div>
             </div>
 
@@ -123,8 +123,8 @@
                 </div>
             </div>
 
-            <!-- System Accounts (RBAC) -->
-            <div class="settings-card mb-6 admin-only bg-white/80 backdrop-blur-md rounded-3xl p-6 border border-white/60 shadow-glass">
+            <!-- System Accounts (RBAC: Strictly Admin Only) -->
+            <div id="adminSecuritySection" class="settings-card mb-6 admin-only hidden bg-white/80 backdrop-blur-md rounded-3xl p-6 border border-white/60 shadow-glass">
                 <h3 class="font-display font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
                     <i data-lucide="shield-check" class="w-5 h-5 text-charm-dark"></i> Administrator Credentials &amp; Recovery
                 </h3>
@@ -143,12 +143,12 @@
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="text-xs font-bold text-slate-500 block mb-1">Admin Username</label>
-                                <input type="text" class="form-input" id="adminUsername" value="admin" placeholder="e.g. admin">
+                                <input type="text" class="form-input" id="adminUsername" value="admin" placeholder="e.g. admin" autocomplete="username">
                             </div>
                             <div>
-                                <label class="text-xs font-bold text-slate-500 block mb-1">Admin Password</label>
+                                <label class="text-xs font-bold text-slate-500 block mb-1">New Admin Password</label>
                                 <div class="relative">
-                                    <input type="password" class="form-input pr-12" id="adminPassword" value="" placeholder="Enter new password">
+                                    <input type="password" class="form-input pr-12" id="adminPassword" value="" placeholder="Leave blank to keep current password" autocomplete="new-password">
                                     <button type="button" onclick="togglePass('adminPassword', this)" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-charm-dark">
                                         <i data-lucide="eye" class="w-4 h-4"></i>
                                     </button>
@@ -165,19 +165,19 @@
                             </div>
                             <div>
                                 <div class="text-sm font-bold text-slate-800">Master Emergency Recovery Key</div>
-                                <div class="text-[10px] text-amber-800 font-bold uppercase tracking-widest">Self-Service Password Recovery</div>
+                                <div class="text-[10px] text-amber-800 font-bold uppercase tracking-widest">Local Custom Override (Optional)</div>
                             </div>
                         </div>
                         <div>
-                            <label class="text-xs font-bold text-slate-600 block mb-1">Thesis Master Secret Key</label>
+                            <label class="text-xs font-bold text-slate-600 block mb-1">New Master Secret Key</label>
                             <div class="relative">
-                                <input type="password" class="form-input pr-12 font-mono text-sm" id="masterRecoveryKey" placeholder="e.g. CHARRMPASS-MASTER-2026">
+                                <input type="password" class="form-input pr-12 font-mono text-sm" id="masterRecoveryKey" value="" placeholder="Leave blank to keep existing recovery key" autocomplete="off">
                                 <button type="button" onclick="togglePass('masterRecoveryKey', this)" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-charm-dark">
                                     <i data-lucide="eye" class="w-4 h-4"></i>
                                 </button>
                             </div>
                             <p class="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
-                                Used on the login screen if you forget your password. No code needed—type your secret key here and click <strong>Save Settings</strong>.
+                                Enter a new secret key only if you want to override the emergency recovery phrase on this workstation.
                             </p>
                         </div>
                     </div>
@@ -198,8 +198,16 @@
     <script>
         lucide.createIcons();
 
-        // Custom Toast Notification
-        function showToast(message, type = 'info') {
+        let adminAccountId = null;
+        let hasLoadedAdminUsername = false;
+
+        function isCurrentUserAdmin() {
+            const sess = window.__settingsSession || (typeof enforceAuthSession === 'function' ? enforceAuthSession() : null);
+            return !!(sess && sess.role === 'ADMIN');
+        }
+
+        // XSS-Safe Toast Notification
+        function showSettingsNotice(message, type = 'info') {
             let container = document.getElementById('toastContainer');
             if (!container) {
                 container = document.createElement('div');
@@ -212,7 +220,13 @@
             const iconName = type === 'error' ? 'alert-circle' : (type === 'success' ? 'check-circle' : 'info');
 
             toast.className = `${bgColor} px-4 py-3 rounded-xl shadow-xl flex items-center gap-2.5 text-xs md:text-sm font-medium transition-all duration-200 transform translate-x-full pointer-events-auto max-w-sm`;
-            toast.innerHTML = `<i data-lucide="${iconName}" class="w-4 h-4 flex-shrink-0"></i><span>${message}</span>`;
+            const iconEl = document.createElement('i');
+            iconEl.setAttribute('data-lucide', iconName);
+            iconEl.className = 'w-4 h-4 flex-shrink-0';
+            const textEl = document.createElement('span');
+            textEl.textContent = String(message == null ? '' : message);
+            toast.appendChild(iconEl);
+            toast.appendChild(textEl);
 
             container.appendChild(toast);
             if (window.lucide) lucide.createIcons();
@@ -236,99 +250,126 @@
             lucide.createIcons();
         }
 
-        async function loadSettings() {
-            // 1. Load sound alerts from localStorage
-            const saved = localStorage.getItem('charrmpass_settings');
-            if (saved) {
-                try {
-                    const s = JSON.parse(saved);
-                    if (s.soundAuth !== undefined && document.getElementById('toggleSoundAuth')) document.getElementById('toggleSoundAuth').checked = s.soundAuth;
-                    if (s.soundDenied !== undefined && document.getElementById('toggleSoundDenied')) document.getElementById('toggleSoundDenied').checked = s.soundDenied;
-                    if (s.dupAlert !== undefined && document.getElementById('toggleDupAlert')) document.getElementById('toggleDupAlert').checked = s.dupAlert;
-                } catch(e){}
-            }
-
-            // 2. Load Master Recovery Key
-            const savedMasterKey = localStorage.getItem('charrmpass_master_key') || (typeof MASTER_RECOVERY_KEY !== 'undefined' ? MASTER_RECOVERY_KEY : 'CHARRMPASS-MASTER-2026');
-            const masterKeyInput = document.getElementById('masterRecoveryKey');
-            if (masterKeyInput) {
-                masterKeyInput.value = savedMasterKey;
-            }
-
-            // 3. Load Admin credentials from Supabase
-            const client = (typeof supabaseClient !== 'undefined' && supabaseClient) ? supabaseClient : null;
-            if (client) {
-                try {
-                    const { data: adminAcc, error: accErr } = await client
-                        .from('system_accounts')
-                        .select('username, password')
-                        .eq('role', 'ADMIN')
-                        .maybeSingle();
-
-                    if (adminAcc) {
-                        if (document.getElementById('adminUsername')) document.getElementById('adminUsername').value = adminAcc.username || 'admin';
-                        if (document.getElementById('adminPassword')) document.getElementById('adminPassword').value = adminAcc.password || '';
-                    }
-
-                    const dbStatus = document.getElementById('settingsDbStatus');
-                    if (dbStatus) {
-                        dbStatus.textContent = 'Connected (Live)';
-                        dbStatus.className = 'text-base font-bold text-emerald-600 mt-0.5';
-                    }
-                } catch(err) {
-                    console.error('Error fetching admin account:', err);
-                    const dbStatus = document.getElementById('settingsDbStatus');
-                    if (dbStatus) {
-                        dbStatus.textContent = 'Connection Error';
-                        dbStatus.className = 'text-base font-bold text-red-500 mt-0.5';
-                    }
-                }
+        function refreshDbStatusLabel() {
+            const dbStatus = document.getElementById('settingsDbStatus');
+            if (!dbStatus) return;
+            if (typeof isConnected !== 'undefined' && isConnected) {
+                dbStatus.textContent = 'Connected (Live)';
+                dbStatus.className = 'text-base font-bold text-emerald-600 mt-0.5';
             } else {
-                const dbStatus = document.getElementById('settingsDbStatus');
-                if (dbStatus) {
-                    dbStatus.textContent = 'Offline / Local';
-                    dbStatus.className = 'text-base font-bold text-amber-500 mt-0.5';
+                dbStatus.textContent = 'Offline / Local';
+                dbStatus.className = 'text-base font-bold text-amber-500 mt-0.5';
+            }
+        }
+
+        async function loadAdminAccountOnce() {
+            if (!isCurrentUserAdmin() || hasLoadedAdminUsername) return;
+            const client = (typeof supabaseClient !== 'undefined' && supabaseClient) ? supabaseClient : null;
+            if (!client) return;
+
+            try {
+                const accounts = (typeof listSystemAccounts === 'function')
+                    ? await listSystemAccounts(client)
+                    : [];
+                const adminAcc = accounts.find(a => a.role === 'ADMIN');
+                if (adminAcc) {
+                    adminAccountId = adminAcc.id || null;
+                    const userEl = document.getElementById('adminUsername');
+                    if (userEl) userEl.value = adminAcc.username || 'admin';
+                    hasLoadedAdminUsername = true;
+                }
+            } catch (err) {
+                console.error('Error fetching admin account metadata:', err);
+            }
+        }
+
+        async function initSettingsPage() {
+            const isAdmin = isCurrentUserAdmin();
+            const adminSection = document.getElementById('adminSecuritySection');
+            const subtitle = document.getElementById('settingsSubtitle');
+
+            if (isAdmin) {
+                if (adminSection) adminSection.classList.remove('hidden');
+            } else {
+                // Remove Admin credential inputs completely from DOM for Guard sessions
+                if (adminSection) adminSection.remove();
+                if (subtitle) {
+                    subtitle.textContent = 'Configure gate audio chimes, denial alerts, and duplicate-entry warnings for this station.';
                 }
             }
+
+            // Load unified audio & alert preferences once on initial mount
+            const prefs = (typeof getCharrmpassSettings === 'function')
+                ? getCharrmpassSettings()
+                : { soundOnEntry: true, alertOnDenied: true, dupAlert: true };
+
+            if (document.getElementById('toggleSoundAuth')) document.getElementById('toggleSoundAuth').checked = prefs.soundOnEntry;
+            if (document.getElementById('toggleSoundDenied')) document.getElementById('toggleSoundDenied').checked = prefs.alertOnDenied;
+            if (document.getElementById('toggleDupAlert')) document.getElementById('toggleDupAlert').checked = prefs.dupAlert;
+
+            refreshDbStatusLabel();
+            await loadAdminAccountOnce();
         }
 
         async function saveSettings() {
             const saveBtn = document.getElementById('saveSettingsBtn');
             const originalContent = saveBtn ? saveBtn.innerHTML : 'Save Settings';
 
-            // 1. Save sound alerts to localStorage
-            const settings = {
-                soundAuth: document.getElementById('toggleSoundAuth')?.checked ?? true,
-                soundDenied: document.getElementById('toggleSoundDenied')?.checked ?? true,
-                dupAlert: document.getElementById('toggleDupAlert')?.checked ?? true
+            // 1. Save unified audio/alert preferences (compatible across Guard, Entry, Exit & Settings)
+            const soundOnEntry = document.getElementById('toggleSoundAuth')?.checked ?? true;
+            const alertOnDenied = document.getElementById('toggleSoundDenied')?.checked ?? true;
+            const dupAlert = document.getElementById('toggleDupAlert')?.checked ?? true;
+
+            let existingSettings = {};
+            try {
+                existingSettings = JSON.parse(localStorage.getItem('charrmpass_settings') || '{}');
+            } catch (e) {}
+
+            const mergedSettings = {
+                ...existingSettings,
+                soundOnEntry,
+                alertOnDenied,
+                soundAuth: soundOnEntry,
+                soundDenied: alertOnDenied,
+                dupAlert
             };
-            localStorage.setItem('charrmpass_settings', JSON.stringify(settings));
+            localStorage.setItem('charrmpass_settings', JSON.stringify(mergedSettings));
 
-            // 2. Save Master Recovery Key to localStorage
-            const newMasterKey = document.getElementById('masterRecoveryKey')?.value.trim();
-            if (newMasterKey) {
-                localStorage.setItem('charrmpass_master_key', newMasterKey);
-                if (typeof window !== 'undefined') {
-                    window.MASTER_RECOVERY_KEY = newMasterKey;
-                }
-            }
+            // Keep guard station quick-settings in sync
+            try {
+                const guardPrefs = JSON.parse(localStorage.getItem('charrmpass_guard_settings') || '{}');
+                guardPrefs.sound = soundOnEntry || alertOnDenied;
+                localStorage.setItem('charrmpass_guard_settings', JSON.stringify(guardPrefs));
+            } catch (e) {}
 
-            // 3. Save Admin credentials to Supabase
-            const adminU = document.getElementById('adminUsername')?.value.trim();
-            const adminP = document.getElementById('adminPassword')?.value;
-
-            if (!adminU) {
-                showToast('Admin username cannot be blank.', 'error');
+            // Non-admin roles NEVER touch Admin credentials or Master Recovery Key
+            if (!isCurrentUserAdmin()) {
+                showSettingsNotice('Audio and alert preferences saved!', 'success');
                 return;
             }
 
+            // 2. Save optional custom Master Recovery Key (only if typed)
+            const newMasterKey = document.getElementById('masterRecoveryKey')?.value.trim();
+            if (newMasterKey) {
+                localStorage.setItem('charrmpass_master_key', newMasterKey);
+                document.getElementById('masterRecoveryKey').value = '';
+            }
+
+            // 3. Save Admin credentials via SECURITY DEFINER helper
+            const adminU = document.getElementById('adminUsername')?.value.trim();
+            const adminP = document.getElementById('adminPassword')?.value || '';
+
+            if (!adminU) {
+                showSettingsNotice('Admin username cannot be blank.', 'error');
+                return;
+            }
             if (adminP && adminP.length < 4) {
-                showToast('Password must be at least 4 characters long.', 'error');
+                showSettingsNotice('Password must be at least 4 characters long.', 'error');
                 return;
             }
 
             const client = (typeof supabaseClient !== 'undefined' && supabaseClient) ? supabaseClient : null;
-            if (client) {
+            if (client && typeof upsertSystemAccount === 'function') {
                 try {
                     if (saveBtn) {
                         saveBtn.disabled = true;
@@ -336,38 +377,27 @@
                         if (window.lucide) lucide.createIcons();
                     }
 
-                    const now = new Date().toISOString();
-                    const updatePayload = {
+                    const sess = window.__settingsSession;
+                    const targetId = adminAccountId || (sess && sess.role === 'ADMIN' ? sess.id : null);
+                    const updated = await upsertSystemAccount({
+                        id: targetId,
                         username: adminU,
-                        updated_at: now
-                    };
-                    if (adminP) {
-                        updatePayload.password = adminP;
+                        password: adminP,
+                        role: 'ADMIN'
+                    }, client);
+
+                    if (updated && updated.id) adminAccountId = updated.id;
+                    if (document.getElementById('adminPassword')) document.getElementById('adminPassword').value = '';
+
+                    if (sess && sess.role === 'ADMIN') {
+                        sess.username = adminU;
+                        sessionStorage.setItem('charrmpass_session', JSON.stringify(sess));
                     }
 
-                    const { error: aErr } = await client
-                        .from('system_accounts')
-                        .update(updatePayload)
-                        .eq('role', 'ADMIN');
-
-                    if (aErr) throw aErr;
-
-                    // Update current active session username if logged in as ADMIN
-                    const sessionStr = sessionStorage.getItem('charrmpass_session');
-                    if (sessionStr) {
-                        try {
-                            const sess = JSON.parse(sessionStr);
-                            if (sess.role === 'ADMIN') {
-                                sess.username = adminU;
-                                sessionStorage.setItem('charrmpass_session', JSON.stringify(sess));
-                            }
-                        } catch(e) {}
-                    }
-
-                    showToast('Settings, Admin password, and Master Recovery Key saved successfully!', 'success');
-                } catch(e) {
+                    showSettingsNotice('Settings and Administrator credentials saved!', 'success');
+                } catch (e) {
                     console.error('Save error:', e);
-                    showToast('Database Error: ' + (e.message || 'Could not save credentials'), 'error');
+                    showSettingsNotice('Database Error: ' + (e.message || 'Could not save credentials'), 'error');
                 } finally {
                     if (saveBtn) {
                         saveBtn.disabled = false;
@@ -376,12 +406,17 @@
                     }
                 }
             } else {
-                showToast('Master Recovery Key and Alert settings saved locally.', 'success');
+                showSettingsNotice('Alert preferences saved locally.', 'success');
             }
         }
 
-        window.addEventListener('DOMContentLoaded', loadSettings);
-        window.addEventListener('supabase:connected', loadSettings);
+        window.addEventListener('DOMContentLoaded', initSettingsPage);
+        // On connection recovery, update status badge and fetch initial username ONCE without wiping user edits
+        window.addEventListener('supabase:connected', () => {
+            refreshDbStatusLabel();
+            loadAdminAccountOnce();
+        });
+        window.addEventListener('supabase:disconnected', refreshDbStatusLabel);
     </script>
 </body>
 </html>

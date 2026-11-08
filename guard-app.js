@@ -12,6 +12,11 @@ let appState = {
     totalVehicles: 0, entriesToday: 0, exitsToday: 0, vehiclesInside: 0,
     recentScans: [], users: [], specialTags: [], activeVehicles: []
 };
+const localInsertedTxnIds = new Set();
+const activeGateScanContext = { Entry: null, Exit: null };
+const guardEsc = (str) => (typeof escapeHtml === 'function')
+    ? escapeHtml(str)
+    : String(str == null ? '' : str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // =====================
 // INIT STATE FROM SUPABASE
@@ -56,7 +61,9 @@ async function initState() {
             appState.specialTags = (st && Array.isArray(st)) ? st : [];
 
             // Load recent access logs (omit profile_image from batch 500 logs)
-            const today = new Date().toISOString().split('T')[0];
+            const today = typeof getManilaDateKey === 'function'
+                ? getManilaDateKey()
+                : new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
             const { data: logs, error: le } = await supabaseClient
                 .from('transactions')
                 .select(`
@@ -143,17 +150,41 @@ async function initState() {
                         status:       l.status || (l.status === 'DENIED' ? 'DENIED' : 'AUTHORIZED'),
                         event:        l.direction || 'ENTRY',
                         duration:     '--',
-                        time:         new Date(l.timestamp).toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit'}),
+                        time:         new Date(l.timestamp).toLocaleTimeString('en-US',{timeZone:'Asia/Manila',hour12:false,hour:'2-digit',minute:'2-digit'}),
                         rawTimestamp: l.timestamp
                     };
-                });
+                }).filter(s => s.gate !== 'AUTO_RESOLVED_EXIT');
 
-                // Active inside = ENTRY - EXIT (authorized)
-                const entries = logs.filter(l => l.direction === 'ENTRY' && l.status === 'AUTHORIZED').length;
-                const exits   = logs.filter(l => l.direction === 'EXIT'  && l.status === 'AUTHORIZED').length;
-                appState.vehiclesInside = Math.max(0, entries - exits);
+                // Accurate campus occupancy via get_active_inside_entities RPC with chronological session-pairing fallback
+                let insideResolved = false;
+                try {
+                    const { data: activeInside, error: rpcErr } = await supabaseClient.rpc('get_active_inside_entities');
+                    if (!rpcErr && Array.isArray(activeInside)) {
+                        appState.vehiclesInside = activeInside.length;
+                        insideResolved = true;
+                    }
+                } catch (_) {}
 
-                const todayLogs = logs.filter(l => l.timestamp?.startsWith(today));
+                if (!insideResolved) {
+                    const latestByUid = new Map();
+                    for (const l of logs) {
+                        if (l.status !== 'AUTHORIZED' || !l.rfid_uid) continue;
+                        if (String(l.remarks || '').includes('Emergency') || String(l.remarks || '').includes('EMERGENCY')) continue;
+                        if (!latestByUid.has(l.rfid_uid)) {
+                            latestByUid.set(l.rfid_uid, l.direction);
+                        }
+                    }
+                    let countInside = 0;
+                    for (const dir of latestByUid.values()) {
+                        if (dir === 'ENTRY') countInside++;
+                    }
+                    appState.vehiclesInside = countInside;
+                }
+
+                const toManilaKey = (ts) => typeof getManilaDateKey === 'function'
+                    ? getManilaDateKey(ts)
+                    : (ts ? new Date(new Date(ts).getTime() + 8 * 3600 * 1000).toISOString().slice(0, 10) : '');
+                const todayLogs = logs.filter(l => l.timestamp && toManilaKey(l.timestamp) === today && l.gate !== 'AUTO_RESOLVED_EXIT' && !String(l.remarks || '').includes('[AUTO_RESOLVED_EXIT]'));
                 appState.entriesToday = todayLogs.filter(l => l.direction === 'ENTRY').length;
                 appState.exitsToday   = todayLogs.filter(l => l.direction === 'EXIT').length;
             } else {
@@ -194,10 +225,19 @@ function setupGuardRealtime() {
         supabaseClient.channel('guard-live-feed')
             .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'transactions' }, async payload => {
                 const txn = payload.new;
-                console.log('⚡ [Guard RT] Inbound gate scan:', txn);
-                if (txn && txn.rfid_uid) {
-                    await processRFIDScan(txn.rfid_uid, txn.id, txn, txn.direction);
+                if (!txn || !txn.rfid_uid) return;
+                if (txn.id && localInsertedTxnIds.has(txn.id)) {
+                    localInsertedTxnIds.delete(txn.id);
+                    return;
                 }
+                // Ignore synthetic self-healing rows so they don't trigger a false physical Exit radar popup
+                if (txn.gate === 'AUTO_RESOLVED_EXIT' || String(txn.remarks || '').includes('[AUTO_RESOLVED_EXIT]')) {
+                    appState.vehiclesInside = Math.max(0, (appState.vehiclesInside || 0) - 1);
+                    renderAll();
+                    return;
+                }
+                console.log('⚡ [Guard RT] Inbound gate scan:', txn);
+                await processRFIDScan(txn.rfid_uid, txn.id, txn, txn.direction);
             })
             .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'transactions' }, async payload => {
                 console.log('📡 [Guard RT] Transaction UPDATE:', payload.new);
@@ -330,11 +370,12 @@ window.toggleGuardLogsCustomRange = function() {
         panel.classList.remove('hidden');
         const now = new Date();
         const past = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        const toKey = (d) => typeof getManilaDateKey === 'function' ? getManilaDateKey(d) : new Date(d.getTime() + 8 * 3600 * 1000).toISOString().slice(0, 10);
         if (document.getElementById('guardLogsFromDate') && !document.getElementById('guardLogsFromDate').value) {
-            document.getElementById('guardLogsFromDate').value = past.toISOString().split('T')[0];
+            document.getElementById('guardLogsFromDate').value = toKey(past);
         }
         if (document.getElementById('guardLogsToDate') && !document.getElementById('guardLogsToDate').value) {
-            document.getElementById('guardLogsToDate').value = now.toISOString().split('T')[0];
+            document.getElementById('guardLogsToDate').value = toKey(now);
         }
     } else {
         panel.classList.add('hidden');
@@ -366,41 +407,23 @@ window.applyGuardLogsCustomRange = function() {
 
 function getFilteredGuardLogs() {
     const scans = appState.recentScans || [];
-    const now = new Date();
-
-    if (guardLogsPreset === 'today') {
-        const todayStr = now.toISOString().split('T')[0];
-        return scans.filter(s => s.rawTimestamp && s.rawTimestamp.startsWith(todayStr));
-    }
-    if (guardLogsPreset === 'yesterday') {
-        const y = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-        const yStr = y.toISOString().split('T')[0];
-        return scans.filter(s => s.rawTimestamp && s.rawTimestamp.startsWith(yStr));
-    }
-    if (guardLogsPreset === '7days') {
-        const past7 = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        return scans.filter(s => s.rawTimestamp && new Date(s.rawTimestamp) >= past7);
-    }
-    if (guardLogsPreset === '30days') {
-        const past30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-        return scans.filter(s => s.rawTimestamp && new Date(s.rawTimestamp) >= past30);
-    }
-    if (guardLogsPreset === 'thisMonth') {
-        const prefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-        return scans.filter(s => s.rawTimestamp && s.rawTimestamp.startsWith(prefix));
-    }
-    if (guardLogsPreset === 'lastMonth') {
-        const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        const prefix = `${lastMonthDate.getFullYear()}-${String(lastMonthDate.getMonth() + 1).padStart(2, '0')}`;
-        return scans.filter(s => s.rawTimestamp && s.rawTimestamp.startsWith(prefix));
-    }
     if (guardLogsPreset === 'custom' && guardLogsCustomFrom && guardLogsCustomTo) {
-        const fromDate = new Date(guardLogsCustomFrom + 'T00:00:00');
-        const toDate = new Date(guardLogsCustomTo + 'T23:59:59');
+        const fromMs = new Date(`${guardLogsCustomFrom}T00:00:00.000+08:00`).getTime();
+        const toMs   = new Date(`${guardLogsCustomTo}T23:59:59.999+08:00`).getTime();
         return scans.filter(s => {
             if (!s.rawTimestamp) return false;
-            const t = new Date(s.rawTimestamp);
-            return t >= fromDate && t <= toDate;
+            const t = new Date(s.rawTimestamp).getTime();
+            return t >= fromMs && t <= toMs;
+        });
+    }
+    if (typeof getManilaPresetBounds === 'function') {
+        const bounds = getManilaPresetBounds(guardLogsPreset);
+        const fromMs = new Date(bounds.startIso).getTime();
+        const toMs   = new Date(bounds.endIso).getTime();
+        return scans.filter(s => {
+            if (!s.rawTimestamp) return false;
+            const t = new Date(s.rawTimestamp).getTime();
+            return t >= fromMs && t <= toMs;
         });
     }
     return scans;
@@ -441,25 +464,25 @@ function renderLogsTable() {
                           (!s.plate || s.plate === '--' || s.plate === s.uid || s.plate === s.uid?.substring(0, 12));
             const isVeh = !isPed && s.user_type === 'VEHICLE';
             const plateHtml = isVeh 
-                ? `<span class="font-mono font-bold text-slate-700">${s.plate || '--'}</span>`
+                ? `<span class="font-mono font-bold text-slate-700">${guardEsc(s.plate || '--')}</span>`
                 : `<span class="inline-flex items-center gap-1 text-slate-500 font-semibold text-xs"><i data-lucide="user" class="w-3 h-3 text-emerald-600"></i> PEDESTRIAN</span>`;
 
             return `
             <tr class="hover:bg-white/60 border-b border-slate-100/50 transition-colors">
-                <td class="p-4 text-slate-500 font-medium">${s.time}</td>
-                <td class="p-4 text-xs font-mono font-bold text-slate-600">${s.uid || '--'}</td>
+                <td class="p-4 text-slate-500 font-medium">${guardEsc(s.time)}</td>
+                <td class="p-4 text-xs font-mono font-bold text-slate-600">${guardEsc(s.uid || '--')}</td>
                 <td class="p-4 font-bold text-slate-800">
                     <div class="flex items-center gap-1.5 flex-wrap">
-                        <span>${s.name || '--'}</span>
-                        ${s.cpass_id ? `<span class="px-1.5 py-0.5 text-[10px] font-mono font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 rounded">CPASS: ${s.cpass_id}</span>` : ''}
+                        <span>${guardEsc(s.name || '--')}</span>
+                        ${s.cpass_id ? `<span class="px-1.5 py-0.5 text-[10px] font-mono font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 rounded">CPASS: ${guardEsc(s.cpass_id)}</span>` : ''}
                     </div>
                 </td>
                 <td class="p-4 text-xs">${plateHtml}</td>
                 <td class="p-4 text-center">
-                    <span class="px-2.5 py-1 rounded-full text-[10px] font-bold ${s.event === 'ENTRY' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}">${s.event || '--'}</span>
+                    <span class="px-2.5 py-1 rounded-full text-[10px] font-bold ${s.event === 'ENTRY' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}">${guardEsc(s.event || '--')}</span>
                 </td>
                 <td class="p-4 text-right">
-                    <span class="px-2 py-0.5 rounded text-[10px] font-bold ${s.status === 'AUTHORIZED' ? 'bg-green-50 text-green-700 border border-green-200' : (s.status === 'PENDING_CONFIRMATION' ? 'bg-amber-50 text-amber-800 border border-amber-300' : 'bg-red-50 text-red-700 border border-red-200')}">${s.status || '--'}</span>
+                    <span class="px-2 py-0.5 rounded text-[10px] font-bold ${s.status === 'AUTHORIZED' ? 'bg-green-50 text-green-700 border border-green-200' : (s.status === 'PENDING_CONFIRMATION' ? 'bg-amber-50 text-amber-800 border border-amber-300' : 'bg-red-50 text-red-700 border border-red-200')}">${guardEsc(s.status || '--')}</span>
                 </td>
             </tr>
             `;
@@ -537,17 +560,17 @@ function renderRecentScanCard(s, type) {
             </div>
             <div class="flex-1 overflow-hidden">
                 <div class="flex justify-between items-center mb-0.5">
-                    <span class="font-bold text-xs sm:text-sm text-slate-800 truncate">${s.name || '--'}</span>
-                    <span class="text-[10px] font-bold text-slate-400 shrink-0">${s.time || '--'}</span>
+                    <span class="font-bold text-xs sm:text-sm text-slate-800 truncate">${guardEsc(s.name || '--')}</span>
+                    <span class="text-[10px] font-bold text-slate-400 shrink-0">${guardEsc(s.time || '--')}</span>
                 </div>
                 <div class="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                    <span class="text-[10px] sm:text-xs font-mono font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded">${tagDisplay}</span>
+                    <span class="text-[10px] sm:text-xs font-mono font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded">${guardEsc(tagDisplay)}</span>
                     ${isVeh
                         ? '<span class="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">🚗 VEHICLE</span>'
                         : '<span class="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">🚶 PEDESTRIAN</span>'
                     }
-                    ${s.cpass_id ? `<span class="text-[9px] sm:text-[10px] font-mono font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">CPASS: ${s.cpass_id}</span>` : ''}
-                    <span class="text-[9px] sm:text-[10px] font-bold uppercase ${isAuth ? (isEntry ? 'text-green-600' : 'text-blue-600') : 'text-red-600'}">${s.status || '--'}</span>
+                    ${s.cpass_id ? `<span class="text-[9px] sm:text-[10px] font-mono font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">CPASS: ${guardEsc(s.cpass_id)}</span>` : ''}
+                    <span class="text-[9px] sm:text-[10px] font-bold uppercase ${isAuth ? (isEntry ? 'text-green-600' : 'text-blue-600') : 'text-red-600'}">${guardEsc(s.status || '--')}</span>
                 </div>
             </div>
         </div>
@@ -802,7 +825,8 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
             const { data: st } = await supabaseClient
                 .from('special_tags')
                 .select('*')
-                .or(`rfid_uid.eq.${uid},rfid_uid.eq.${cleanUid}`)
+                .in('rfid_uid', Array.from(new Set([uid, cleanUid])))
+                .limit(1)
                 .maybeSingle();
             if (st) {
                 specialTag = st;
@@ -955,7 +979,7 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
 
     if (!result && fromRealtimeTxn && fromRealtimeTxn.status === 'AUTHORIZED' && fromRealtimeTxn.rfid_type === 'LONG_RANGE') {
         // Card lookup missed (e.g. RLS or UID format) - rebuild vehicle info from the ESP32's own remarks
-        const m = String(fromRealtimeTxn.remarks || '').match(/UHF Vehicle Entry:\s*([^|]+?)(?:\s*\|\s*Driver:\s*(.+))?$/i);
+        const m = String(fromRealtimeTxn.remarks || '').match(/UHF Vehicle (?:Entry|Exit):\s*([^|]+?)(?:\s*\|\s*Driver:\s*(.+))?$/i);
         const rtPlate = m?.[1]?.trim() || 'VEHICLE';
         const rtName = m?.[2]?.trim() || 'Registered Driver';
         result = {
@@ -1079,10 +1103,10 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
             // auto-resolve their previous visit before creating the new entry session.
             if (isEntry && lastTxn && lastTxn.direction === 'ENTRY' && !result.isEmergency) {
                 const prevEntryDate = new Date(lastTxn.timestamp);
-                const prevTimeStr = prevEntryDate.toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit' });
-                const prevDateStr = prevEntryDate.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit' });
+                const prevTimeStr = prevEntryDate.toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour12: true, hour: 'numeric', minute: '2-digit' });
+                const prevDateStr = prevEntryDate.toLocaleDateString('en-US', { timeZone: 'Asia/Manila', month: '2-digit', day: '2-digit' });
 
-                await supabaseClient.from('transactions').insert({
+                const { data: autoRow } = await supabaseClient.from('transactions').insert({
                     rfid_uid: uid,
                     direction: 'EXIT',
                     gate: 'AUTO_RESOLVED_EXIT',
@@ -1092,12 +1116,13 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                     rfid_type: rfidType,
                     status: 'AUTHORIZED',
                     remarks: `[AUTO_RESOLVED_EXIT] Unclosed session from ${prevTimeStr} ${prevDateStr} auto-closed upon re-entry`
-                });
+                }).select('id').single();
+                if (autoRow?.id) localInsertedTxnIds.add(autoRow.id);
 
                 result.historyNotice = `Auto-resolved prior exit (${prevTimeStr}) • Welcome back!`;
             }
 
-            await supabaseClient.from('transactions').insert({
+            const { data: insRow } = await supabaseClient.from('transactions').insert({
                 rfid_uid: uid,
                 direction: direction,
                 gate: gateName,
@@ -1107,7 +1132,11 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                 rfid_type: rfidType,
                 status: 'AUTHORIZED',
                 remarks: `Guard station ${direction} (${isPed ? 'Pedestrian Close-Range' : 'Vehicle Long-Range UHF'})`
-            });
+            }).select('id').single();
+            if (insRow?.id) {
+                localInsertedTxnIds.add(insRow.id);
+                result.id = insRow.id;
+            }
             if (isEntry) {
                 appState.entriesToday++;
                 appState.vehiclesInside = (appState.vehiclesInside || 0) + 1;
@@ -1116,13 +1145,29 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
                 appState.vehiclesInside = Math.max(0, (appState.vehiclesInside || 0) - 1);
             }
         } else if (fromRealtimeTxn && !String(fromRealtimeTxn.remarks || '').startsWith('Guard station')) {
-            // Scan posted by an ESP32 gate (e.g. long-range UHF): update live counters
+            // Scan posted by an ESP32 gate (e.g. CHARRMPASS_GATE_01 Entry or CHARRMPASS_GATE_02 Exit): update live counters
             if (isEntry) {
                 appState.entriesToday++;
                 appState.vehiclesInside = (appState.vehiclesInside || 0) + 1;
             } else {
                 appState.exitsToday++;
                 appState.vehiclesInside = Math.max(0, (appState.vehiclesInside || 0) - 1);
+
+                // Ensure reusable Visitor UHF tag is immediately marked vacant if exiting via CHARRMPASS_GATE_02
+                const stripped = String(uid || '').replace(/^0+(?=d)/, '');
+                const visTag = (appState.specialTags || []).find(t =>
+                    t.type === 'VISITOR' && (t.rfid_uid === uid || String(t.rfid_uid || '').replace(/^0+(?=d)/, '') === stripped)
+                );
+                if (visTag && visTag.label !== 'Reusable Visitor Tag') {
+                    visTag.label = 'Reusable Visitor Tag';
+                    visTag.description = null;
+                    if (isConnected && supabaseClient) {
+                        supabaseClient.from('special_tags')
+                            .update({ label: 'Reusable Visitor Tag', description: null })
+                            .eq('id', visTag.id)
+                            .then(() => {});
+                    }
+                }
             }
         }
         result.event = direction;
@@ -1152,22 +1197,44 @@ async function processRFIDScan(uid, rawLogId = null, fromRealtimeTxn = null, for
         updateTrafficLightWidget(gateKey, 'denied');
 
         if (!fromRealtimeTxn && isConnected) {
-            await supabaseClient.from('transactions').insert({
+            const { data: denRow } = await supabaseClient.from('transactions').insert({
                 rfid_uid: uid,
                 direction: direction,
                 gate: isEntry ? 'ENTRY_GATE' : 'EXIT_GATE',
                 status: 'DENIED',
                 remarks: 'Unauthorized RFID UID scan attempt'
-            });
+            }).select('id').single();
+            if (denRow?.id) {
+                localInsertedTxnIds.add(denRow.id);
+                result.id = denRow.id;
+            }
         }
         result.event = direction;
+    }
+
+    if (!result.id && (fromRealtimeTxn?.id || rawLogId)) {
+        result.id = fromRealtimeTxn?.id || rawLogId;
+    }
+    result.rawTimestamp = fromRealtimeTxn?.timestamp || new Date().toISOString();
+    activeGateScanContext[gateKey] = {
+        uid,
+        txnId: result.id || null,
+        userId: userId || null,
+        gateKey,
+        direction,
+        wasAuthorizedEntry: result.status === 'AUTHORIZED' && isEntry,
+        result
+    };
+
+    if (typeof playGateAudio === 'function') {
+        playGateAudio(result.status === 'AUTHORIZED' ? 'AUTHORIZED' : 'DENIED');
     }
 
     // Populate data card
     populateScanResultCard(result, gateKey);
 
     // Add to recent scans
-    result.time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    result.time = new Date(result.rawTimestamp).toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour12: false, hour: '2-digit', minute: '2-digit' });
     appState.recentScans.unshift(result);
 
     renderAll();
@@ -1382,7 +1449,7 @@ window.confirmDuplicateEntry = async function() {
                 : `Secondary exit confirmed by guard (Prior exit was ${historyDetails || 'prior time'})`);
 
         if (isConnected) {
-            await supabaseClient.from('transactions').insert({
+            const { data: dupRow } = await supabaseClient.from('transactions').insert({
                 rfid_uid: uid,
                 direction: isEntry ? 'ENTRY' : 'EXIT',
                 gate: gate,
@@ -1392,7 +1459,11 @@ window.confirmDuplicateEntry = async function() {
                 rfid_type: rfidType,
                 status: 'AUTHORIZED',
                 remarks: remarks
-            });
+            }).select('id').single();
+            if (dupRow?.id) {
+                localInsertedTxnIds.add(dupRow.id);
+                result.id = dupRow.id;
+            }
         }
 
         if (isEntry) {
@@ -1405,7 +1476,9 @@ window.confirmDuplicateEntry = async function() {
 
         result.event = isEntry ? 'ENTRY' : 'EXIT';
         result.status = 'AUTHORIZED';
-        result.time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+        result.rawTimestamp = new Date().toISOString();
+        result.time = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour12: false, hour: '2-digit', minute: '2-digit' });
+        if (typeof playGateAudio === 'function') playGateAudio('AUTHORIZED');
         result.historyNotice = isEntry
             ? `Re-login allowed (Prior entry: ${historyDetails || 'earlier'})`
             : `Exit allowed (${conflictType === 'EXIT_NO_ENTRY' ? 'Manual override' : 'Prior: ' + historyDetails})`;
@@ -1483,55 +1556,95 @@ function resetGateScanner(gateKey) {
         if (tmBadge) tmBadge.classList.add('hidden');
     });
 
+    activeGateScanContext[gateKey] = null;
+
     // Reset Traffic Light back to RED STANDBY
     updateTrafficLightWidget(gateKey, 'standby');
 
     lucide.createIcons();
 }
 
+window.closeSlotModal = function() {
+    const m = document.getElementById('slotInfoModal');
+    if (!m) return;
+    m.classList.add('opacity-0');
+    const content = document.getElementById('slotInfoContent');
+    if (content) content.classList.add('scale-95');
+    setTimeout(() => m.classList.add('hidden'), 250);
+};
+
+async function handleGuardDenyOverride(preferredGateKey) {
+    const ctx = (preferredGateKey && activeGateScanContext[preferredGateKey]) ||
+                activeGateScanContext.Entry ||
+                activeGateScanContext.Exit;
+    if (!ctx || !ctx.uid) {
+        showToast('No active scan to deny.', 'warning');
+        return;
+    }
+
+    const gateKey = ctx.gateKey || 'Entry';
+    if (isConnected && supabaseClient) {
+        try {
+            if (ctx.txnId && !String(ctx.txnId).startsWith('manual-')) {
+                await supabaseClient
+                    .from('transactions')
+                    .update({ status: 'DENIED', remarks: 'Denied by Guard Override' })
+                    .eq('id', ctx.txnId);
+            } else {
+                const { data: denIns } = await supabaseClient
+                    .from('transactions')
+                    .insert({
+                        rfid_uid: ctx.uid,
+                        direction: ctx.direction || 'ENTRY',
+                        gate: gateKey === 'Exit' ? 'EXIT_GATE' : 'ENTRY_GATE',
+                        user_id: ctx.userId || null,
+                        status: 'DENIED',
+                        remarks: 'Denied by Guard Override'
+                    })
+                    .select('id')
+                    .single();
+                if (denIns?.id) localInsertedTxnIds.add(denIns.id);
+            }
+        } catch (err) {
+            console.warn('Guard deny override DB warning:', err);
+        }
+    }
+
+    if (ctx.wasAuthorizedEntry) {
+        appState.vehiclesInside = Math.max(0, (appState.vehiclesInside || 0) - 1);
+    }
+
+    const existingIdx = appState.recentScans.findIndex(s => (ctx.txnId && s.id === ctx.txnId) || s.uid === ctx.uid);
+    if (existingIdx !== -1) {
+        appState.recentScans[existingIdx].status = 'DENIED';
+    } else if (ctx.result) {
+        appState.recentScans.unshift({
+            ...ctx.result,
+            status: 'DENIED',
+            event: ctx.direction || 'ENTRY',
+            time: new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour12: false, hour: '2-digit', minute: '2-digit' })
+        });
+    }
+
+    if (typeof playGateAudio === 'function') playGateAudio('DENIED');
+    showToast('Scan explicitly denied by guard.', 'error');
+    renderAll();
+
+    if (gateResetTimers[gateKey]) {
+        clearTimeout(gateResetTimers[gateKey]);
+        gateResetTimers[gateKey] = null;
+    }
+    resetGateScanner(gateKey);
+}
+window.handleGuardDenyOverride = handleGuardDenyOverride;
+
 document.getElementById('btnDenyEntryAlt')?.addEventListener('click', () => {
-    document.getElementById('btnDeny').click();
+    handleGuardDenyOverride('Entry');
 });
 
 document.getElementById('btnDeny')?.addEventListener('click', () => {
-    showToast('Entry explicitly denied by guard.', 'error');
-    
-    if (pendingUserResult) {
-        // Record in database if connected
-        if (isConnected) {
-            supabaseClient.from('transactions').insert({
-                rfid_uid: pendingUserResult.uid,
-                direction: 'ENTRY',
-                gate: 'CHARRMPASS_GUARD_STATION',
-                user_id: pendingUserResult.userId || null,
-                status: 'DENIED',
-                remarks: 'Denied by Guard'
-            }).then();
-        }
-
-        // Add to local history list
-        pendingUserResult.event = 'DENIED';
-        pendingUserResult.time = new Date().toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit'});
-        appState.recentScans.unshift({ ...pendingUserResult });
-        
-        pendingUserResult = null;
-        pendingLogId = null;
-        renderAll();
-    }
-
-    // Reset scanner to READY state
-    document.getElementById('scanResultData').classList.add('hidden');
-    document.getElementById('scanResultEmpty').classList.remove('hidden');
-    
-    document.getElementById('scanStatusText').textContent = 'READY';
-    document.getElementById('scanStatusText').className = 'text-xl font-bold font-display text-slate-600 mb-2';
-    document.getElementById('scanSubtext').textContent = 'Place card near reader.';
-    document.getElementById('radarCenter').innerHTML = '<i data-lucide="nfc" id="radarIcon" class="w-10 h-10 text-slate-400"></i>';
-    document.getElementById('radarContainer').classList.remove('scanning');
-    lucide.createIcons();
+    handleGuardDenyOverride();
 });
-
-
 
 // =====================
 // VISITOR ACTIONS
@@ -1573,9 +1686,10 @@ window.closeVisitorModal = function() {
 };
 
 window.confirmVisitorEntry = async function() {
-    const name = document.getElementById('visitorNameInput')?.value.trim();
-    let plate = document.getElementById('visitorPlateInput')?.value.trim().toUpperCase() || 'N/A';
-    const purpose = document.getElementById('visitorPurposeInput')?.value.trim() || 'Campus Visitor';
+    const el = (id) => document.getElementById(id);
+    const name = el('visitorNameInput')?.value.trim();
+    let plate = el('visitorPlateInput')?.value.trim().toUpperCase() || 'N/A';
+    const purpose = el('visitorPurposeInput')?.value.trim() || 'Campus Visitor';
     
     if (!name) { 
         showToast('Please enter the visitor\'s full name.', 'warning'); 
@@ -1584,15 +1698,26 @@ window.confirmVisitorEntry = async function() {
     if (!plate) plate = 'N/A';
 
     const uid = visitorPendingUid;
-    const gateKey = visitorPendingGateKey;
+    const gateKey = visitorPendingGateKey || 'Entry';
+    if (!uid) {
+        showToast('No visitor tag UID pending.', 'error');
+        return;
+    }
+
+    // Clear visitorPendingUid BEFORE closing modal so closeVisitorModal's 300ms timeout does NOT wipe the authorized card!
+    visitorPendingUid = null;
     closeVisitorModal();
 
+    const hasVisitorVehicle = plate !== 'N/A' && plate !== 'NONE' && plate !== 'PEDESTRIAN' && plate !== '--';
     const result = {
         uid: uid,
+        cpass_id: 'VISITOR',
         name: name,
         role: 'VISITOR',
-        plate: plate,
-        type: plate !== 'N/A' ? 'Visitor Vehicle' : 'Walk-in / Visitor',
+        plate: hasVisitorVehicle ? plate : 'VISITOR PASS',
+        type: hasVisitorVehicle ? 'Visitor Vehicle' : 'Walk-in / Visitor',
+        user_type: hasVisitorVehicle ? 'VEHICLE' : 'PEDESTRIAN',
+        rfid_type: hasVisitorVehicle ? 'LONG_RANGE' : 'CLOSE_RANGE',
         model: purpose,
         program: 'Campus Visitor',
         section: purpose,
@@ -1602,7 +1727,7 @@ window.confirmVisitorEntry = async function() {
     };
 
     try {
-        if (isConnected) {
+        if (isConnected && supabaseClient) {
             // Update special_tags so Exit Gate can automatically identify this visitor
             await supabaseClient.from('special_tags').upsert({
                 rfid_uid: uid,
@@ -1611,50 +1736,92 @@ window.confirmVisitorEntry = async function() {
                 description: `Plate: ${plate} | Purpose: ${purpose}`
             }, { onConflict: 'rfid_uid' });
 
-            // Record entry transaction
-            await supabaseClient.from('transactions').insert({
+            const existingTag = appState.specialTags.find(t => t.rfid_uid === uid);
+            if (existingTag) {
+                existingTag.label = name;
+                existingTag.description = `Plate: ${plate} | Purpose: ${purpose}`;
+            }
+
+            // Record entry transaction & suppress Realtime self-echo
+            const { data: insTxn } = await supabaseClient.from('transactions').insert({
                 rfid_uid: uid,
                 direction: 'ENTRY',
                 gate: 'ENTRY_GATE',
+                user_type: result.user_type,
+                rfid_type: result.rfid_type,
                 status: 'AUTHORIZED',
                 remarks: `Visitor Entry: ${name} | Plate: ${plate}`
-            });
+            }).select('id').single();
+
+            if (insTxn?.id) {
+                localInsertedTxnIds.add(insTxn.id);
+                result.id = insTxn.id;
+            }
         }
 
         appState.entriesToday++;
         appState.vehiclesInside = (appState.vehiclesInside || 0) + 1;
 
-        // UI Feedback on Entry Monitor
-        const radar = document.getElementById('radarContainerEntry');
-        const scanStatusText = document.getElementById('scanStatusTextEntry');
-        const scanSubtext = document.getElementById('scanSubtextEntry');
-        const radarCenter = document.getElementById('radarCenterEntry');
+        // UI Feedback on BOTH Single Entry & Dual Gate Entry Monitors
+        ['', 'Dual'].forEach(prefix => {
+            const radar = el(`radarContainer${prefix}${gateKey}`);
+            const scanStatusText = el(`scanStatusText${prefix}${gateKey}`);
+            const scanSubtext = el(`scanSubtext${prefix}${gateKey}`);
+            const radarCenter = el(`radarCenter${prefix}${gateKey}`);
+            const statusLabel = el(`resStatusLabel${prefix}${gateKey}`);
+            const scanEmpty = el(`scanResultEmpty${prefix}${gateKey}`);
+            const scanData = el(`scanResultData${prefix}${gateKey}`);
 
-        if (radar) radar.parentElement.classList.add('status-authorized');
-        if (scanStatusText) {
-            scanStatusText.textContent = 'ENTRY AUTHORIZED';
-            scanStatusText.className = 'text-xl font-bold font-display text-green-600 mb-2';
-        }
-        if (radarCenter) radarCenter.innerHTML = '<i data-lucide="check" class="w-10 h-10 text-white"></i>';
-        if (scanSubtext) scanSubtext.textContent = `Welcome ${name}! Visitor entry logged.`;
+            if (scanEmpty) scanEmpty.classList.add('hidden');
+            if (scanData) {
+                scanData.classList.remove('hidden', 'opacity-70');
+            }
+            if (radar) {
+                radar.classList.remove('scanning');
+                radar.parentElement.classList.remove('status-denied');
+                radar.parentElement.classList.add('status-authorized');
+            }
+            if (scanStatusText) {
+                scanStatusText.textContent = 'ENTRY AUTHORIZED';
+                scanStatusText.className = 'text-sm sm:text-xl font-bold font-display text-green-600 mb-1 sm:mb-2';
+            }
+            if (radarCenter) radarCenter.innerHTML = '<i data-lucide="check" class="w-6 h-6 sm:w-10 sm:h-10 text-white"></i>';
+            if (scanSubtext) scanSubtext.textContent = `Welcome ${name}! Visitor entry logged.`;
 
-        if (el('resStatusLabelEntry')) {
-            el('resStatusLabelEntry').className = 'px-4 py-2 rounded-xl font-bold text-sm tracking-wide shadow-sm border bg-green-50 border-green-200 text-green-700';
-            el('resStatusLabelEntry').innerHTML = '✓ ENTRY AUTHORIZED';
-        }
+            if (statusLabel) {
+                statusLabel.className = 'px-2.5 sm:px-4 py-1 sm:py-2 rounded-xl font-bold text-xs sm:text-sm tracking-wide shadow-sm border bg-green-50 border-green-200 text-green-700';
+                statusLabel.innerHTML = '✓ ENTRY AUTHORIZED';
+            }
+        });
 
-        populateScanResultCard(result, 'Entry');
+        updateTrafficLightWidget(gateKey, 'done');
+        populateScanResultCard(result, gateKey);
+        if (typeof playGateAudio === 'function') playGateAudio('AUTHORIZED');
 
         result.event = 'ENTRY';
-        result.time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+        result.rawTimestamp = new Date().toISOString();
+        result.time = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Manila', hour12: false, hour: '2-digit', minute: '2-digit' });
         appState.recentScans.unshift(result);
+
+        activeGateScanContext[gateKey] = {
+            uid,
+            txnId: result.id || null,
+            userId: null,
+            gateKey,
+            direction: 'ENTRY',
+            wasAuthorizedEntry: true,
+            result
+        };
 
         renderAll();
         lucide.createIcons();
         showToast(`Visitor "${name}" (Plate: ${plate}) authorized for entry!`, 'success');
 
-        setTimeout(() => resetGateScanner('Entry'), 7000);
-        visitorPendingUid = null;
+        if (gateResetTimers[gateKey]) clearTimeout(gateResetTimers[gateKey]);
+        gateResetTimers[gateKey] = setTimeout(() => {
+            resetGateScanner(gateKey);
+            gateResetTimers[gateKey] = null;
+        }, 7000);
     } catch(err) {
         showToast('Error authorizing visitor: ' + err.message, 'error');
     }
@@ -1667,10 +1834,11 @@ window.openGuardSettingsModal = function() {
     const m = document.getElementById('guardSettingsModal');
     if (!m) return;
 
-    // Load from session and localStorage
     const session = JSON.parse(sessionStorage.getItem('charrmpass_session') || '{}');
     const localGuard = JSON.parse(localStorage.getItem('charrmpass_guard') || '{}');
-    const savedSettings = JSON.parse(localStorage.getItem('charrmpass_guard_settings') || '{}');
+    const savedSettings = typeof getCharrmpassSettings === 'function'
+        ? getCharrmpassSettings()
+        : JSON.parse(localStorage.getItem('charrmpass_guard_settings') || '{}');
 
     const nameEl = document.getElementById('guardDisplayName');
     const userEl = document.getElementById('guardUsernameInput');
@@ -1678,13 +1846,16 @@ window.openGuardSettingsModal = function() {
 
     if (nameEl) nameEl.value = localGuard.name || document.getElementById('guardName')?.textContent || 'Officer Reyes';
     if (userEl) userEl.value = session.username || 'guard';
-    if (passEl) passEl.value = session.password || 'guard123';
-
-    if (savedSettings.sound !== undefined && document.getElementById('guardSoundToggle')) {
-        document.getElementById('guardSoundToggle').checked = savedSettings.sound;
+    if (passEl) {
+        passEl.value = '';
+        passEl.placeholder = 'Leave blank to keep current password';
     }
-    if (savedSettings.denied !== undefined && document.getElementById('guardDeniedToggle')) {
-        document.getElementById('guardDeniedToggle').checked = savedSettings.denied;
+
+    if (document.getElementById('guardSoundToggle')) {
+        document.getElementById('guardSoundToggle').checked = savedSettings.sound !== undefined ? savedSettings.sound : (savedSettings.soundOnEntry !== false);
+    }
+    if (document.getElementById('guardDeniedToggle')) {
+        document.getElementById('guardDeniedToggle').checked = savedSettings.denied !== undefined ? savedSettings.denied : (savedSettings.alertOnDenied !== false);
     }
 
     m.classList.remove('hidden');
@@ -1719,34 +1890,66 @@ window.saveGuardSettings = async function() {
     const sound = document.getElementById('guardSoundToggle')?.checked ?? true;
     const denied = document.getElementById('guardDeniedToggle')?.checked ?? true;
 
-    if (!displayName || !username || !password) {
-        showToast('Please fill in all credential fields.', 'warning');
+    if (!displayName || !username) {
+        showToast('Please enter Display Name and Username.', 'warning');
         return;
     }
 
-    // Save display name locally
+    if (password && password.length < 4) {
+        showToast('New password must be at least 4 characters long.', 'warning');
+        return;
+    }
+
+    // Save display name & unified audio settings locally
     if (document.getElementById('guardName')) document.getElementById('guardName').textContent = displayName;
     if (document.getElementById('guardAvatar')) {
         document.getElementById('guardAvatar').src = `https://ui-avatars.com/api/?name=${encodeURIComponent(displayName)}&background=0E4B3A&color=fff`;
     }
     localStorage.setItem('charrmpass_guard', JSON.stringify({ name: displayName }));
     localStorage.setItem('charrmpass_guard_settings', JSON.stringify({ sound, denied }));
+    try {
+        const general = JSON.parse(localStorage.getItem('charrmpass_settings') || '{}');
+        general.soundOnEntry = sound;
+        general.alertOnDenied = denied;
+        localStorage.setItem('charrmpass_settings', JSON.stringify(general));
+    } catch (_) {}
 
-    // Save credentials to Supabase
-    if (isConnected) {
+    const session = JSON.parse(sessionStorage.getItem('charrmpass_session') || '{}');
+    const usernameChanged = username !== (session.username || '');
+
+    // Save credentials to Supabase only if username or password changed
+    if (isConnected && supabaseClient && (password || usernameChanged)) {
         try {
             showToast('Updating guard credentials in database...', 'info');
-            const now = new Date().toISOString();
-            const { error } = await supabaseClient
-                .from('system_accounts')
-                .upsert({ username, password, role: 'GUARD', updated_at: now }, { onConflict: 'role' });
-            
-            if (error) throw error;
+            const targetRole = session.role === 'ADMIN' ? 'ADMIN' : 'GUARD';
+            let savedAccount = null;
 
-            // Update active session
-            const session = JSON.parse(sessionStorage.getItem('charrmpass_session') || '{}');
-            session.username = username;
-            session.password = password;
+            if (typeof upsertSystemAccount === 'function') {
+                const { account, error } = await upsertSystemAccount({
+                    id: session.id || null,
+                    username,
+                    password: password || '',
+                    role: targetRole
+                }, supabaseClient);
+                if (error) throw error;
+                savedAccount = account;
+            } else {
+                const updateFields = { username, updated_at: new Date().toISOString() };
+                if (password) updateFields.password = password;
+                let query = supabaseClient.from('system_accounts').update(updateFields);
+                if (session.id && !String(session.id).startsWith('local-')) {
+                    query = query.eq('id', session.id);
+                } else {
+                    query = query.eq('username', session.username || username);
+                }
+                const { data, error } = await query.select('id, username, role').maybeSingle();
+                if (error) throw error;
+                savedAccount = data;
+            }
+
+            session.username = savedAccount?.username || username;
+            if (savedAccount?.id) session.id = savedAccount.id;
+            delete session.password;
             sessionStorage.setItem('charrmpass_session', JSON.stringify(session));
 
             showToast('Guard settings and credentials updated successfully!', 'success');
@@ -1756,7 +1959,7 @@ window.saveGuardSettings = async function() {
             showToast('Database Error: ' + err.message, 'error');
         }
     } else {
-        showToast('Guard settings saved locally (Demo mode).', 'success');
+        showToast('Guard preferences saved!', 'success');
         closeGuardSettingsModal();
     }
 };

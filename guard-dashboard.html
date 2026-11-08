@@ -5,13 +5,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CHARRMPASS: A Web-Based Smart Entry and Exit Monitoring System Using RFID Technology for Aklan State University - Ibajay Campus</title>
-    <link rel="icon" type="image/png" href="logocharrmpark.png">
+    <link rel="icon" type="image/png" href="icon-192.png">
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#0E4B3A">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="CHARRMPASS">
-    <link rel="apple-touch-icon" href="logocharrmpark.png">
+    <link rel="apple-touch-icon" href="icon-192.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
@@ -34,17 +34,24 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script>
-        // RBAC Session Protection
+        // RBAC Session Protection (with 12-hour session expiration)
         (function() {
-            const session = sessionStorage.getItem('charrmpass_session');
-            if (!session) {
+            try {
+                const raw = sessionStorage.getItem('charrmpass_session');
+                if (!raw) {
+                    window.location.href = 'index.html';
+                    return;
+                }
+                const s = JSON.parse(raw);
+                const issuedAt = Number(s.loginTime || s.timestamp || 0);
+                if (!s.role || (s.role !== 'GUARD' && s.role !== 'ADMIN') || (issuedAt > 0 && (Date.now() - issuedAt) > 12 * 60 * 60 * 1000)) {
+                    sessionStorage.removeItem('charrmpass_session');
+                    window.location.href = 'index.html';
+                    return;
+                }
+            } catch (_) {
+                sessionStorage.removeItem('charrmpass_session');
                 window.location.href = 'index.html';
-                return;
-            }
-            const s = JSON.parse(session);
-            if (s.role !== 'GUARD' && s.role !== 'ADMIN') {
-                window.location.href = 'index.html';
-                return;
             }
         })();
     </script>
@@ -1154,7 +1161,7 @@
                 const nameEl = document.getElementById('guardName');
                 if (nameEl) nameEl.textContent = session.username;
                 const avatarEl = document.getElementById('guardAvatar');
-                if (avatarEl) avatarEl.src = `https://ui-avatars.com/api/?name=${session.username}&background=0E4B3A&color=fff`;
+                if (avatarEl) avatarEl.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(session.username || 'Guard')}&background=0E4B3A&color=fff`;
             }
         })();
 

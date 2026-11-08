@@ -21,10 +21,204 @@ let adminState = {
     activePedestrians: 0,
     userTableFilter: 'ALL',
     userModeFilter: 'ALL',
+    userCurrentPage: 1,
+    userPageSize: 50,
     logModeFilter: 'ALL',
     activeHistUser: null,
     histDirection: 'ALL'
 };
+
+const adminEsc = (str) => (typeof escapeHtml === 'function')
+    ? escapeHtml(str)
+    : String(str == null ? '' : str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const adminUriAttr = (str) => (typeof uriAttr === 'function')
+    ? uriAttr(str)
+    : encodeURIComponent(String(str == null ? '' : str)).replace(/'/g, '%27');
+
+const adminManilaDateKey = (d = new Date()) => (typeof getManilaDateKey === 'function')
+    ? getManilaDateKey(d)
+    : new Date((d instanceof Date ? d.getTime() : new Date(d).getTime()) + 8 * 3600 * 1000).toISOString().slice(0, 10);
+
+const adminManilaParts = (d = new Date()) => (typeof getManilaDateParts === 'function')
+    ? getManilaDateParts(d)
+    : (() => {
+        const dt = new Date((d instanceof Date ? d.getTime() : new Date(d).getTime()) + 8 * 3600 * 1000);
+        return { year: dt.getUTCFullYear(), month: dt.getUTCMonth() + 1, day: dt.getUTCDate(), hour: dt.getUTCHours(), minute: dt.getUTCMinutes(), dateKey: dt.toISOString().slice(0, 10) };
+    })();
+
+const isSyntheticAutoExit = (l) => Boolean(l && l.direction === 'EXIT' && (l.gate === 'AUTO_RESOLVED_EXIT' || String(l.remarks || '').includes('[AUTO_RESOLVED_EXIT]')));
+
+const formatManilaTime = (ts, opts = { hour: '2-digit', minute: '2-digit' }) => {
+    if (!ts) return '--';
+    const d = ts instanceof Date ? ts : new Date(ts);
+    if (isNaN(d.getTime())) return '--';
+    return d.toLocaleTimeString('en-US', { ...opts, timeZone: 'Asia/Manila' });
+};
+
+const formatManilaDate = (ts, opts = { month: 'short', day: 'numeric', year: 'numeric' }) => {
+    if (!ts) return '--';
+    const d = ts instanceof Date ? ts : new Date(ts);
+    if (isNaN(d.getTime())) return '--';
+    return d.toLocaleDateString('en-US', { ...opts, timeZone: 'Asia/Manila' });
+};
+
+const onCampusCache = {
+    userIds: new Set(),
+    cpassIds: new Set(),
+    uids: new Set(),
+    plates: new Set(),
+    ready: false
+};
+
+let adminDataRefreshTimer = null;
+function scheduleAdminDataRefresh(delayMs = 350) {
+    if (adminDataRefreshTimer) clearTimeout(adminDataRefreshTimer);
+    adminDataRefreshTimer = setTimeout(() => {
+        adminDataRefreshTimer = null;
+        loadData();
+    }, delayMs);
+}
+
+function normalizeAdminUid(u) {
+    return (u || '').toString().replace(/[\s:-]/g, '').toUpperCase();
+}
+
+function recomputeAdminOccupancy(rpcRows = null) {
+    const openEntries = [];
+    const sortedLogsAsc = [...(adminState.logs || [])].sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+
+    sortedLogsAsc.forEach(l => {
+        if (l.status !== 'AUTHORIZED') return;
+        const uid = normalizeAdminUid(l.rfid_uid);
+        const plate = (l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').toUpperCase().trim();
+        const isRealPlate = plate && plate !== 'N/A' && plate !== '--' && plate !== 'PEDESTRIAN' && plate !== 'NONE';
+
+        if (!l.users && l.user_id && adminState.users) {
+            l.users = adminState.users.find(x => x.id === l.user_id);
+        }
+        if (!l.users && uid && adminState.users) {
+            l.users = adminState.users.find(x => {
+                const uUid = normalizeAdminUid(x.rfid_uid);
+                if (uUid && uUid === uid) return true;
+                return (x.rfid_cards || []).some(c => normalizeAdminUid(c.rfid_uid) === uid);
+            });
+        }
+        if (!l.vehicles && l.vehicle_id && adminState.users) {
+            for (const u of adminState.users) {
+                const v = (u.vehicles || []).find(veh => veh.id === l.vehicle_id);
+                if (v) { l.vehicles = v; break; }
+            }
+        }
+
+        const matchOpenIdx = () => openEntries.findIndex(e => {
+            const eUid = normalizeAdminUid(e.rfid_uid);
+            const ePlate = (e.vehicles?.plate_number || (e.remarks && e.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').toUpperCase().trim();
+            const eIsRealPlate = ePlate && ePlate !== 'N/A' && ePlate !== '--' && ePlate !== 'PEDESTRIAN' && ePlate !== 'NONE';
+            return (uid && eUid && uid === eUid) ||
+                   (l.user_id && e.user_id && l.user_id === e.user_id) ||
+                   (isRealPlate && eIsRealPlate && plate === ePlate);
+        });
+
+        if (l.direction === 'ENTRY') {
+            const existingIdx = matchOpenIdx();
+            if (existingIdx !== -1) openEntries[existingIdx] = l;
+            else openEntries.push(l);
+        } else if (l.direction === 'EXIT') {
+            const idx = matchOpenIdx();
+            if (idx !== -1) openEntries.splice(idx, 1);
+        }
+    });
+
+    // Reconcile with get_active_inside_entities() RPC rows when provided (captures entries older than limit(1000))
+    if (Array.isArray(rpcRows)) {
+        const rpcUidSet = new Set();
+        rpcRows.forEach(r => {
+            const rUid = normalizeAdminUid(r.rfid_uid);
+            if (rUid) rpcUidSet.add(rUid);
+            const alreadyTracked = openEntries.some(e =>
+                (rUid && normalizeAdminUid(e.rfid_uid) === rUid) ||
+                (r.user_id && e.user_id && r.user_id === e.user_id)
+            );
+            if (!alreadyTracked) {
+                const matchedUser = r.user_id
+                    ? (adminState.users || []).find(u => u.id === r.user_id)
+                    : (adminState.users || []).find(u => (u.rfid_cards || []).some(c => normalizeAdminUid(c.rfid_uid) === rUid));
+                openEntries.push({
+                    id: r.transaction_id || ('rpc_' + rUid),
+                    rfid_uid: r.rfid_uid,
+                    direction: 'ENTRY',
+                    status: 'AUTHORIZED',
+                    gate: r.entry_gate || r.gate || 'Main Gate',
+                    timestamp: r.entry_time || r.timestamp || new Date().toISOString(),
+                    user_type: r.user_type || 'PEDESTRIAN',
+                    rfid_type: r.rfid_type || (r.user_type === 'VEHICLE' ? 'LONG_RANGE' : 'CLOSE_RANGE'),
+                    user_id: r.user_id || matchedUser?.id || null,
+                    vehicle_id: r.vehicle_id || null,
+                    remarks: r.remarks || '',
+                    users: matchedUser || (r.full_name ? { full_name: r.full_name, role: r.role, cpass_id: r.cpass_id } : null),
+                    vehicles: r.plate_number ? { plate_number: r.plate_number, vehicle_type: r.vehicle_type || 'Vehicle' } : null
+                });
+            }
+        });
+        // Remove any local open entry whose UID was already closed in DB outside our 1000-row window
+        for (let i = openEntries.length - 1; i >= 0; i--) {
+            const eUid = normalizeAdminUid(openEntries[i].rfid_uid);
+            if (eUid && rpcRows.length >= 0 && !rpcUidSet.has(eUid)) {
+                openEntries.splice(i, 1);
+            }
+        }
+    }
+
+    openEntries.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+    window.currentInsideRoster = openEntries;
+
+    onCampusCache.userIds.clear();
+    onCampusCache.cpassIds.clear();
+    onCampusCache.uids.clear();
+    onCampusCache.plates.clear();
+
+    let insideVehicles = 0;
+    let insidePedestrians = 0;
+
+    openEntries.forEach(l => {
+        const uid = normalizeAdminUid(l.rfid_uid);
+        if (uid) onCampusCache.uids.add(uid);
+        const uidVal = l.user_id || l.users?.id;
+        if (uidVal) onCampusCache.userIds.add(uidVal);
+        const cpass = (l.users?.cpass_id || '').toUpperCase().trim();
+        const studId = (l.users?.student_id || '').toUpperCase().trim();
+        if (cpass) onCampusCache.cpassIds.add(cpass);
+        if (studId) onCampusCache.cpassIds.add(studId);
+
+        const plate = (l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').toUpperCase().trim();
+        const hasRealVeh = Boolean(
+            (plate && plate !== 'PEDESTRIAN' && plate !== 'NONE' && plate !== 'N/A' && plate !== '--' && l.vehicles?.vehicle_type !== 'None') ||
+            l.user_type === 'VEHICLE' ||
+            l.rfid_type === 'LONG_RANGE'
+        );
+        if (plate && plate !== 'PEDESTRIAN' && plate !== 'NONE' && plate !== 'N/A' && plate !== '--') {
+            onCampusCache.plates.add(plate);
+        }
+        if (hasRealVeh) insideVehicles++;
+        else insidePedestrians++;
+    });
+
+    onCampusCache.ready = true;
+    adminState.activeVehicles = insideVehicles;
+    adminState.activePedestrians = insidePedestrians;
+    return openEntries;
+}
+window.recomputeAdminOccupancy = recomputeAdminOccupancy;
+
+async function fetchActiveInsideRpcSafe() {
+    if (!supabaseClient || typeof supabaseClient.rpc !== 'function') return null;
+    try {
+        const { data, error } = await supabaseClient.rpc('get_active_inside_entities');
+        if (!error && Array.isArray(data)) return data;
+    } catch (_) {}
+    return null;
+}
 
 // =====================
 // VIEW SWITCHING
@@ -203,19 +397,18 @@ async function loadData() {
             if (le) console.error('❌ Supabase Transactions error:', le);
             adminState.logs = (l && Array.isArray(l)) ? l : [];
 
-            // Calculate live on-campus presence
-            const vehEntries = adminState.logs.filter(t => t.direction === 'ENTRY' && t.status === 'AUTHORIZED' && (t.user_type === 'VEHICLE' || t.rfid_type === 'LONG_RANGE' || (t.vehicles?.plate_number && t.vehicles?.plate_number !== 'PEDESTRIAN'))).length;
-            const vehExits   = adminState.logs.filter(t => t.direction === 'EXIT'  && t.status === 'AUTHORIZED' && (t.user_type === 'VEHICLE' || t.rfid_type === 'LONG_RANGE' || (t.vehicles?.plate_number && t.vehicles?.plate_number !== 'PEDESTRIAN'))).length;
-            adminState.activeVehicles = Math.max(0, vehEntries - vehExits);
+            // Calculate live on-campus presence via get_active_inside_entities() RPC + session pairing
+            const rpcInside = await fetchActiveInsideRpcSafe();
+            recomputeAdminOccupancy(rpcInside);
 
-            const pedEntries = adminState.logs.filter(t => t.direction === 'ENTRY' && t.status === 'AUTHORIZED' && (t.user_type === 'PEDESTRIAN' || t.rfid_type === 'CLOSE_RANGE' || t.vehicles?.vehicle_type === 'None' || t.vehicles?.plate_number === 'PEDESTRIAN' || t.gate?.includes('PEDESTRIAN'))).length;
-            const pedExits   = adminState.logs.filter(t => t.direction === 'EXIT'  && t.status === 'AUTHORIZED' && (t.user_type === 'PEDESTRIAN' || t.rfid_type === 'CLOSE_RANGE' || t.vehicles?.vehicle_type === 'None' || t.vehicles?.plate_number === 'PEDESTRIAN' || t.gate?.includes('PEDESTRIAN'))).length;
-            adminState.activePedestrians = Math.max(0, pedEntries - pedExits);
-
-            // 3. Load system accounts
-            const { data: acc, error: acce } = await supabaseClient.from('system_accounts').select('*');
-            if (acce) console.error('❌ Supabase Accounts error:', acce);
-            adminState.accounts = (acc && Array.isArray(acc)) ? acc : [];
+            // 3. Load system accounts via safe RPC helper (never fetches cleartext passwords)
+            if (typeof listSystemAccounts === 'function') {
+                adminState.accounts = await listSystemAccounts(supabaseClient);
+            } else {
+                const { data: acc, error: acce } = await supabaseClient.from('system_accounts').select('id, username, role, updated_at');
+                if (acce) console.error('❌ Supabase Accounts error:', acce);
+                adminState.accounts = (acc && Array.isArray(acc)) ? acc : [];
+            }
 
             // 4. Load special tags (Visitor & Emergency)
             const { data: st, error: ste } = await supabaseClient.from('special_tags').select('*');
@@ -249,24 +442,21 @@ window.addEventListener('supabase:connected', () => {
 async function refreshAdminLogsOnly() {
     if (!isConnected || !supabaseClient) return;
     try {
-        const { data: l } = await supabaseClient
-            .from('transactions')
-            .select(`
-                id, rfid_uid, direction, gate, status, remarks, timestamp, user_type, rfid_type, user_id, vehicle_id,
-                users ( full_name, role, role_detail, program, section, default_transit_mode, cpass_id, student_id ),
-                vehicles ( plate_number, vehicle_type, vehicle_model, vehicle_color )
-            `)
-            .order('timestamp', { ascending: false })
-            .limit(1000);
+        const [{ data: l }, rpcInside] = await Promise.all([
+            supabaseClient
+                .from('transactions')
+                .select(`
+                    id, rfid_uid, direction, gate, status, remarks, timestamp, user_type, rfid_type, user_id, vehicle_id,
+                    users ( full_name, role, role_detail, program, section, default_transit_mode, cpass_id, student_id ),
+                    vehicles ( plate_number, vehicle_type, vehicle_model, vehicle_color )
+                `)
+                .order('timestamp', { ascending: false })
+                .limit(1000),
+            fetchActiveInsideRpcSafe()
+        ]);
         if (l && Array.isArray(l)) {
             adminState.logs = l;
-            const vehEntries = adminState.logs.filter(t => t.direction === 'ENTRY' && t.status === 'AUTHORIZED' && (t.user_type === 'VEHICLE' || t.rfid_type === 'LONG_RANGE' || (t.vehicles?.plate_number && t.vehicles?.plate_number !== 'PEDESTRIAN'))).length;
-            const vehExits   = adminState.logs.filter(t => t.direction === 'EXIT'  && t.status === 'AUTHORIZED' && (t.user_type === 'VEHICLE' || t.rfid_type === 'LONG_RANGE' || (t.vehicles?.plate_number && t.vehicles?.plate_number !== 'PEDESTRIAN'))).length;
-            adminState.activeVehicles = Math.max(0, vehEntries - vehExits);
-
-            const pedEntries = adminState.logs.filter(t => t.direction === 'ENTRY' && t.status === 'AUTHORIZED' && (t.user_type === 'PEDESTRIAN' || t.rfid_type === 'CLOSE_RANGE' || t.vehicles?.vehicle_type === 'None' || t.vehicles?.plate_number === 'PEDESTRIAN' || t.gate?.includes('PEDESTRIAN'))).length;
-            const pedExits   = adminState.logs.filter(t => t.direction === 'EXIT'  && t.status === 'AUTHORIZED' && (t.user_type === 'PEDESTRIAN' || t.rfid_type === 'CLOSE_RANGE' || t.vehicles?.vehicle_type === 'None' || t.vehicles?.plate_number === 'PEDESTRIAN' || t.gate?.includes('PEDESTRIAN'))).length;
-            adminState.activePedestrians = Math.max(0, pedEntries - pedExits);
+            recomputeAdminOccupancy(rpcInside);
             renderAdmin();
         }
     } catch(e) {
@@ -282,16 +472,28 @@ function setupAdminRealtime() {
     try {
         supabaseClient.channel('admin-live-bus')
             .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
-                console.log('⚡ [Admin RT] Transactions updated (refreshing logs only)');
+                console.log('⚡ [Admin RT] Transactions updated (refreshing logs & occupancy only)');
                 refreshAdminLogsOnly();
             })
             .on('postgres_changes', { event: '*', schema: 'public', table: 'rfid_cards' }, () => {
                 console.log('⚡ [Admin RT] RFID cards updated');
-                if (typeof initAdminState === 'function') initAdminState();
+                scheduleAdminDataRefresh();
             })
             .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => {
                 console.log('⚡ [Admin RT] Users/registrations updated');
-                if (typeof initAdminState === 'function') initAdminState();
+                scheduleAdminDataRefresh();
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, () => {
+                console.log('⚡ [Admin RT] Vehicles updated');
+                scheduleAdminDataRefresh();
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'special_tags' }, async () => {
+                console.log('⚡ [Admin RT] Special tags updated');
+                const { data: st } = await supabaseClient.from('special_tags').select('*');
+                if (st && Array.isArray(st)) {
+                    adminState.specialTags = st;
+                    if (typeof window.renderSpecialTags === 'function') window.renderSpecialTags();
+                }
             })
             .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, async () => {
                 console.log('⚡ [Admin RT] Devices updated (refreshing devices table only)');
@@ -313,51 +515,44 @@ function setupAdminRealtime() {
 const renderAll = renderAdmin;
 window.renderAll = renderAdmin;
 
-// Helper: Check if a specific user is currently on campus (Strict state & log evaluation)
+// Helper: O(1) campus presence check backed by precomputed recomputeAdminOccupancy() sets
 function isUserOnCampus(u) {
     if (!u) return false;
-    const uId = u.id;
+    if (!onCampusCache.ready) {
+        recomputeAdminOccupancy();
+    }
+    if (u.id && onCampusCache.userIds.has(u.id)) return true;
     const uCpass = (u.cpass_id || '').toUpperCase().trim();
     const uStudentId = (u.student_id || '').toUpperCase().trim();
-    const uUid = (u.rfid_uid || '').toUpperCase().trim();
-    const uPlates = [
-        (u.plate_number || '').toUpperCase().trim(),
-        ...((u.vehicles || []).map(v => (v.plate_number || '').toUpperCase().trim()))
-    ].filter(p => p && p !== 'PEDESTRIAN' && p !== 'NONE');
-    const uCards = [
-        uUid,
-        ...((u.rfid_cards || []).map(c => (c.rfid_uid || '').toUpperCase().trim()))
-    ].filter(c => c && !c.startsWith('UNASSIGNED_'));
+    if (uCpass && onCampusCache.cpassIds.has(uCpass)) return true;
+    if (uStudentId && onCampusCache.cpassIds.has(uStudentId)) return true;
 
-    const userLogs = (adminState.logs || []).filter(l => {
-        if (l.status !== 'AUTHORIZED') return false;
-        if (uId && (l.user_id === uId || l.users?.id === uId)) return true;
-        if (uCpass && (l.users?.cpass_id?.toUpperCase() === uCpass || l.users?.student_id?.toUpperCase() === uCpass)) return true;
-        if (uStudentId && (l.users?.student_id?.toUpperCase() === uStudentId || l.users?.cpass_id?.toUpperCase() === uStudentId)) return true;
-        
-        const logUid = (l.rfid_uid || '').toUpperCase().trim();
-        if (logUid && uCards.includes(logUid)) return true;
+    const uUid = normalizeAdminUid(u.rfid_uid);
+    if (uUid && !uUid.startsWith('UNASSIGNED_') && onCampusCache.uids.has(uUid)) return true;
+    for (const c of (u.rfid_cards || [])) {
+        const cUid = normalizeAdminUid(c.rfid_uid);
+        if (cUid && !cUid.startsWith('UNASSIGNED_') && onCampusCache.uids.has(cUid)) return true;
+    }
 
-        const logPlate = (l.vehicles?.plate_number || '').toUpperCase().trim();
-        if (logPlate && uPlates.includes(logPlate)) return true;
-
-        if (l.remarks) {
-            const rem = l.remarks.toUpperCase();
-            if (uPlates.some(p => rem.includes(p))) return true;
-            if (uCards.some(c => rem.includes(c))) return true;
-        }
-        return false;
-    });
-
-    if (userLogs.length === 0) return false;
-    // Sort descending by timestamp
-    userLogs.sort((a,b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
-    return userLogs[0].direction === 'ENTRY';
+    const p0 = (u.plate_number || '').toUpperCase().trim();
+    if (p0 && p0 !== 'PEDESTRIAN' && p0 !== 'NONE' && onCampusCache.plates.has(p0)) return true;
+    for (const v of (u.vehicles || [])) {
+        const vp = (v.plate_number || '').toUpperCase().trim();
+        if (vp && vp !== 'PEDESTRIAN' && vp !== 'NONE' && onCampusCache.plates.has(vp)) return true;
+    }
+    return false;
 }
+window.isUserOnCampus = isUserOnCampus;
+
+window.setUsersPage = function(page) {
+    adminState.userCurrentPage = Math.max(1, Number(page) || 1);
+    renderAdmin();
+};
 
 // User filter pill switching
 window.setUserTableFilter = function(filter) {
     adminState.userTableFilter = filter;
+    adminState.userCurrentPage = 1;
     document.querySelectorAll('.user-filter-pill').forEach(btn => {
         btn.classList.remove('bg-charm-dark', 'text-white', 'shadow-sm');
         btn.classList.add('text-slate-600', 'hover:bg-slate-100');
@@ -371,6 +566,7 @@ window.setUserTableFilter = function(filter) {
 };
 
 window.filterUsers = function() {
+    adminState.userCurrentPage = 1;
     const searchVal = el('userSearch')?.value || '';
     const clearBtn = el('userSearchClearBtn');
     if (clearBtn) {
@@ -380,6 +576,7 @@ window.filterUsers = function() {
 };
 
 window.clearUserSearch = function() {
+    adminState.userCurrentPage = 1;
     const input = el('userSearch');
     if (input) {
         input.value = '';
@@ -403,13 +600,14 @@ window.copyToClipboard = function(text, label = 'UID') {
 // RENDER
 // =====================
 function renderAdmin() {
+    recomputeAdminOccupancy();
     const activeVeh = typeof adminState.activeVehicles === 'number' ? adminState.activeVehicles : 0;
     const activePed = typeof adminState.activePedestrians === 'number' ? adminState.activePedestrians : 0;
     const totalInside = activeVeh + activePed;
 
-    const today = new Date().toISOString().split('T')[0];
-    const todayEntries = adminState.logs.filter(l => l.direction === 'ENTRY' && l.timestamp?.startsWith(today));
-    const todayExits   = adminState.logs.filter(l => l.direction === 'EXIT'  && l.timestamp?.startsWith(today));
+    const today = adminManilaDateKey();
+    const todayEntries = adminState.logs.filter(l => l.direction === 'ENTRY' && l.timestamp && adminManilaDateKey(l.timestamp) === today);
+    const todayExits   = adminState.logs.filter(l => l.direction === 'EXIT' && !isSyntheticAutoExit(l) && l.timestamp && adminManilaDateKey(l.timestamp) === today);
 
     const todayPedEntries = todayEntries.filter(l => l.user_type === 'PEDESTRIAN' || l.rfid_type === 'CLOSE_RANGE' || l.vehicles?.vehicle_type === 'None' || l.vehicles?.plate_number === 'PEDESTRIAN' || l.gate?.includes('PEDESTRIAN')).length;
     const todayVehEntries = todayEntries.filter(l => l.user_type === 'VEHICLE' || l.rfid_type === 'LONG_RANGE' || (l.vehicles?.plate_number && l.vehicles?.plate_number !== 'PEDESTRIAN')).length;
@@ -451,26 +649,27 @@ function renderAdmin() {
             const isVeh = item.type === 'VEHICLE';
             const avatar = item.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(item.name || 'User')}&background=random`;
             const roleBadgeClass = item.role === 'Student' ? 'bg-blue-100 text-blue-800' : (item.role === 'Faculty' ? 'bg-purple-100 text-purple-800' : (item.role === 'Others' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'));
-            const formattedDate = item.created_at ? new Date(item.created_at).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }) : '--';
-            const roleDisplay = item.role === 'Others' ? `Others: ${item.role_detail || 'Vendor'}` : (item.role || 'User');
+            const formattedDate = formatManilaDate(item.created_at);
+            const roleDisplay = adminEsc(item.role === 'Others' ? `Others: ${item.role_detail || 'Vendor'}` : (item.role || 'User'));
+            const safeAvatar = adminEsc(avatar);
 
             return `
             <tr class="hover:bg-amber-50/40 transition-colors">
                 <td class="p-4">
                     <div class="flex items-center gap-3">
-                        <img src="${avatar}" class="w-10 h-10 rounded-xl object-cover border border-slate-200 shadow-sm cursor-pointer hover:opacity-80" onclick="openReviewModal('${item.userId}', '${item.type}', '${item.vehicleId || ''}')" onerror="this.src='https://ui-avatars.com/api/?name=User'">
+                        <img src="${safeAvatar}" class="w-10 h-10 rounded-xl object-cover border border-slate-200 shadow-sm cursor-pointer hover:opacity-80" onclick="openReviewModal('${adminEsc(item.userId)}', '${adminEsc(item.type)}', '${adminEsc(item.vehicleId || '')}')" onerror="this.src='https://ui-avatars.com/api/?name=User'">
                         <div>
-                            <div class="font-extrabold text-slate-800 hover:text-charm-dark cursor-pointer flex items-center gap-1.5" onclick="openReviewModal('${item.userId}', '${item.type}', '${item.vehicleId || ''}')">
-                                <span>${item.name || '--'}</span>
-                                <span class="font-mono text-[10px] font-black px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300" title="CHARRMPASS ID">${item.cpassId}</span>
+                            <div class="font-extrabold text-slate-800 hover:text-charm-dark cursor-pointer flex items-center gap-1.5" onclick="openReviewModal('${adminEsc(item.userId)}', '${adminEsc(item.type)}', '${adminEsc(item.vehicleId || '')}')">
+                                <span>${adminEsc(item.name || '--')}</span>
+                                <span class="font-mono text-[10px] font-black px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300" title="CHARRMPASS ID">${adminEsc(item.cpassId)}</span>
                             </div>
-                            <div class="text-xs text-slate-400 font-medium">${item.user?.age ? item.user.age + ' yrs' : ''} ${item.user?.sex ? '• ' + item.user.sex : ''}</div>
+                            <div class="text-xs text-slate-400 font-medium">${item.user?.age ? adminEsc(item.user.age) + ' yrs' : ''} ${item.user?.sex ? '• ' + adminEsc(item.user.sex) : ''}</div>
                         </div>
                     </div>
                 </td>
                 <td class="p-4">
                     <span class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${roleBadgeClass}">${roleDisplay}</span>
-                    <div class="text-xs text-slate-500 font-semibold mt-1">${item.program || '--'} ${item.section ? '• ' + item.section : ''}</div>
+                    <div class="text-xs text-slate-500 font-semibold mt-1">${adminEsc(item.program || '--')} ${item.section ? '• ' + adminEsc(item.section) : ''}</div>
                 </td>
                 <td class="p-4">
                     ${!isVeh ? `
@@ -486,10 +685,10 @@ function renderAdmin() {
                 <td class="p-4">
                     ${!isVeh ? `
                         <div class="text-xs font-bold text-slate-600">Walking / Pedestrian Access</div>
-                        <div class="text-[11px] font-mono text-slate-400">Cardholder: ${item.cpassId}</div>
+                        <div class="text-[11px] font-mono text-slate-400">Cardholder: ${adminEsc(item.cpassId)}</div>
                     ` : `
-                        <div class="font-bold text-slate-700 text-xs">${item.vehicleType || 'Vehicle'} - <span class="font-medium text-slate-500">${item.vehicleModel || '--'}</span></div>
-                        <div class="font-mono text-xs font-black text-charm-dark bg-charm-yellow/20 px-2 py-0.5 rounded inline-block mt-0.5">${item.plate || 'NO PLATE'}</div>
+                        <div class="font-bold text-slate-700 text-xs">${adminEsc(item.vehicleType || 'Vehicle')} - <span class="font-medium text-slate-500">${adminEsc(item.vehicleModel || '--')}</span></div>
+                        <div class="font-mono text-xs font-black text-charm-dark bg-charm-yellow/20 px-2 py-0.5 rounded inline-block mt-0.5">${adminEsc(item.plate || 'NO PLATE')}</div>
                     `}
                 </td>
                 <td class="p-4 text-xs font-semibold text-slate-500 whitespace-nowrap">
@@ -621,23 +820,49 @@ function renderAdmin() {
             });
         }
 
-        // Campus Presence Filter
+        // Campus Presence Filter (O(1) per user via onCampusCache)
         if (presence === 'INSIDE') {
             filtered = filtered.filter(u => isUserOnCampus(u));
         } else if (presence === 'OUTSIDE') {
             filtered = filtered.filter(u => !isUserOnCampus(u));
         }
 
-        el('usersTable').innerHTML = filtered.length ? filtered.map(u => {
+        const pageSize = adminState.userPageSize || 50;
+        const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+        if (adminState.userCurrentPage > totalPages) adminState.userCurrentPage = totalPages;
+        const currentPage = Math.max(1, adminState.userCurrentPage || 1);
+        const startIdx = (currentPage - 1) * pageSize;
+        const pagedUsers = filtered.slice(startIdx, startIdx + pageSize);
+
+        const pagBar = el('usersPaginationBar');
+        if (pagBar) {
+            if (filtered.length > pageSize) {
+                pagBar.classList.remove('hidden');
+                const endNum = Math.min(filtered.length, startIdx + pagedUsers.length);
+                pagBar.innerHTML = `
+                    <span>Showing <strong class="text-slate-800">${startIdx + 1}–${endNum}</strong> of <strong class="text-slate-800">${filtered.length}</strong> stakeholders</span>
+                    <div class="flex items-center gap-2">
+                        <button type="button" onclick="setUsersPage(${currentPage - 1})" ${currentPage <= 1 ? 'disabled' : ''} class="px-3 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-bold">Prev</button>
+                        <span class="font-mono text-slate-700">Page ${currentPage} / ${totalPages}</span>
+                        <button type="button" onclick="setUsersPage(${currentPage + 1})" ${currentPage >= totalPages ? 'disabled' : ''} class="px-3 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed font-bold">Next</button>
+                    </div>
+                `;
+            } else {
+                pagBar.classList.add('hidden');
+                pagBar.innerHTML = '';
+            }
+        }
+
+        el('usersTable').innerHTML = pagedUsers.length ? pagedUsers.map(u => {
             const isAuth = u.authorization_status === 'AUTHORIZED' || u.approval_status === 'APPROVED';
             const isPending = !isAuth && (u.authorization_status === 'PENDING' || u.approval_status === 'PENDING' || !u.authorization_status);
             const statusClass = isAuth ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : (isPending ? 'bg-yellow-100 text-yellow-800 border-yellow-300' : 'bg-red-100 text-red-800 border-red-300');
             const statusLabel = isAuth ? 'AUTHORIZED' : (isPending ? 'PENDING' : 'DENIED / SUSPENDED');
             const onCampus = isUserOnCampus(u);
-            const avatar = u.profile_image || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.full_name)}&background=random`;
+            const avatar = adminEsc(u.profile_image || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.full_name || 'User')}&background=random`);
             const roleBadgeClass = u.role === 'Student' ? 'bg-blue-100 text-blue-800' : (u.role === 'Faculty' ? 'bg-purple-100 text-purple-800' : (u.role === 'Others' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'));
-            const roleDisplay = u.role === 'Others' ? `Others: ${u.role_detail || 'Vendor'}` : (u.role || 'User');
-            const cpassDisplay = u.cpass_id || u.student_id || 'NO CPASS';
+            const roleDisplay = adminEsc(u.role === 'Others' ? `Others: ${u.role_detail || 'Vendor'}` : (u.role || 'User'));
+            const cpassDisplay = adminEsc(u.cpass_id || u.student_id || 'NO CPASS');
 
             // Transit passes summary: only count physical cards that are actually assigned
             const hasAssignedPed = (u.rfid_cards || []).some(c => 
@@ -664,13 +889,13 @@ function renderAdmin() {
                 <!-- 1. Person / Driver -->
                 <td class="p-3.5">
                     <div class="flex items-center gap-3">
-                        <img src="${avatar}" class="w-9 h-9 rounded-xl object-cover border border-slate-200 shadow-sm cursor-pointer hover:opacity-80 shrink-0" onclick="openReviewModal('${u.id}', '${vehCount ? 'VEHICLE' : 'PEDESTRIAN'}', '${u.vehicles?.[0]?.id || ''}')" title="Click to view dossier" onerror="this.src='https://ui-avatars.com/api/?name=User'">
+                        <img src="${avatar}" class="w-9 h-9 rounded-xl object-cover border border-slate-200 shadow-sm cursor-pointer hover:opacity-80 shrink-0" onclick="openReviewModal('${adminEsc(u.id)}', '${vehCount ? 'VEHICLE' : 'PEDESTRIAN'}', '${adminEsc(u.vehicles?.[0]?.id || '')}')" title="Click to view dossier" onerror="this.src='https://ui-avatars.com/api/?name=User'">
                         <div class="min-w-0">
-                            <div class="font-extrabold text-slate-800 hover:text-charm-dark cursor-pointer flex items-center gap-1.5 flex-wrap" onclick="openReviewModal('${u.id}', '${vehCount ? 'VEHICLE' : 'PEDESTRIAN'}', '${u.vehicles?.[0]?.id || ''}')">
-                                <span class="truncate">${u.full_name || '--'}</span>
+                            <div class="font-extrabold text-slate-800 hover:text-charm-dark cursor-pointer flex items-center gap-1.5 flex-wrap" onclick="openReviewModal('${adminEsc(u.id)}', '${vehCount ? 'VEHICLE' : 'PEDESTRIAN'}', '${adminEsc(u.vehicles?.[0]?.id || '')}')">
+                                <span class="truncate">${adminEsc(u.full_name || '--')}</span>
                                 <span class="font-mono text-[10px] font-black px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 border border-amber-300 shrink-0" title="CPASS ID">${cpassDisplay}</span>
                             </div>
-                            <div class="text-[11px] text-slate-400 font-medium truncate">${u.program || 'No Program'} ${u.section ? '• ' + u.section : ''}</div>
+                            <div class="text-[11px] text-slate-400 font-medium truncate">${adminEsc(u.program || 'No Program')} ${u.section ? '• ' + adminEsc(u.section) : ''}</div>
                         </div>
                     </div>
                 </td>
@@ -694,8 +919,8 @@ function renderAdmin() {
                         }
                         return vehs.map(v => `
                             <div class="mb-1 last:mb-0">
-                                <div class="font-mono text-xs font-black text-slate-900 bg-slate-100 hover:bg-slate-200 px-1.5 py-0.5 rounded border border-slate-200 inline-block cursor-pointer" onclick="openReviewModal('${u.id}', 'VEHICLE', '${v.id}')" title="Review vehicle">${v.plate_number || 'NO PLATE'}</div>
-                                <div class="text-[11px] text-slate-500 font-medium truncate max-w-[160px]">${v.vehicle_model || v.vehicle_type || 'Vehicle'}</div>
+                                <div class="font-mono text-xs font-black text-slate-900 bg-slate-100 hover:bg-slate-200 px-1.5 py-0.5 rounded border border-slate-200 inline-block cursor-pointer" onclick="openReviewModal('${adminEsc(u.id)}', 'VEHICLE', '${adminEsc(v.id)}')" title="Review vehicle">${adminEsc(v.plate_number || 'NO PLATE')}</div>
+                                <div class="text-[11px] text-slate-500 font-medium truncate max-w-[160px]">${adminEsc(v.vehicle_model || v.vehicle_type || 'Vehicle')}</div>
                             </div>
                         `).join('');
                     })()}
@@ -709,7 +934,7 @@ function renderAdmin() {
                             if (!cards.length) {
                                 return `
                                     <div class="flex flex-wrap gap-1">
-                                        <span class="px-2 py-0.5 rounded-lg bg-yellow-50 text-yellow-700 border border-yellow-200 text-[10px] font-bold inline-flex items-center gap-1 cursor-pointer hover:bg-yellow-100" title="Click to assign RFID UID" onclick="openReviewModal('${u.id}', 'PEDESTRIAN')">
+                                        <span class="px-2 py-0.5 rounded-lg bg-yellow-50 text-yellow-700 border border-yellow-200 text-[10px] font-bold inline-flex items-center gap-1 cursor-pointer hover:bg-yellow-100" title="Click to assign RFID UID" onclick="openReviewModal('${adminEsc(u.id)}', 'PEDESTRIAN')">
                                             <i data-lucide="alert-circle" class="w-3 h-3"></i> Unassigned
                                         </span>
                                     </div>
@@ -722,17 +947,17 @@ function renderAdmin() {
                                 const uidVal = (c.rfid_uid && !c.rfid_uid.startsWith('UNASSIGNED_')) ? c.rfid_uid : null;
                                 if (!uidVal) {
                                     return `
-                                        <div class="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-yellow-50 text-yellow-700 border border-yellow-200 cursor-pointer hover:bg-yellow-100 inline-flex items-center gap-1" title="Click to assign ${tagLabel} UID" onclick="openReviewModal('${u.id}', '${isLongRange ? 'VEHICLE' : 'PEDESTRIAN'}', '${c.vehicle_id || ''}')">
+                                        <div class="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-yellow-50 text-yellow-700 border border-yellow-200 cursor-pointer hover:bg-yellow-100 inline-flex items-center gap-1" title="Click to assign ${adminEsc(tagLabel)} UID" onclick="openReviewModal('${adminEsc(u.id)}', '${isLongRange ? 'VEHICLE' : 'PEDESTRIAN'}', '${adminEsc(c.vehicle_id || '')}')">
                                             <i data-lucide="${isLongRange ? 'radio' : 'credit-card'}" class="w-3 h-3 text-yellow-600"></i>
                                             <span>${isLongRange ? 'UHF' : 'Close'}: Unassigned</span>
                                         </div>
                                     `;
                                 }
                                 return `
-                                    <div class="inline-flex items-center gap-1.5 ${isLongRange ? 'bg-purple-50 hover:bg-purple-100 border-purple-200 text-purple-900' : 'bg-blue-50 hover:bg-blue-100 border-blue-200 text-blue-900'} border px-2 py-0.5 rounded-lg text-xs font-mono font-bold cursor-pointer transition-colors shadow-2xs" onclick="copyToClipboard('${uidVal}', '${tagLabel} UID')" title="Click to copy UID: ${uidVal} (${tagLabel})">
+                                    <div class="inline-flex items-center gap-1.5 ${isLongRange ? 'bg-purple-50 hover:bg-purple-100 border-purple-200 text-purple-900' : 'bg-blue-50 hover:bg-blue-100 border-blue-200 text-blue-900'} border px-2 py-0.5 rounded-lg text-xs font-mono font-bold cursor-pointer transition-colors shadow-2xs" onclick="copyToClipboard(decodeURIComponent('${adminUriAttr(uidVal)}'), decodeURIComponent('${adminUriAttr(tagLabel + ' UID')}'))" title="Click to copy UID: ${adminEsc(uidVal)} (${adminEsc(tagLabel)})">
                                         <i data-lucide="${isLongRange ? 'radio' : 'credit-card'}" class="w-3 h-3 ${isLongRange ? 'text-purple-600' : 'text-blue-600'}"></i>
                                         <span class="text-[9px] font-black uppercase tracking-wider ${isLongRange ? 'text-purple-700' : 'text-blue-700'}">${isLongRange ? 'UHF' : 'CARD'}:</span>
-                                        <span>${uidVal}</span>
+                                        <span>${adminEsc(uidVal)}</span>
                                     </div>
                                 `;
                             }).join('');
@@ -757,16 +982,16 @@ function renderAdmin() {
                 <!-- 6. Actions -->
                 <td class="p-3.5 text-right whitespace-nowrap">
                     <div class="flex items-center justify-end gap-1">
-                        <button onclick="openReviewModal('${u.id}', '${vehCount ? 'VEHICLE' : 'PEDESTRIAN'}', '${u.vehicles?.[0]?.id || ''}')" class="p-1.5 text-slate-500 hover:text-charm-dark bg-white border border-slate-200 rounded-lg hover:bg-slate-50 shadow-xs transition-all" title="View Dossier & Documents">
+                        <button onclick="openReviewModal('${adminEsc(u.id)}', '${vehCount ? 'VEHICLE' : 'PEDESTRIAN'}', '${adminEsc(u.vehicles?.[0]?.id || '')}')" class="p-1.5 text-slate-500 hover:text-charm-dark bg-white border border-slate-200 rounded-lg hover:bg-slate-50 shadow-xs transition-all" title="View Dossier & Documents">
                             <i data-lucide="file-search" class="w-4 h-4"></i>
                         </button>
-                        <button onclick="openUserHistoryModal('${u.id}')" class="p-1.5 text-slate-500 hover:text-blue-600 bg-white border border-slate-200 rounded-lg hover:bg-blue-50 shadow-xs transition-all" title="Access History & Logs">
+                        <button onclick="openUserHistoryModal('${adminEsc(u.id)}')" class="p-1.5 text-slate-500 hover:text-blue-600 bg-white border border-slate-200 rounded-lg hover:bg-blue-50 shadow-xs transition-all" title="Access History & Logs">
                             <i data-lucide="history" class="w-4 h-4"></i>
                         </button>
-                        <button onclick="openUserModal('${u.id}')" class="p-1.5 text-slate-500 hover:text-charm-dark bg-white border border-slate-200 rounded-lg hover:bg-slate-50 shadow-xs transition-all" title="Edit Profile & Assign UID">
+                        <button onclick="openUserModal('${adminEsc(u.id)}')" class="p-1.5 text-slate-500 hover:text-charm-dark bg-white border border-slate-200 rounded-lg hover:bg-slate-50 shadow-xs transition-all" title="Edit Profile & Assign UID">
                             <i data-lucide="edit-3" class="w-4 h-4"></i>
                         </button>
-                        <button onclick="deleteUser('${u.id}')" class="p-1.5 text-slate-400 hover:text-red-500 bg-white border border-slate-200 rounded-lg hover:bg-red-50 shadow-xs transition-all" title="Delete User">
+                        <button onclick="deleteUser('${adminEsc(u.id)}')" class="p-1.5 text-slate-400 hover:text-red-500 bg-white border border-slate-200 rounded-lg hover:bg-red-50 shadow-xs transition-all" title="Delete User">
                             <i data-lucide="trash-2" class="w-4 h-4"></i>
                         </button>
                     </div>
@@ -786,24 +1011,24 @@ function renderAdmin() {
             </tr>`;
     }
 
-    // Accounts (Guard Management)
+    // Accounts (Guard Management — passwords masked, usernames escaped)
     if(el('accountsGrid')) {
         const guardAccounts = (adminState.accounts || []).filter(acc => acc.role === 'GUARD');
         if (guardAccounts.length > 0) {
             el('accountsGrid').innerHTML = guardAccounts.map(acc => `
                 <div class="glass-card p-6 rounded-3xl border border-white/60 shadow-glass flex flex-col items-center text-center animate-slide-up relative group">
-                    <button onclick="deleteAccount('${acc.id}')" class="absolute top-4 right-4 p-2 rounded-xl text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors" title="Delete Guard Account">
+                    <button onclick="deleteAccount('${adminEsc(acc.id)}')" class="absolute top-4 right-4 p-2 rounded-xl text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors" title="Delete Guard Account">
                         <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
                     </button>
                     <div class="w-16 h-16 rounded-2xl bg-charm-dark text-charm-yellow flex items-center justify-center mb-4 shadow-lg">
                         <svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8 text-charm-yellow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
                     </div>
-                    <h3 class="font-display font-bold text-xl text-slate-800">${acc.username}</h3>
+                    <h3 class="font-display font-bold text-xl text-slate-800">${adminEsc(acc.username)}</h3>
                     <span class="px-3 py-0.5 rounded-full text-[10px] font-extrabold bg-green-100 text-green-800 uppercase tracking-widest mt-1">SECURITY GUARD</span>
                     
                     <div class="w-full mt-5 pt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
                         <span class="font-semibold uppercase tracking-wider text-[10px] text-slate-400">Password:</span>
-                        <span class="font-mono font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded">${acc.password || '••••••••'}</span>
+                        <span class="font-mono font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded">••••••••</span>
                     </div>
 
                     <div class="mt-5 flex gap-2 w-full">
@@ -846,8 +1071,7 @@ function renderAdmin() {
         const recentLogs = filteredLogs.slice(0, 100);
         if (recentLogs.length) {
             el('adminLogsTable').innerHTML = recentLogs.map(l => {
-                const dateObj  = l.timestamp ? new Date(l.timestamp) : null;
-                const ts       = dateObj ? dateObj.toLocaleTimeString('en-US', {hour12:false, hour:'2-digit', minute:'2-digit'}) : '--';
+                const ts       = l.timestamp ? formatManilaTime(l.timestamp, { hour12: false, hour: '2-digit', minute: '2-digit' }) : '--';
                 let name     = l.users?.full_name;
                 let plate    = l.vehicles?.plate_number;
 
@@ -907,27 +1131,27 @@ function renderAdmin() {
                                 </span>
                             `}
                         </td>
-                        <td class="p-4 font-mono text-xs font-bold text-slate-500">${l.rfid_uid || '--'}</td>
-                        <td class="p-4 font-bold text-slate-800">${name}</td>
+                        <td class="p-4 font-mono text-xs font-bold text-slate-500">${adminEsc(l.rfid_uid || '--')}</td>
+                        <td class="p-4 font-bold text-slate-800">${adminEsc(name)}</td>
                         <td class="p-4">
                             ${isPed ? `
                                 <span class="text-xs font-semibold text-slate-400 italic">Walking User</span>
                             ` : `
-                                <span class="font-mono text-xs font-bold text-charm-dark bg-charm-yellow/10 px-2 py-0.5 rounded inline-block">${plate}</span>
+                                <span class="font-mono text-xs font-bold text-charm-dark bg-charm-yellow/10 px-2 py-0.5 rounded inline-block">${adminEsc(plate)}</span>
                             `}
                         </td>
                         <td class="p-4 text-center">
                             ${isAutoResolved ? `
-                                <span class="px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase bg-purple-100 text-purple-800 border border-purple-200 shadow-sm" title="${l.remarks || 'Auto-resolved unclosed prior session upon re-entry'}">AUTO EXIT</span>
+                                <span class="px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase bg-purple-100 text-purple-800 border border-purple-200 shadow-sm" title="${adminEsc(l.remarks || 'Auto-resolved unclosed prior session upon re-entry')}">AUTO EXIT</span>
                             ` : `
-                                <span class="px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase ${isEntry ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'}">${dir}</span>
+                                <span class="px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase ${isEntry ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'}">${adminEsc(dir)}</span>
                             `}
                         </td>
                         <td class="p-4 text-center">
-                            <span class="px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase ${statusBg}">${l.status || '--'}</span>
+                            <span class="px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase ${statusBg}">${adminEsc(l.status || '--')}</span>
                         </td>
                         <td class="p-4 text-right">
-                            <span class="text-xs font-bold font-mono ${isAutoResolved ? 'text-purple-600' : (gateName.includes('ENTRY') || gateName.includes('IN') ? 'text-emerald-600' : 'text-blue-600')}">${gateName}</span>
+                            <span class="text-xs font-bold font-mono ${isAutoResolved ? 'text-purple-600' : (gateName.includes('ENTRY') || gateName.includes('IN') ? 'text-emerald-600' : 'text-blue-600')}">${adminEsc(gateName)}</span>
                         </td>
                     </tr>
                 `;
@@ -946,7 +1170,7 @@ function renderAdmin() {
         if (el('studentRankingTable')) {
             el('studentRankingTable').innerHTML = sRanked.length ? sRanked.map(([name, count], i) => {
                 const u = adminState.users.find(x => x.full_name === name);
-                return `<tr class="border-b border-slate-50"><td class="p-3 text-center font-bold text-charm-dark">${i+1}</td><td class="p-3 font-semibold">${name}</td><td class="p-3 text-center text-slate-500">${u?.program||'--'}</td><td class="p-3 text-center"><span class="px-2 py-0.5 rounded-full bg-slate-100 font-bold text-slate-700">${count}</span></td></tr>`;
+                return `<tr class="border-b border-slate-50"><td class="p-3 text-center font-bold text-charm-dark">${i+1}</td><td class="p-3 font-semibold">${adminEsc(name)}</td><td class="p-3 text-center text-slate-500">${adminEsc(u?.program||'--')}</td><td class="p-3 text-center"><span class="px-2 py-0.5 rounded-full bg-slate-100 font-bold text-slate-700">${count}</span></td></tr>`;
             }).join('') : '<tr><td colspan="4" class="p-8 text-center text-slate-300">No activity in this period</td></tr>';
         }
 
@@ -957,7 +1181,7 @@ function renderAdmin() {
         if (el('facultyRankingTable')) {
             el('facultyRankingTable').innerHTML = fRanked.length ? fRanked.map(([name, count], i) => {
                 const u = adminState.users.find(x => x.full_name === name);
-                return `<tr class="border-b border-slate-50"><td class="p-3 text-center font-bold text-charm-mid">${i+1}</td><td class="p-3 font-semibold">${name}</td><td class="p-3 text-center text-slate-500">${u?.role||'--'}</td><td class="p-3 text-center"><span class="px-2 py-0.5 rounded-full bg-slate-100 font-bold text-slate-700">${count}</span></td></tr>`;
+                return `<tr class="border-b border-slate-50"><td class="p-3 text-center font-bold text-charm-mid">${i+1}</td><td class="p-3 font-semibold">${adminEsc(name)}</td><td class="p-3 text-center text-slate-500">${adminEsc(u?.role||'--')}</td><td class="p-3 text-center"><span class="px-2 py-0.5 rounded-full bg-slate-100 font-bold text-slate-700">${count}</span></td></tr>`;
             }).join('') : '<tr><td colspan="4" class="p-8 text-center text-slate-300">No activity in this period</td></tr>';
         }
     }
@@ -1367,12 +1591,18 @@ window.approveUser = async function(targetId, targetType = null, vehicleId = nul
     const u = adminState.users.find(x => x.id === userId) || (adminState.pendingItems||[]).find(x => x.userId === userId)?.user;
     if (!u) return;
 
+    const isVeh = (rfidType === 'LONG_RANGE');
+    const userType = isVeh ? 'VEHICLE' : 'PEDESTRIAN';
+    const vId = vehicleId || currentReviewVehicleId || (u.vehicles?.[0]?.id || null);
+
     let assignedUid = '';
     const revInput = el('revRfidUid');
     if (revInput && revInput.value) {
         assignedUid = revInput.value.trim().toUpperCase();
     } else {
-        const c = (u.rfid_cards||[]).find(x => x.rfid_type === rfidType);
+        const c = isVeh && vId
+            ? (u.rfid_cards || []).find(x => x.vehicle_id === vId)
+            : (u.rfid_cards || []).find(x => !x.vehicle_id && x.rfid_type === 'CLOSE_RANGE');
         if (c?.rfid_uid && !c.rfid_uid.startsWith('UNASSIGNED_')) assignedUid = c.rfid_uid;
     }
 
@@ -1387,20 +1617,39 @@ window.approveUser = async function(targetId, targetType = null, vehicleId = nul
         return;
     }
 
-    const isVeh = (rfidType === 'LONG_RANGE');
-    const userType = isVeh ? 'VEHICLE' : 'PEDESTRIAN';
-    const vId = vehicleId || currentReviewVehicleId || (u.vehicles?.[0]?.id || null);
-
     try {
         showToast(`Approving & issuing ${rfidType === 'CLOSE_RANGE' ? 'Close-Range Card' : 'Long-Range UHF Sticker'} ${assignedUid}...`, 'info');
 
-        // Look for existing card of this specific rfid_type
-        const { data: existingCard } = await supabaseClient
-            .from('rfid_cards')
-            .select('id')
-            .eq('user_id', userId)
-            .eq('rfid_type', rfidType)
-            .maybeSingle();
+        // Multi-vehicle safe lookup: scope LONG_RANGE cards to specific vehicle_id (or unassigned placeholder)
+        let existingCard = null;
+        if (isVeh && vId) {
+            const { data: vehCard } = await supabaseClient
+                .from('rfid_cards')
+                .select('id')
+                .eq('user_id', userId)
+                .eq('vehicle_id', vId)
+                .maybeSingle();
+            existingCard = vehCard || null;
+            if (!existingCard) {
+                const { data: unassignedVehCard } = await supabaseClient
+                    .from('rfid_cards')
+                    .select('id')
+                    .eq('user_id', userId)
+                    .eq('rfid_type', 'LONG_RANGE')
+                    .is('vehicle_id', null)
+                    .maybeSingle();
+                existingCard = unassignedVehCard || null;
+            }
+        } else {
+            const { data: pedCard } = await supabaseClient
+                .from('rfid_cards')
+                .select('id')
+                .eq('user_id', userId)
+                .eq('rfid_type', 'CLOSE_RANGE')
+                .is('vehicle_id', null)
+                .maybeSingle();
+            existingCard = pedCard || null;
+        }
 
         if (existingCard) {
             const { error: cardErr } = await supabaseClient
@@ -1450,18 +1699,20 @@ window.denyRegistration = async function(targetId, targetType = 'PEDESTRIAN', ve
     const userId = targetId || currentReviewUserId;
     const type = targetType || currentReviewTargetType || 'PEDESTRIAN';
     const vId = vehicleId || currentReviewVehicleId;
-    const isVeh = (type === 'VEHICLE' && vId);
+    const isVeh = Boolean(type === 'VEHICLE' && vId);
+    const userObj = adminState.users.find(u => u.id === userId);
+
+    // Check if stakeholder already has an approved profile or another active card/vehicle
+    const hasOtherActiveAccess = Boolean(userObj && isVeh && (
+        userObj.approval_status === 'APPROVED' ||
+        (userObj.rfid_cards || []).some(c => c.vehicle_id !== vId && c.authorization_status === 'AUTHORIZED') ||
+        (userObj.vehicles || []).some(v => v.id !== vId && v.approval_status === 'APPROVED')
+    ));
 
     try {
-        showToast('Revoking access / denying application...', 'info');
+        showToast(isVeh && hasOtherActiveAccess ? 'Denying vehicle application...' : 'Revoking access / denying application...', 'info');
 
         if (isConnected && supabaseClient) {
-            // Update user profile status directly to REJECTED so profile is DENIED / SUSPENDED
-            await supabaseClient
-                .from('users')
-                .update({ approval_status: 'REJECTED' })
-                .eq('id', userId);
-
             if (isVeh) {
                 await supabaseClient
                     .from('rfid_cards')
@@ -1472,7 +1723,19 @@ window.denyRegistration = async function(targetId, targetType = 'PEDESTRIAN', ve
                     .from('vehicles')
                     .update({ approval_status: 'REJECTED' })
                     .eq('id', vId);
+
+                if (!hasOtherActiveAccess) {
+                    await supabaseClient
+                        .from('users')
+                        .update({ approval_status: 'REJECTED' })
+                        .eq('id', userId);
+                }
             } else {
+                await supabaseClient
+                    .from('users')
+                    .update({ approval_status: 'REJECTED' })
+                    .eq('id', userId);
+
                 await supabaseClient
                     .from('rfid_cards')
                     .update({ authorization_status: 'DENIED', updated_at: new Date().toISOString() })
@@ -1481,10 +1744,11 @@ window.denyRegistration = async function(targetId, targetType = 'PEDESTRIAN', ve
         }
 
         // Update local memory state immediately for instant UI responsiveness
-        const userObj = adminState.users.find(u => u.id === userId);
         if (userObj) {
-            userObj.approval_status = 'REJECTED';
-            userObj.authorization_status = 'DENIED';
+            if (!isVeh || !hasOtherActiveAccess) {
+                userObj.approval_status = 'REJECTED';
+                userObj.authorization_status = 'DENIED';
+            }
             (userObj.rfid_cards || []).forEach(c => {
                 if (!isVeh || c.vehicle_id === vId) c.authorization_status = 'DENIED';
             });
@@ -1493,7 +1757,7 @@ window.denyRegistration = async function(targetId, targetType = 'PEDESTRIAN', ve
             });
         }
 
-        showToast('Application denied. User status set to DENIED / SUSPENDED.', 'success');
+        showToast(isVeh && hasOtherActiveAccess ? 'Vehicle pass denied without suspending stakeholder profile.' : 'Application denied. User status set to DENIED / SUSPENDED.', 'success');
         closeReviewModal();
         await loadData();
         renderAdmin();
@@ -1570,26 +1834,55 @@ window.setAdminLogsPreset = function(preset) {
     renderAdmin();
 };
 
+async function fetchTransactionsForRange(fromKey, toKey) {
+    if (!isConnected || !supabaseClient || !fromKey || !toKey) return null;
+    const startBound = typeof getManilaDayBoundsIso === 'function' ? getManilaDayBoundsIso(fromKey).start : `${fromKey}T00:00:00.000+08:00`;
+    const endBound = typeof getManilaDayBoundsIso === 'function' ? getManilaDayBoundsIso(toKey).end : `${toKey}T23:59:59.999+08:00`;
+    try {
+        const { data, error } = await supabaseClient
+            .from('transactions')
+            .select(`
+                id, rfid_uid, direction, gate, status, remarks, timestamp, user_type, rfid_type, user_id, vehicle_id,
+                users ( full_name, role, role_detail, program, section, default_transit_mode, cpass_id, student_id ),
+                vehicles ( plate_number, vehicle_type, vehicle_model, vehicle_color )
+            `)
+            .gte('timestamp', startBound)
+            .lte('timestamp', endBound)
+            .order('timestamp', { ascending: false })
+            .limit(5000);
+        if (!error && Array.isArray(data)) {
+            const byId = new Map();
+            [...data, ...(adminState.logs || [])].forEach(row => {
+                if (row && row.id && !byId.has(row.id)) byId.set(row.id, row);
+            });
+            adminState.logs = Array.from(byId.values()).sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+            return data;
+        }
+    } catch (err) {
+        console.warn('Range transaction fetch fallback to cached logs:', err);
+    }
+    return null;
+}
+
 window.toggleAdminLogsCustomRange = function() {
     const panel = el('adminLogsCustomPanel');
     if (!panel) return;
     const isHidden = panel.classList.contains('hidden');
     if (isHidden) {
         panel.classList.remove('hidden');
-        const now = new Date();
-        const past = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        const bounds7 = typeof getManilaPresetBounds === 'function' ? getManilaPresetBounds('7days') : { fromKey: adminManilaDateKey(new Date(Date.now() - 7 * 86400000)), toKey: adminManilaDateKey() };
         if (el('adminLogsFromDate') && !el('adminLogsFromDate').value) {
-            el('adminLogsFromDate').value = past.toISOString().split('T')[0];
+            el('adminLogsFromDate').value = bounds7.fromKey;
         }
         if (el('adminLogsToDate') && !el('adminLogsToDate').value) {
-            el('adminLogsToDate').value = now.toISOString().split('T')[0];
+            el('adminLogsToDate').value = bounds7.toKey;
         }
     } else {
         panel.classList.add('hidden');
     }
 };
 
-window.applyAdminLogsCustomRange = function() {
+window.applyAdminLogsCustomRange = async function() {
     const fromVal = el('adminLogsFromDate')?.value;
     const toVal = el('adminLogsToDate')?.value;
     if (!fromVal || !toVal) {
@@ -1609,6 +1902,7 @@ window.applyAdminLogsCustomRange = function() {
     if (el('adminLogsActiveRangeLabel')) {
         el('adminLogsActiveRangeLabel').textContent = `Showing: ${fromVal} to ${toVal}`;
     }
+    await fetchTransactionsForRange(fromVal, toVal);
     renderAdmin();
 };
 
@@ -1681,20 +1975,19 @@ window.toggleCustomRangePicker = function() {
     const isHidden = panel.classList.contains('hidden');
     if (isHidden) {
         panel.classList.remove('hidden');
-        const now = new Date();
-        const past = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        const bounds7 = typeof getManilaPresetBounds === 'function' ? getManilaPresetBounds('7days') : { fromKey: adminManilaDateKey(new Date(Date.now() - 7 * 86400000)), toKey: adminManilaDateKey() };
         if (el('analyticsFromDate') && !el('analyticsFromDate').value) {
-            el('analyticsFromDate').value = past.toISOString().split('T')[0];
+            el('analyticsFromDate').value = bounds7.fromKey;
         }
         if (el('analyticsToDate') && !el('analyticsToDate').value) {
-            el('analyticsToDate').value = now.toISOString().split('T')[0];
+            el('analyticsToDate').value = bounds7.toKey;
         }
     } else {
         panel.classList.add('hidden');
     }
 };
 
-window.applyCustomDateRange = function() {
+window.applyCustomDateRange = async function() {
     const fromVal = el('analyticsFromDate')?.value;
     const toVal = el('analyticsToDate')?.value;
     if (!fromVal || !toVal) {
@@ -1714,6 +2007,7 @@ window.applyCustomDateRange = function() {
     if (el('activeRangeLabel')) {
         el('activeRangeLabel').textContent = `Showing: ${fromVal} to ${toVal}`;
     }
+    await fetchTransactionsForRange(fromVal, toVal);
     renderAnalytics();
 };
 
@@ -1758,76 +2052,39 @@ window.refreshAnalyticsData = async function() {
 };
 
 function getFilteredAnalyticsLogs(preset = analyticsPreset, customFrom = customAnalyticsFrom, customTo = customAnalyticsTo) {
-    const now = new Date();
     const logs = adminState.logs || [];
-    
-    if (preset === 'today') {
-        const startOfDay = new Date();
-        startOfDay.setHours(0, 0, 0, 0);
-        const endOfDay = new Date();
-        endOfDay.setHours(23, 59, 59, 999);
-        return logs.filter(l => {
-            if (!l.timestamp) return false;
-            const t = new Date(l.timestamp);
-            return t >= startOfDay && t <= endOfDay;
-        });
-    }
-    if (preset === 'yesterday') {
-        const startOfYesterday = new Date();
-        startOfYesterday.setDate(startOfYesterday.getDate() - 1);
-        startOfYesterday.setHours(0, 0, 0, 0);
-        const endOfYesterday = new Date();
-        endOfYesterday.setDate(endOfYesterday.getDate() - 1);
-        endOfYesterday.setHours(23, 59, 59, 999);
-        return logs.filter(l => {
-            if (!l.timestamp) return false;
-            const t = new Date(l.timestamp);
-            return t >= startOfYesterday && t <= endOfYesterday;
-        });
-    }
-    if (preset === '7days') {
-        const past7 = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        return logs.filter(l => l.timestamp && new Date(l.timestamp) >= past7);
-    }
-    if (preset === '30days') {
-        const past30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-        return logs.filter(l => l.timestamp && new Date(l.timestamp) >= past30);
-    }
-    if (preset === 'thisMonth') {
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
-        return logs.filter(l => {
-            if (!l.timestamp) return false;
-            const t = new Date(l.timestamp);
-            return t >= startOfMonth && t <= now;
-        });
-    }
-    if (preset === 'lastMonth') {
-        const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0);
-        const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
-        return logs.filter(l => {
-            if (!l.timestamp) return false;
-            const t = new Date(l.timestamp);
-            return t >= startOfLastMonth && t <= endOfLastMonth;
-        });
-    }
+    if (preset === 'all') return logs;
+
     if (preset === 'custom' && customFrom && customTo) {
-        const fromDate = new Date(customFrom + 'T00:00:00');
-        const toDate = new Date(customTo + 'T23:59:59');
+        const startMs = typeof getManilaDayBoundsIso === 'function' ? getManilaDayBoundsIso(customFrom).startMs : Date.parse(`${customFrom}T00:00:00.000+08:00`);
+        const endMs = typeof getManilaDayBoundsIso === 'function' ? getManilaDayBoundsIso(customTo).endMs : Date.parse(`${customTo}T23:59:59.999+08:00`);
         return logs.filter(l => {
             if (!l.timestamp) return false;
-            const t = new Date(l.timestamp);
-            return t >= fromDate && t <= toDate;
+            const t = Date.parse(l.timestamp);
+            return t >= startMs && t <= endMs;
         });
     }
-    return logs;
+
+    if (typeof getManilaPresetBounds === 'function') {
+        const { startMs, endMs } = getManilaPresetBounds(preset);
+        return logs.filter(l => {
+            if (!l.timestamp) return false;
+            const t = Date.parse(l.timestamp);
+            return t >= startMs && t <= endMs;
+        });
+    }
+
+    const targetKey = adminManilaDateKey();
+    return logs.filter(l => l.timestamp && adminManilaDateKey(l.timestamp) === targetKey);
 }
+window.getFilteredAnalyticsLogs = getFilteredAnalyticsLogs;
 
 function renderAnalytics() {
     const filteredLogs = getFilteredAnalyticsLogs();
     
-    // 1. Primary Top 4 Statistics
+    // 1. Primary Top 4 Statistics (exclude synthetic [AUTO_RESOLVED_EXIT] from physical gate exit KPIs)
     const entries = filteredLogs.filter(l => l.direction === 'ENTRY' && l.status === 'AUTHORIZED');
-    const exits = filteredLogs.filter(l => l.direction === 'EXIT' && l.status === 'AUTHORIZED');
+    const exits = filteredLogs.filter(l => l.direction === 'EXIT' && l.status === 'AUTHORIZED' && !isSyntheticAutoExit(l));
     const uniqueEntrants = new Set();
     filteredLogs.forEach(l => {
         const entrantKey = l.user_id || 
@@ -1894,7 +2151,7 @@ function renderAnalytics() {
     // 3. Gate Activity & Denial Reasons
     const entrySuccess = filteredLogs.filter(l => l.direction === 'ENTRY' && l.status === 'AUTHORIZED').length;
     const entryFail = filteredLogs.filter(l => l.direction === 'ENTRY' && l.status === 'DENIED').length;
-    const exitSuccess = filteredLogs.filter(l => l.direction === 'EXIT' && l.status === 'AUTHORIZED').length;
+    const exitSuccess = filteredLogs.filter(l => l.direction === 'EXIT' && l.status === 'AUTHORIZED' && !isSyntheticAutoExit(l)).length;
     const exitFail = filteredLogs.filter(l => l.direction === 'EXIT' && l.status === 'DENIED').length;
 
     if (el('gateEntrySuccess')) el('gateEntrySuccess').textContent = (entrySuccess + entryFail).toLocaleString() + ' Scans';
@@ -1905,20 +2162,38 @@ function renderAnalytics() {
     if (el('gateExitPassCount')) el('gateExitPassCount').textContent = exitSuccess.toLocaleString();
     if (el('gateExitFailCount')) el('gateExitFailCount').textContent = exitFail.toLocaleString();
 
-    // Denial Reasons Breakdown
+    // Real Denial Reasons Breakdown computed strictly from actual DENIED remarks
+    let deniedUnreg = 0;
+    let deniedSuspended = 0;
+    let deniedDirection = 0;
+    let deniedOverride = 0;
+
+    filteredLogs.forEach(l => {
+        if (l.status !== 'DENIED') return;
+        const rem = String(l.remarks || '').toLowerCase();
+        if (rem.includes('direction') || rem.includes('already inside') || rem.includes('duplicate')) {
+            deniedDirection++;
+        } else if (rem.includes('override') || rem.includes('guard')) {
+            deniedOverride++;
+        } else if (!l.users && (!rem || rem.includes('unregistered') || rem.includes('unknown') || rem.includes('not found'))) {
+            deniedUnreg++;
+        } else {
+            deniedSuspended++;
+        }
+    });
+
     const reasonCounts = {
-        'Unregistered RFID Tag': unregCards,
-        'Inactive / Suspended RFID': Math.max(0, failedCount - unregCards - 1),
-        'Invalid Access Direction': 1,
-        'System Verification Time-out': 0
+        'Unregistered RFID Tag': deniedUnreg,
+        'Inactive / Suspended RFID': deniedSuspended,
+        'Duplicate / Direction Violation': deniedDirection,
+        'Manual Guard Override': deniedOverride
     };
     if (el('denialReasonsTable')) {
-        const totalDenied = Math.max(1, failedCount);
         el('denialReasonsTable').innerHTML = Object.entries(reasonCounts).map(([reason, count]) => {
-            const pct = Math.round((count / totalDenied) * 100);
+            const pct = failedCount > 0 ? Math.round((count / failedCount) * 100) : 0;
             return `
                 <tr class="border-b border-slate-100/60 hover:bg-white/80">
-                    <td class="p-3 font-semibold text-slate-700">${reason}</td>
+                    <td class="p-3 font-semibold text-slate-700">${adminEsc(reason)}</td>
                     <td class="p-3 text-center font-mono font-bold text-red-600">${count}</td>
                     <td class="p-3 text-right font-mono font-bold text-slate-600">${pct}%</td>
                 </tr>
@@ -1926,69 +2201,9 @@ function renderAnalytics() {
         }).join('');
     }
 
-    // 4. Vehicles & Occupants Inside Breakdown & Longest Stay
+    // 4. Vehicles & Occupants Inside Breakdown & Longest Stay (shared single source of truth)
     let insideStud = 0, insideStf = 0, insideVis = 0, insideEmg = 0;
-    let insideVehicles = 0, insidePedestrians = 0;
-    // Map entries vs exits to find who is currently inside
-    const openEntries = [];
-    const sortedLogsAsc = [...adminState.logs].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-    const normalizeUid = (u) => (u || '').toString().replace(/[\s:-]/g, '').toUpperCase();
-
-    sortedLogsAsc.forEach(l => {
-        if (l.status !== 'AUTHORIZED') return;
-        const uid = normalizeUid(l.rfid_uid);
-        const plate = (l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').toUpperCase().trim();
-        const isRealPlate = plate && plate !== 'N/A' && plate !== '--' && plate !== 'PEDESTRIAN' && plate !== 'NONE';
-
-        // Attach user if missing on log
-        if (!l.users && l.user_id && adminState.users) {
-            l.users = adminState.users.find(x => x.id === l.user_id);
-        }
-        if (!l.users && uid && adminState.users) {
-            l.users = adminState.users.find(x => {
-                const uUid = normalizeUid(x.rfid_uid);
-                if (uUid && uUid === uid) return true;
-                return (x.rfid_cards || []).some(c => normalizeUid(c.rfid_uid) === uid);
-            });
-        }
-        if (!l.vehicles && l.vehicle_id && adminState.users) {
-            for (const u of adminState.users) {
-                const v = (u.vehicles || []).find(veh => veh.id === l.vehicle_id);
-                if (v) { l.vehicles = v; break; }
-            }
-        }
-
-        if (l.direction === 'ENTRY') {
-            const existingIdx = openEntries.findIndex(e => {
-                const eUid = normalizeUid(e.rfid_uid);
-                const ePlate = (e.vehicles?.plate_number || (e.remarks && e.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').toUpperCase().trim();
-                const eIsRealPlate = ePlate && ePlate !== 'N/A' && ePlate !== '--' && ePlate !== 'PEDESTRIAN' && ePlate !== 'NONE';
-
-                return (uid && eUid && uid === eUid) ||
-                       (l.user_id && e.user_id && l.user_id === e.user_id) ||
-                       (isRealPlate && eIsRealPlate && plate === ePlate);
-            });
-            if (existingIdx !== -1) {
-                openEntries[existingIdx] = l;
-            } else {
-                openEntries.push(l);
-            }
-        } else if (l.direction === 'EXIT') {
-            const idx = openEntries.findIndex(e => {
-                const eUid = normalizeUid(e.rfid_uid);
-                const ePlate = (e.vehicles?.plate_number || (e.remarks && e.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || '').toUpperCase().trim();
-                const eIsRealPlate = ePlate && ePlate !== 'N/A' && ePlate !== '--' && ePlate !== 'PEDESTRIAN' && ePlate !== 'NONE';
-
-                return (uid && eUid && uid === eUid) ||
-                       (l.user_id && e.user_id && l.user_id === e.user_id) ||
-                       (isRealPlate && eIsRealPlate && plate === ePlate);
-            });
-            if (idx !== -1) openEntries.splice(idx, 1);
-        }
-    });
-
-    window.currentInsideRoster = openEntries;
+    const openEntries = recomputeAdminOccupancy();
 
     openEntries.forEach(l => {
         const cat = window.getInsideOccupantCategory ? window.getInsideOccupantCategory(l) : 'VISITOR';
@@ -1996,14 +2211,7 @@ function renderAnalytics() {
         else if (cat === 'STAFF') insideStf++;
         else if (cat === 'EMERGENCY') insideEmg++;
         else insideVis++;
-
-        const hasRealVeh = l.vehicles && l.vehicles.plate_number && l.vehicles.plate_number !== 'PEDESTRIAN' && l.vehicles.plate_number !== 'NONE' && l.vehicles.plate_number !== 'N/A' && l.vehicles.vehicle_type !== 'None';
-        if (hasRealVeh) insideVehicles++;
-        else insidePedestrians++;
     });
-
-    adminState.activeVehicles = insideVehicles;
-    adminState.activePedestrians = insidePedestrians;
 
     if (el('insideStudents')) el('insideStudents').textContent = insideStud;
     if (el('insideStaff')) el('insideStaff').textContent = insideStf;
@@ -2031,7 +2239,7 @@ function renderAnalytics() {
         if (el('longestStayDuration')) el('longestStayDuration').textContent = `${diffHours}h ${diffMins}m`;
         if (el('longestStayOwner')) el('longestStayOwner').textContent = ownerName;
         if (el('longestStayPlate')) el('longestStayPlate').textContent = `Plate: ${plate}`;
-        if (el('longestStayTime')) el('longestStayTime').textContent = `Entered: ${enterTime.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}`;
+        if (el('longestStayTime')) el('longestStayTime').textContent = `Entered: ${formatManilaTime(enterTime)}`;
     } else {
         if (el('longestStayDuration')) el('longestStayDuration').textContent = '--';
         if (el('longestStayOwner')) el('longestStayOwner').textContent = 'No occupants currently inside';
@@ -2102,17 +2310,17 @@ function renderAnalytics() {
                 <td class="p-3">
                     <div class="font-mono font-bold text-slate-800 flex items-center gap-1.5">
                         ${v.isVehicle ? '<i data-lucide="car" class="w-3.5 h-3.5 text-blue-600 inline"></i>' : '<i data-lucide="footprints" class="w-3.5 h-3.5 text-emerald-600 inline"></i>'}
-                        ${v.identifier}
+                        ${adminEsc(v.identifier)}
                     </div>
-                    <div class="text-[11px] text-slate-500 font-medium">${v.owner}</div>
+                    <div class="text-[11px] text-slate-500 font-medium">${adminEsc(v.owner)}</div>
                 </td>
                 <td class="p-3">
                     <span class="px-2 py-0.5 rounded text-[10px] font-bold ${v.isVehicle ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'} uppercase">
-                        ${v.type}
+                        ${adminEsc(v.type)}
                     </span>
                 </td>
                 <td class="p-3 text-center font-bold text-emerald-700 font-mono">${v.visits}</td>
-                <td class="p-3 text-right text-[11px] text-slate-400 font-mono">${new Date(v.lastScan).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</td>
+                <td class="p-3 text-right text-[11px] text-slate-400 font-mono">${formatManilaTime(v.lastScan)}</td>
             </tr>
         `).join('') : '<tr><td colspan="5" class="p-6 text-center text-slate-400 text-xs">No frequent entrants recorded in this period.</td></tr>';
         if (window.lucide && typeof window.lucide.createIcons === 'function') {
@@ -2349,11 +2557,11 @@ window.renderInsideCampusTable = function() {
             else if (vLower.includes('truck') || vLower.includes('van') || vLower.includes('bus')) vehIcon = 'truck';
         }
 
-        // Entry timestamp
+        // Entry timestamp (Asia/Manila)
         const enterTime = new Date(l.timestamp);
-        const timeStr = enterTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        const isToday = enterTime.toDateString() === new Date().toDateString();
-        const dateStr = isToday ? 'Today' : enterTime.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        const timeStr = formatManilaTime(enterTime, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const isToday = adminManilaDateKey(enterTime) === adminManilaDateKey();
+        const dateStr = isToday ? 'Today' : formatManilaDate(enterTime, { month: 'short', day: 'numeric' });
 
         // Duration calculation
         const diffMs = Math.max(0, Date.now() - enterTime.getTime());
@@ -2387,13 +2595,13 @@ window.renderInsideCampusTable = function() {
                 <td class="p-3.5 text-center font-bold text-slate-400">#${index + 1}</td>
                 <td class="p-3.5">
                     <div class="flex items-center gap-3">
-                        <img src="${avatarUrl}" class="w-8 h-8 rounded-full border border-slate-200 shrink-0 shadow-sm cursor-pointer hover:scale-105 transition-transform" onclick="${isVisitor ? `openVisitorHistoryModal(decodeURIComponent('${encodeURIComponent(ownerName)}'), '${l.rfid_uid || ''}', decodeURIComponent('${encodeURIComponent(plate || '')}'))` : `openUserHistoryModal('${l.user_id || l.users?.id || ''}')`}" title="Click to view access history">
+                        <img src="${adminEsc(avatarUrl)}" class="w-8 h-8 rounded-full border border-slate-200 shrink-0 shadow-sm cursor-pointer hover:scale-105 transition-transform" onclick="${isVisitor ? `openVisitorHistoryModal(decodeURIComponent('${adminUriAttr(ownerName)}'), decodeURIComponent('${adminUriAttr(l.rfid_uid || '')}'), decodeURIComponent('${adminUriAttr(plate || '')}'))` : `openUserHistoryModal('${adminEsc(l.user_id || l.users?.id || '')}')`}" title="Click to view access history">
                         <div>
-                            <div class="font-bold text-slate-800 text-xs hover:text-blue-700 hover:underline cursor-pointer flex items-center gap-1.5" onclick="${isVisitor ? `openVisitorHistoryModal(decodeURIComponent('${encodeURIComponent(ownerName)}'), '${l.rfid_uid || ''}', decodeURIComponent('${encodeURIComponent(plate || '')}'))` : `openUserHistoryModal('${l.user_id || l.users?.id || ''}')`}" title="Click to view when and how many times this occupant entered">
-                                <span>${ownerName}</span>
+                            <div class="font-bold text-slate-800 text-xs hover:text-blue-700 hover:underline cursor-pointer flex items-center gap-1.5" onclick="${isVisitor ? `openVisitorHistoryModal(decodeURIComponent('${adminUriAttr(ownerName)}'), decodeURIComponent('${adminUriAttr(l.rfid_uid || '')}'), decodeURIComponent('${adminUriAttr(plate || '')}'))` : `openUserHistoryModal('${adminEsc(l.user_id || l.users?.id || '')}')`}" title="Click to view when and how many times this occupant entered">
+                                <span>${adminEsc(ownerName)}</span>
                                 <i data-lucide="external-link" class="w-3 h-3 text-slate-400"></i>
                             </div>
-                            <div class="text-[10px] text-slate-400 font-medium">${subtext}</div>
+                            <div class="text-[10px] text-slate-400 font-medium">${adminEsc(subtext)}</div>
                         </div>
                     </div>
                 </td>
@@ -2408,9 +2616,9 @@ window.renderInsideCampusTable = function() {
                                 Foot / Turnstile Access
                             </span>
                         ` : `
-                            <span class="font-mono font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 text-xs w-fit">${plate}</span>
+                            <span class="font-mono font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 text-xs w-fit">${adminEsc(plate)}</span>
                             <span class="text-[10px] text-slate-400 flex items-center gap-1">
-                                <i data-lucide="${vehIcon}" class="w-3 h-3"></i> ${vehType} ${vehModel ? '• ' + vehModel : ''}
+                                <i data-lucide="${vehIcon}" class="w-3 h-3"></i> ${adminEsc(vehType)} ${vehModel ? '• ' + adminEsc(vehModel) : ''}
                             </span>
                         `}
                     </div>
@@ -2422,7 +2630,7 @@ window.renderInsideCampusTable = function() {
                 <td class="p-3.5">${durationBadge}</td>
                 <td class="p-3.5">
                     <div class="font-semibold text-slate-700 text-xs flex items-center gap-1">
-                        <i data-lucide="log-in" class="w-3.5 h-3.5 text-emerald-600"></i> ${gateLabel}
+                        <i data-lucide="log-in" class="w-3.5 h-3.5 text-emerald-600"></i> ${adminEsc(gateLabel)}
                     </div>
                     <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">${readerMode}</div>
                 </td>
@@ -2475,8 +2683,8 @@ window.exportInsideCampusCSV = function() {
         const plate = l.vehicles?.plate_number || (l.remarks && l.remarks.match(/Plate:\s*([^|]+)/i)?.[1]?.trim()) || 'N/A';
         const vehType = l.vehicles?.vehicle_type || 'Vehicle';
         const enterTime = new Date(l.timestamp);
-        const dateStr = enterTime.toISOString().slice(0, 10);
-        const timeStr = enterTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const dateStr = adminManilaDateKey(enterTime);
+        const timeStr = formatManilaTime(enterTime, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
         const diffMs = Math.max(0, Date.now() - enterTime.getTime());
         const diffHrs = Math.floor(diffMs / (1000 * 60 * 60));
@@ -2488,28 +2696,21 @@ window.exportInsideCampusCSV = function() {
 
         return [
             i + 1,
-            `"${ownerName.replace(/"/g, '""')}"`,
-            `"${cat}"`,
-            `"${(subtext || '').replace(/"/g, '""')}"`,
-            `"${plate}"`,
-            `"${vehType}"`,
+            `"${String(ownerName).replace(/"/g, '""')}"`,
+            `"${String(cat).replace(/"/g, '""')}"`,
+            `"${String(subtext || '').replace(/"/g, '""')}"`,
+            `"${String(plate).replace(/"/g, '""')}"`,
+            `"${String(vehType).replace(/"/g, '""')}"`,
             `"${dateStr}"`,
             `"${timeStr}"`,
             `"${durationStr}"`,
-            `"${gate}"`,
-            `"${rfid}"`
+            `"${String(gate).replace(/"/g, '""')}"`,
+            `"${String(rfid).replace(/"/g, '""')}"`
         ].join(',');
     });
 
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    const dateStamp = new Date().toISOString().slice(0, 10);
-    link.setAttribute('download', `CHARRMPASS_Campus_Occupants_${dateStamp}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const dateStamp = adminManilaDateKey();
+    downloadCsvBlob(`CHARRMPASS_Campus_Occupants_${dateStamp}.csv`, [headers.join(','), ...rows].join('\n'));
 
     showToast('Campus occupants roster downloaded!', 'success');
 };
@@ -2642,22 +2843,23 @@ function renderUserLeaderboard(logs = getFilteredAnalyticsLogs()) {
             else if (rLow.includes('visitor')) catColor = 'bg-blue-100 text-blue-800';
             else if (rLow.includes('emergency')) catColor = 'bg-red-100 text-red-800';
 
-            const lastScanStr = u.lastScan ? new Date(u.lastScan).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '--';
+            const lastScanStr = u.lastScan ? formatManilaTime(u.lastScan) : '--';
+            const roleKey = adminUriAttr((u.role || '').toLowerCase());
 
             return `
-                <tr class="border-b border-slate-100/60 hover:bg-white/80 transition-colors cursor-pointer group" onclick="if ('${(u.role || '').toLowerCase()}' === 'visitor') { openVisitorHistoryModal(decodeURIComponent('${encodeURIComponent(u.name)}'), '', decodeURIComponent('${encodeURIComponent(u.plate || '')}')); } else { const matchU = adminState.users.find(x => x.full_name === decodeURIComponent('${encodeURIComponent(u.name)}')); if (matchU) openUserHistoryModal(matchU.id); else openVisitorHistoryModal(decodeURIComponent('${encodeURIComponent(u.name)}'), '', decodeURIComponent('${encodeURIComponent(u.plate || '')}')); }" title="Click to view complete visit history and frequency">
+                <tr class="border-b border-slate-100/60 hover:bg-white/80 transition-colors cursor-pointer group" onclick="if (decodeURIComponent('${roleKey}') === 'visitor') { openVisitorHistoryModal(decodeURIComponent('${adminUriAttr(u.name)}'), '', decodeURIComponent('${adminUriAttr(u.plate || '')}')); } else { const matchU = adminState.users.find(x => x.full_name === decodeURIComponent('${adminUriAttr(u.name)}')); if (matchU) openUserHistoryModal(matchU.id); else openVisitorHistoryModal(decodeURIComponent('${adminUriAttr(u.name)}'), '', decodeURIComponent('${adminUriAttr(u.plate || '')}')); }" title="Click to view complete visit history and frequency">
                     <td class="p-3 text-center">${rankBadge}</td>
                     <td class="p-3">
                         <div class="font-bold text-slate-800 text-xs group-hover:text-blue-700 group-hover:underline flex items-center gap-1.5">
-                            <span>${u.name}</span>
+                            <span>${adminEsc(u.name)}</span>
                             <i data-lucide="external-link" class="w-3 h-3 text-slate-300 group-hover:text-blue-500"></i>
                         </div>
-                        <div class="text-[10px] text-slate-400 font-medium">${u.subtext}</div>
+                        <div class="text-[10px] text-slate-400 font-medium">${adminEsc(u.subtext)}</div>
                     </td>
                     <td class="p-3">
-                        <span class="px-2 py-0.5 rounded text-[10px] font-extrabold uppercase tracking-wide ${catColor}">${u.role}</span>
+                        <span class="px-2 py-0.5 rounded text-[10px] font-extrabold uppercase tracking-wide ${catColor}">${adminEsc(u.role)}</span>
                     </td>
-                    <td class="p-3 font-mono text-xs font-bold text-slate-700">${u.plate}</td>
+                    <td class="p-3 font-mono text-xs font-bold text-slate-700">${adminEsc(u.plate)}</td>
                     <td class="p-3 text-center font-mono font-black text-emerald-700 text-xs">${u.count}</td>
                     <td class="p-3 text-right text-[11px] font-mono text-slate-400">${lastScanStr}</td>
                 </tr>
@@ -2683,19 +2885,19 @@ function renderAnalyticsCharts(filteredLogs = getFilteredAnalyticsLogs()) {
         let exitData = [];
 
         if (trafficGranularity === 'daily') {
-            // Group by days
+            // Group by Asia/Manila calendar days
             const daysMap = {};
             filteredLogs.forEach(l => {
                 if (!l.timestamp) return;
-                const dStr = l.timestamp.split('T')[0];
+                const dStr = adminManilaDateKey(l.timestamp);
                 if (!daysMap[dStr]) daysMap[dStr] = { entry: 0, exit: 0 };
                 if (l.direction === 'ENTRY' && l.status === 'AUTHORIZED') daysMap[dStr].entry++;
-                else if (l.direction === 'EXIT' && l.status === 'AUTHORIZED') daysMap[dStr].exit++;
+                else if (l.direction === 'EXIT' && l.status === 'AUTHORIZED' && !isSyntheticAutoExit(l)) daysMap[dStr].exit++;
             });
 
             const sortedDays = Object.keys(daysMap).sort();
             if (sortedDays.length === 0) {
-                const today = new Date().toISOString().split('T')[0];
+                const today = adminManilaDateKey();
                 sortedDays.push(today);
                 daysMap[today] = { entry: 0, exit: 0 };
             }
@@ -2707,14 +2909,42 @@ function renderAnalyticsCharts(filteredLogs = getFilteredAnalyticsLogs()) {
             entryData = sortedDays.map(d => daysMap[d].entry);
             exitData = sortedDays.map(d => daysMap[d].exit);
         } else if (trafficGranularity === 'weekly') {
-            labels = ['Week 1', 'Week 2', 'Week 3', 'Week 4'];
-            entryData = [Math.floor(filteredLogs.length * 0.2), Math.floor(filteredLogs.length * 0.25), Math.floor(filteredLogs.length * 0.3), Math.floor(filteredLogs.length * 0.25)];
-            exitData = [Math.floor(filteredLogs.length * 0.18), Math.floor(filteredLogs.length * 0.24), Math.floor(filteredLogs.length * 0.28), Math.floor(filteredLogs.length * 0.23)];
+            // Real 4-week rolling Asia/Manila buckets (oldest -> newest)
+            const nowMs = Date.now();
+            const weekMs = 7 * 24 * 60 * 60 * 1000;
+            const weekEntries = [0, 0, 0, 0];
+            const weekExits = [0, 0, 0, 0];
+            labels = [3, 2, 1, 0].map(offset => {
+                const endDt = new Date(nowMs - offset * weekMs);
+                const startDt = new Date(nowMs - (offset + 1) * weekMs + 86400000);
+                return `${formatManilaDate(startDt, { month: 'short', day: 'numeric' })}–${formatManilaDate(endDt, { month: 'short', day: 'numeric' })}`;
+            });
+            const sourceLogs = filteredLogs.length ? filteredLogs : (adminState.logs || []);
+            sourceLogs.forEach(l => {
+                if (!l.timestamp || l.status !== 'AUTHORIZED') return;
+                const ageMs = nowMs - new Date(l.timestamp).getTime();
+                if (ageMs < 0 || ageMs >= 4 * weekMs) return;
+                const bucketIdx = 3 - Math.min(3, Math.floor(ageMs / weekMs));
+                if (l.direction === 'ENTRY') weekEntries[bucketIdx]++;
+                else if (l.direction === 'EXIT' && !isSyntheticAutoExit(l)) weekExits[bucketIdx]++;
+            });
+            entryData = weekEntries;
+            exitData = weekExits;
         } else {
+            // Real 12-month Asia/Manila calendar bucketing
             labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-            const curMonth = new Date().getMonth();
-            entryData = labels.map((_, i) => i === curMonth ? filteredLogs.filter(l => l.direction === 'ENTRY').length : 0);
-            exitData = labels.map((_, i) => i === curMonth ? filteredLogs.filter(l => l.direction === 'EXIT').length : 0);
+            const monthEntries = Array(12).fill(0);
+            const monthExits = Array(12).fill(0);
+            const sourceLogs = filteredLogs.length ? filteredLogs : (adminState.logs || []);
+            sourceLogs.forEach(l => {
+                if (!l.timestamp || l.status !== 'AUTHORIZED') return;
+                const mIdx = adminManilaParts(l.timestamp).month - 1;
+                if (mIdx < 0 || mIdx > 11) return;
+                if (l.direction === 'ENTRY') monthEntries[mIdx]++;
+                else if (l.direction === 'EXIT' && !isSyntheticAutoExit(l)) monthExits[mIdx]++;
+            });
+            entryData = monthEntries;
+            exitData = monthExits;
         }
 
         chartTraffic = new Chart(ctxTraffic, {
@@ -2747,6 +2977,7 @@ function renderAnalyticsCharts(filteredLogs = getFilteredAnalyticsLogs()) {
                 ]
             },
             options: {
+                animation: false,
                 responsive: true,
                 maintainAspectRatio: false,
                 plugins: {
@@ -2772,7 +3003,7 @@ function renderAnalyticsCharts(filteredLogs = getFilteredAnalyticsLogs()) {
 
         filteredLogs.forEach(l => {
             if (!l.timestamp) return;
-            const h = new Date(l.timestamp).getHours();
+            const h = adminManilaParts(l.timestamp).hour;
             if (h >= 6 && h <= 18) {
                 hours[h - 6]++;
             }
@@ -2990,28 +3221,63 @@ window.clearReportHistory = function() {
 function renderReportHistory() {
     const history = getStoredReportHistory();
     if (el('reportAuditHistoryTable')) {
-        el('reportAuditHistoryTable').innerHTML = history.length ? history.map(h => `
+        el('reportAuditHistoryTable').innerHTML = history.length ? history.map((h, idx) => `
             <tr class="border-b border-slate-100/70 hover:bg-white/80">
                 <td class="p-3 font-bold text-slate-800">
                     <div class="flex items-center gap-2">
                         <i data-lucide="file-text" class="w-4 h-4 text-emerald-700"></i>
-                        <span>${h.name}</span>
+                        <span>${adminEsc(h.name)}</span>
                     </div>
                 </td>
-                <td class="p-3 text-xs font-mono text-slate-600">${h.period}</td>
-                <td class="p-3 text-xs font-semibold text-slate-700">${h.generatedBy}</td>
-                <td class="p-3 text-xs text-slate-500">${h.timestamp}</td>
-                <td class="p-3 text-center"><span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 uppercase">${h.format || 'PDF'}</span></td>
+                <td class="p-3 text-xs font-mono text-slate-600">${adminEsc(h.period)}</td>
+                <td class="p-3 text-xs font-semibold text-slate-700">${adminEsc(h.generatedBy)}</td>
+                <td class="p-3 text-xs text-slate-500">${adminEsc(h.timestamp)}</td>
+                <td class="p-3 text-center"><span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 uppercase">${adminEsc(h.format || 'PDF')}</span></td>
                 <td class="p-3 text-right">
-                    <button onclick="downloadOfficialReportPDF()" class="p-1.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-lg transition-colors" title="Download PDF"><i data-lucide="file-down" class="w-4 h-4"></i></button>
-                    <button onclick="printOfficialReport()" class="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg ml-1 transition-colors" title="Print"><i data-lucide="printer" class="w-4 h-4"></i></button>
-                    <button onclick="exportCurrentReportCSV()" class="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg ml-1 transition-colors" title="CSV"><i data-lucide="download" class="w-4 h-4"></i></button>
+                    <button onclick="restoreAndActOnHistoryReport(${idx}, 'pdf')" class="p-1.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-lg transition-colors" title="Download PDF"><i data-lucide="file-down" class="w-4 h-4"></i></button>
+                    <button onclick="restoreAndActOnHistoryReport(${idx}, 'print')" class="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg ml-1 transition-colors" title="Print"><i data-lucide="printer" class="w-4 h-4"></i></button>
+                    <button onclick="restoreAndActOnHistoryReport(${idx}, 'csv')" class="p-1.5 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 rounded-lg ml-1 transition-colors" title="CSV"><i data-lucide="download" class="w-4 h-4"></i></button>
                 </td>
             </tr>
-        `).join('') : '<tr><td colspan="6" class="p-6 text-center text-slate-400 text-xs">No reports generated yet. Click Generate Custom Report to start.</td></tr>';
+        `).join('') : '<tr><td colspan="6" class="p-6 text-center text-slate-400 text-xs">No reports generated yet. Click Custom Report Builder to start.</td></tr>';
     }
     if (window.lucide) lucide.createIcons();
 }
+
+window.restoreAndActOnHistoryReport = async function(idx, action = 'pdf') {
+    const history = getStoredReportHistory();
+    const h = history[idx];
+    if (!h) {
+        showToast('Historical report metadata not found.', 'warning');
+        return;
+    }
+    let logs = [];
+    if (h.preset && h.preset !== 'custom') {
+        logs = h.preset === 'all' ? (adminState.logs || []) : getFilteredAnalyticsLogs(h.preset);
+    } else if (h.fromDate && h.toDate) {
+        logs = await fetchTransactionsForRange(h.fromDate, h.toDate);
+    } else {
+        logs = currentReportPayload?.logs || (adminState.logs || []);
+    }
+    if (h.reportType === 'SECURITY') {
+        logs = logs.filter(l => l.status === 'DENIED');
+    }
+    displayGeneratedReport({
+        id: h.id || `CP-ASU-HIST-${idx + 1}`,
+        title: h.name || 'CHARRMPASS VEHICLE REPORT',
+        period: h.period || 'Historical Report',
+        generatedBy: h.generatedBy || 'CHARRMPASS SYSTEM',
+        generatedAt: h.timestamp || formatManilaDate(new Date()) + ' ' + formatManilaTime(new Date()),
+        logs,
+        format: h.format || 'PDF',
+        orientation: h.orientation || 'portrait',
+        options: h.options || { summary: true, charts: true, logs: true, guards: true },
+        _skipHistorySave: true
+    });
+    if (action === 'pdf') downloadOfficialReportPDF();
+    else if (action === 'print') printOfficialReport();
+    else if (action === 'csv') exportCurrentReportCSV();
+};
 
 window.renderReports = function() {
     if (!currentReportPayload) {
@@ -3048,11 +3314,11 @@ window.toggleReportCustomDate = function() {
     const isHidden = customBox.classList.contains('hidden');
     if (isHidden) {
         customBox.classList.remove('hidden');
-        // Set default dates if empty
+        // Set default Asia/Manila dates if empty
         const now = new Date();
         const past = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        if (el('repInlineFrom') && !el('repInlineFrom').value) el('repInlineFrom').value = past.toISOString().split('T')[0];
-        if (el('repInlineTo') && !el('repInlineTo').value) el('repInlineTo').value = now.toISOString().split('T')[0];
+        if (el('repInlineFrom') && !el('repInlineFrom').value) el('repInlineFrom').value = adminManilaDateKey(past);
+        if (el('repInlineTo') && !el('repInlineTo').value) el('repInlineTo').value = adminManilaDateKey(now);
         
         document.querySelectorAll('.rep-time-tab').forEach(b => {
             b.className = 'rep-time-tab px-3 py-1.5 rounded-xl font-bold text-xs text-slate-600 hover:text-slate-900 transition-all';
@@ -3073,7 +3339,7 @@ window.applyReportInlineCustomDates = function() {
         showToast('Please select both Start and End dates.', 'warning');
         return;
     }
-    if (new Date(fromVal) > new Date(toVal)) {
+    if (fromVal > toVal) {
         showToast('Start date cannot be after End date.', 'warning');
         return;
     }
@@ -3086,78 +3352,85 @@ window.setModalReportPreset = function(preset) {
     const toEl = el('modalReportTo');
     if (!fromEl || !toEl) return;
 
-    toEl.value = now.toISOString().split('T')[0];
+    const todayKey = adminManilaDateKey(now);
+    const { year, month } = adminManilaParts(now);
+    toEl.value = todayKey;
 
     if (preset === 'today') {
-        fromEl.value = now.toISOString().split('T')[0];
+        fromEl.value = todayKey;
     } else if (preset === 'yesterday') {
-        const y = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-        fromEl.value = y.toISOString().split('T')[0];
-        toEl.value = y.toISOString().split('T')[0];
+        const yKey = adminManilaDateKey(new Date(now.getTime() - 24 * 60 * 60 * 1000));
+        fromEl.value = yKey;
+        toEl.value = yKey;
     } else if (preset === '7days') {
-        const past7 = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        fromEl.value = past7.toISOString().split('T')[0];
+        fromEl.value = adminManilaDateKey(new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000));
     } else if (preset === 'thisMonth') {
-        const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
-        fromEl.value = firstDay.toISOString().split('T')[0];
+        fromEl.value = `${year}-${String(month).padStart(2, '0')}-01`;
     } else if (preset === 'lastMonth') {
-        const firstDayLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        const lastDayLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
-        fromEl.value = firstDayLastMonth.toISOString().split('T')[0];
-        toEl.value = lastDayLastMonth.toISOString().split('T')[0];
+        const prevMonth = month === 1 ? 12 : month - 1;
+        const prevYear = month === 1 ? year - 1 : year;
+        const lastDay = new Date(Date.UTC(year, month - 1, 0)).getUTCDate();
+        fromEl.value = `${prevYear}-${String(prevMonth).padStart(2, '0')}-01`;
+        toEl.value = `${prevYear}-${String(prevMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
     } else if (preset === 'allTime') {
-        const startYear = new Date(now.getFullYear(), 0, 1);
-        fromEl.value = startYear.toISOString().split('T')[0];
+        fromEl.value = `${year}-01-01`;
     }
     showToast(`Timeframe set to ${preset}`, 'info');
 };
 
-window.generateQuickReport = function(type, customFrom, customTo) {
+window.generateQuickReport = async function(type, customFrom, customTo) {
     const now = new Date();
     let title = "VEHICLE ACCESS & TRAFFIC ACTIVITY REPORT";
     let periodText = "";
     let logs = [];
+    let presetForHistory = type;
 
     if (type === 'today') {
         title = "DAILY CAMPUS VEHICLE ACCESS REPORT";
-        periodText = `Date: ${now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}`;
+        periodText = `Date: ${formatManilaDate(now, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}`;
         logs = getFilteredAnalyticsLogs('today');
     } else if (type === 'yesterday') {
         title = "YESTERDAY'S VEHICLE ACCESS SUMMARY";
         const y = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-        periodText = `Date: ${y.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}`;
+        periodText = `Date: ${formatManilaDate(y, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}`;
         logs = getFilteredAnalyticsLogs('yesterday');
     } else if (type === 'week') {
         title = "WEEKLY ACCESS & SECURITY AUDIT REPORT";
-        const past7 = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        periodText = `Period: ${past7.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} (Past 7 Days)`;
+        const past7 = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
+        periodText = `Period: ${formatManilaDate(past7, { month: 'short', day: 'numeric' })} – ${formatManilaDate(now, { month: 'short', day: 'numeric', year: 'numeric' })} (Past 7 Days)`;
         logs = getFilteredAnalyticsLogs('7days');
+        presetForHistory = '7days';
     } else if (type === 'month') {
         title = "MONTHLY COMPREHENSIVE ACCESS REPORT";
-        periodText = `Month: ${now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`;
+        periodText = `Month: ${formatManilaDate(now, { month: 'long', year: 'numeric' })}`;
         logs = getFilteredAnalyticsLogs('thisMonth');
+        presetForHistory = 'thisMonth';
     } else if (type === 'lastMonth') {
         title = "PREVIOUS MONTH VEHICLE ACCESS REPORT";
-        const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        periodText = `Month: ${lastMonthDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`;
-        logs = getFilteredAnalyticsLogs('lastMonth');
+        const { year, month } = adminManilaParts(now);
+        const prevMonth = month === 1 ? 12 : month - 1;
+        const prevYear = month === 1 ? year - 1 : year;
+        const lastMonthDate = new Date(`${prevYear}-${String(prevMonth).padStart(2, '0')}-15T12:00:00+08:00`);
+        periodText = `Month: ${formatManilaDate(lastMonthDate, { month: 'long', year: 'numeric' })}`;
+        const lastDay = new Date(Date.UTC(year, month - 1, 0)).getUTCDate();
+        logs = await fetchTransactionsForRange(
+            `${prevYear}-${String(prevMonth).padStart(2, '0')}-01`,
+            `${prevYear}-${String(prevMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
+        );
     } else if (type === 'all') {
         title = "ALL-TIME VEHICLE ACCESS MASTERLIST";
-        periodText = `Period: Complete All-Time Records (Up to ${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })})`;
+        periodText = `Period: Complete All-Time Records (Up to ${formatManilaDate(now, { month: 'short', day: 'numeric', year: 'numeric' })})`;
         logs = adminState.logs || [];
     } else if (type === 'custom' && customFrom && customTo) {
         title = "CUSTOM PERIOD VEHICLE ACCESS REPORT";
-        const d1 = new Date(customFrom + 'T00:00:00');
-        const d2 = new Date(customTo + 'T23:59:59');
-        periodText = `Period: ${d1.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} to ${d2.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
-        logs = (adminState.logs || []).filter(l => {
-            if (!l.timestamp) return false;
-            const t = new Date(l.timestamp);
-            return t >= d1 && t <= d2;
-        });
+        const d1 = new Date(`${customFrom}T00:00:00+08:00`);
+        const d2 = new Date(`${customTo}T23:59:59+08:00`);
+        periodText = `Period: ${formatManilaDate(d1)} to ${formatManilaDate(d2)}`;
+        logs = await fetchTransactionsForRange(customFrom, customTo);
     }
 
-    const dateNum = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+    const mp = adminManilaParts(now);
+    const dateNum = `${mp.year}${String(mp.month).padStart(2,'0')}${String(mp.day).padStart(2,'0')}`;
     const randSuffix = String(Math.floor(1000 + Math.random() * 9000));
     const reportId = `CP-ASU-${dateNum}-${randSuffix}`;
 
@@ -3166,9 +3439,13 @@ window.generateQuickReport = function(type, customFrom, customTo) {
         title: title,
         period: periodText,
         generatedBy: 'CHARRMPASS SYSTEM',
-        generatedAt: now.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }),
+        generatedAt: `${formatManilaDate(now)} ${formatManilaTime(now)}`,
         logs: logs,
         format: 'PDF',
+        orientation: 'portrait',
+        preset: presetForHistory,
+        fromDate: customFrom || null,
+        toDate: customTo || null,
         options: { summary: true, charts: true, logs: true, guards: true }
     });
 };
@@ -3178,8 +3455,8 @@ window.openReportModal = function() {
     if (!modal) return;
     const now = new Date();
     const past = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    if (el('modalReportFrom')) el('modalReportFrom').value = past.toISOString().split('T')[0];
-    if (el('modalReportTo')) el('modalReportTo').value = now.toISOString().split('T')[0];
+    if (el('modalReportFrom')) el('modalReportFrom').value = adminManilaDateKey(past);
+    if (el('modalReportTo')) el('modalReportTo').value = adminManilaDateKey(now);
 
     modal.classList.remove('hidden');
     setTimeout(() => {
@@ -3197,7 +3474,7 @@ window.closeReportModal = function() {
     setTimeout(() => modal.classList.add('hidden'), 300);
 };
 
-window.handleCustomReportSubmit = function(e) {
+window.handleCustomReportSubmit = async function(e) {
     e.preventDefault();
     const reportType = el('modalReportType')?.value || 'ACTIVITY';
     const fromVal = el('modalReportFrom')?.value;
@@ -3207,15 +3484,20 @@ window.handleCustomReportSubmit = function(e) {
     const incLogs = el('incDetailedLogs')?.checked ?? true;
     const incGuard = el('incGuardOps')?.checked ?? true;
     const format = document.querySelector('input[name="repFormat"]:checked')?.value || 'PDF';
+    const orientation = document.querySelector('input[name="repOrient"]:checked')?.value || 'portrait';
 
-    const fromDate = new Date(fromVal + 'T00:00:00');
-    const toDate = new Date(toVal + 'T23:59:59');
+    if (fromVal && toVal && fromVal > toVal) {
+        showToast('Start date cannot be after End date.', 'warning');
+        return;
+    }
 
-    const filteredLogs = (adminState.logs || []).filter(l => {
-        if (!l.timestamp) return false;
-        const t = new Date(l.timestamp);
-        return t >= fromDate && t <= toDate;
-    });
+    let filteredLogs = (fromVal && toVal)
+        ? await fetchTransactionsForRange(fromVal, toVal)
+        : (adminState.logs || []);
+
+    if (reportType === 'SECURITY') {
+        filteredLogs = filteredLogs.filter(l => l.status === 'DENIED');
+    }
 
     const reportTitles = {
         ACTIVITY: 'COMPLETE VEHICLE ACCESS & TRAFFIC REPORT',
@@ -3228,7 +3510,8 @@ window.handleCustomReportSubmit = function(e) {
     };
 
     const now = new Date();
-    const dateNum = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+    const mp = adminManilaParts(now);
+    const dateNum = `${mp.year}${String(mp.month).padStart(2,'0')}${String(mp.day).padStart(2,'0')}`;
     const randSuffix = String(Math.floor(1000 + Math.random() * 9000));
     const reportId = `CP-ASU-${dateNum}-${randSuffix}`;
 
@@ -3237,15 +3520,23 @@ window.handleCustomReportSubmit = function(e) {
         title: reportTitles[reportType] || 'CHARRMPASS VEHICLE REPORT',
         period: `Period: ${fromVal} to ${toVal}`,
         generatedBy: 'CHARRMPASS SYSTEM',
-        generatedAt: now.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }),
+        generatedAt: `${formatManilaDate(now)} ${formatManilaTime(now)}`,
         logs: filteredLogs,
         format: format,
+        orientation: orientation,
+        reportType: reportType,
+        preset: 'custom',
+        fromDate: fromVal || null,
+        toDate: toVal || null,
         options: { summary: incSummary, charts: incCharts, logs: incLogs, guards: incGuard }
     };
 
     closeReportModal();
     displayGeneratedReport(payload);
     showToast(`Generated "${payload.title}" with ${filteredLogs.length} records!`, 'success');
+    if (format === 'CSV') {
+        exportCurrentReportCSV();
+    }
 };
 
 function displayGeneratedReport(payload) {
@@ -3258,9 +3549,15 @@ function displayGeneratedReport(payload) {
     if (el('repDocGeneratedBy')) el('repDocGeneratedBy').textContent = payload.generatedBy;
     if (el('repDocTotalRecords')) el('repDocTotalRecords').textContent = `${payload.logs.length} Total Records`;
 
-    // Summary Statistics
+    // Honor section checkboxes in report preview
+    const showSummary = payload.options?.summary !== false;
+    const showLogs = payload.options?.logs !== false;
+    if (el('repSummarySection')) el('repSummarySection').classList.toggle('hidden', !showSummary);
+    if (el('repDetailedLogsSection')) el('repDetailedLogsSection').classList.toggle('hidden', !showLogs);
+
+    // Summary Statistics (exclude synthetic auto-resolved exits from physical Exits count)
     const entries = payload.logs.filter(l => l.direction === 'ENTRY' && l.status === 'AUTHORIZED').length;
-    const exits = payload.logs.filter(l => l.direction === 'EXIT' && l.status === 'AUTHORIZED').length;
+    const exits = payload.logs.filter(l => l.direction === 'EXIT' && l.status === 'AUTHORIZED' && !isSyntheticAutoExit(l)).length;
     const failed = payload.logs.filter(l => l.status === 'DENIED').length;
     const uniquePlates = new Set();
     let students = 0, facultyStaff = 0, visitors = 0, emergency = 0;
@@ -3278,7 +3575,7 @@ function displayGeneratedReport(payload) {
         else students++;
 
         if (l.timestamp) {
-            const h = new Date(l.timestamp).getHours();
+            const h = adminManilaParts(l.timestamp).hour;
             if (h >= 0 && h < 24) hoursCount[h]++;
         }
     });
@@ -3295,7 +3592,8 @@ function displayGeneratedReport(payload) {
         return `${displayH}:00 ${period}`;
     };
     const peakHourText = payload.logs.length > 0 ? `${formatHour(peakHour)} – ${formatHour((peakHour + 1) % 24)} (${peakCount} scans)` : 'No activity logged';
-    const authRate = payload.logs.length > 0 ? `${(((entries + exits) / payload.logs.length) * 100).toFixed(1)}%` : '100%';
+    const physicalTotal = Math.max(1, payload.logs.filter(l => !isSyntheticAutoExit(l)).length);
+    const authRate = payload.logs.length > 0 ? `${(Math.min(100, ((entries + exits) / physicalTotal) * 100)).toFixed(1)}%` : '100%';
 
     if (el('repSumEntries')) el('repSumEntries').textContent = entries.toLocaleString();
     if (el('repSumExits')) el('repSumExits').textContent = exits.toLocaleString();
@@ -3311,8 +3609,7 @@ function displayGeneratedReport(payload) {
 
     // Tabular Detailed Logs: Include ALL filtered records without slicing
     if (el('repDetailedLogsTable')) {
-        el('repDetailedLogsTable').innerHTML = payload.logs.length ? payload.logs.map((l, index) => {
-            // Complete RFID UID Tag (Uncensored for administrative reporting)
+        el('repDetailedLogsTable').innerHTML = payload.logs.length ? payload.logs.map((l) => {
             const uidTag = (l.rfid_uid || '--').trim().toUpperCase();
             
             let ownerName = l.users?.full_name;
@@ -3340,31 +3637,45 @@ function displayGeneratedReport(payload) {
                 ? '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-green-100 text-green-800">Allowed</span>' 
                 : '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-800">Denied</span>';
 
-            const dateStr = l.timestamp ? new Date(l.timestamp).toLocaleDateString([], {month:'short', day:'numeric'}) + ' ' + new Date(l.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '--';
+            const dateStr = l.timestamp
+                ? `${formatManilaDate(l.timestamp, { month: 'short', day: 'numeric' })} ${formatManilaTime(l.timestamp)}`
+                : '--';
+            const gateDisplay = isSyntheticAutoExit(l)
+                ? 'Auto-Resolved Exit'
+                : (l.gate || (l.direction === 'EXIT' ? 'Gate 2 (Exit)' : 'Gate 1 (Entry)'));
 
             return `
                 <tr class="hover:bg-slate-50 text-xs border-b border-slate-100">
-                    <td class="p-2 font-mono text-[11px] text-slate-600">${dateStr}</td>
-                    <td class="p-2 font-mono font-bold text-slate-700">${uidTag}</td>
-                    <td class="p-2 font-mono font-bold text-slate-900">${plate}</td>
-                    <td class="p-2 font-semibold text-slate-800">${ownerName}</td>
-                    <td class="p-2"><span class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-600 uppercase">${role}</span></td>
-                    <td class="p-2 text-center font-bold ${l.direction === 'ENTRY' ? 'text-emerald-700' : 'text-blue-700'}">${l.direction || 'ENTRY'}</td>
-                    <td class="p-2 text-center font-medium text-slate-600">${l.direction === 'EXIT' ? 'Gate 2 (Exit)' : 'Gate 1 (Entry)'}</td>
+                    <td class="p-2 font-mono text-[11px] text-slate-600">${adminEsc(dateStr)}</td>
+                    <td class="p-2 font-mono font-bold text-slate-700">${adminEsc(uidTag)}</td>
+                    <td class="p-2 font-mono font-bold text-slate-900">${adminEsc(plate)}</td>
+                    <td class="p-2 font-semibold text-slate-800">${adminEsc(ownerName)}</td>
+                    <td class="p-2"><span class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-600 uppercase">${adminEsc(role)}</span></td>
+                    <td class="p-2 text-center font-bold ${l.direction === 'ENTRY' ? 'text-emerald-700' : 'text-blue-700'}">${adminEsc(l.direction || 'ENTRY')}</td>
+                    <td class="p-2 text-center font-medium text-slate-600">${adminEsc(gateDisplay)}</td>
                     <td class="p-2 text-right">${statusBadge}</td>
                 </tr>
             `;
         }).join('') : '<tr><td colspan="8" class="p-8 text-center text-slate-400">No transactions recorded in this period.</td></tr>';
     }
 
-    // Save report to audit history
-    saveReportToAuditHistory({
-        name: payload.title,
-        period: payload.period,
-        generatedBy: payload.generatedBy,
-        timestamp: payload.generatedAt,
-        format: payload.format
-    });
+    // Save report to audit history unless restoring an existing audit entry
+    if (!payload._skipHistorySave) {
+        saveReportToAuditHistory({
+            id: payload.id,
+            name: payload.title,
+            period: payload.period,
+            generatedBy: payload.generatedBy,
+            timestamp: payload.generatedAt,
+            format: payload.format,
+            orientation: payload.orientation || 'portrait',
+            reportType: payload.reportType || 'ACTIVITY',
+            preset: payload.preset || null,
+            fromDate: payload.fromDate || null,
+            toDate: payload.toDate || null,
+            options: payload.options || { summary: true, charts: true, logs: true, guards: true }
+        });
+    }
 }
 
 window.printOfficialReport = function() {
@@ -3390,16 +3701,18 @@ window.downloadOfficialReportPDF = function() {
     try {
         const jsPdfClass = window.jspdf?.jsPDF || window.jsPDF;
         if (jsPdfClass) {
+            const isLandscape = payload.orientation === 'landscape';
             const doc = new jsPdfClass({
-                orientation: 'portrait',
+                orientation: isLandscape ? 'landscape' : 'portrait',
                 unit: 'mm',
                 format: 'a4'
             });
 
-            const pageWidth = doc.internal.pageSize.getWidth(); // 210mm
-            const pageHeight = doc.internal.pageSize.getHeight(); // 297mm
+            const pageWidth = doc.internal.pageSize.getWidth();
+            const pageHeight = doc.internal.pageSize.getHeight();
             const margin = 14;
-            const contentWidth = pageWidth - (margin * 2); // 182mm
+            const contentWidth = pageWidth - (margin * 2);
+            const widthScale = contentWidth / 182;
 
             // 1. Official Header with Logo (Clean, Institutional)
             let logoDataUrl = null;
@@ -3484,9 +3797,9 @@ window.downloadOfficialReportPDF = function() {
             doc.setTextColor(16, 185, 129);
             doc.text(`${(payload.logs || []).length} Records`, margin + 148, metaY + 9);
 
-            // 4. Executive Summary Statistics
+            // 4. Executive Summary Statistics (excluding synthetic auto-resolved exits)
             const entries = (payload.logs || []).filter(l => l.direction === 'ENTRY' && l.status === 'AUTHORIZED').length;
-            const exits = (payload.logs || []).filter(l => l.direction === 'EXIT' && l.status === 'AUTHORIZED').length;
+            const exits = (payload.logs || []).filter(l => l.direction === 'EXIT' && l.status === 'AUTHORIZED' && !isSyntheticAutoExit(l)).length;
             const failed = (payload.logs || []).filter(l => l.status === 'DENIED').length;
             const uniquePlates = new Set();
             let students = 0, facultyStaff = 0, visitors = 0, emergency = 0;
@@ -3504,7 +3817,7 @@ window.downloadOfficialReportPDF = function() {
                 else students++;
 
                 if (l.timestamp) {
-                    const h = new Date(l.timestamp).getHours();
+                    const h = adminManilaParts(l.timestamp).hour;
                     if (h >= 0 && h < 24) hoursCount[h]++;
                 }
             });
@@ -3619,8 +3932,8 @@ window.downloadOfficialReportPDF = function() {
                 if (!ownerName) ownerName = l.status === 'DENIED' ? 'Unregistered User' : 'Cardholder';
                 if (!plate) plate = '--';
 
-                const dateStr = l.timestamp ? new Date(l.timestamp).toLocaleDateString([], {month:'short', day:'numeric'}) + ' ' + new Date(l.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '--';
-                const gateStr = l.direction === 'EXIT' ? 'Gate 2 (Exit)' : 'Gate 1 (Entry)';
+                const dateStr = l.timestamp ? `${formatManilaDate(l.timestamp, { month: 'short', day: 'numeric' })} ${formatManilaTime(l.timestamp)}` : '--';
+                const gateStr = isSyntheticAutoExit(l) ? 'Auto-Resolved' : (l.gate || (l.direction === 'EXIT' ? 'Gate 2 (Exit)' : 'Gate 1 (Entry)'));
                 const statusStr = l.status === 'AUTHORIZED' ? 'ALLOWED' : 'DENIED';
 
                 return [
@@ -3681,14 +3994,14 @@ window.downloadOfficialReportPDF = function() {
                     fillColor: [248, 250, 252]
                 },
                 columnStyles: {
-                    0: { cellWidth: 26 },
-                    1: { cellWidth: 27, font: 'courier', fontStyle: 'bold' },
-                    2: { cellWidth: 22, font: 'courier', fontStyle: 'bold' },
-                    3: { cellWidth: 35 },
-                    4: { cellWidth: 20 },
-                    5: { cellWidth: 16, halign: 'center', fontStyle: 'bold' },
-                    6: { cellWidth: 18, halign: 'center' },
-                    7: { cellWidth: 18, halign: 'center', fontStyle: 'bold' }
+                    0: { cellWidth: Math.round(26 * widthScale) },
+                    1: { cellWidth: Math.round(27 * widthScale), font: 'courier', fontStyle: 'bold' },
+                    2: { cellWidth: Math.round(22 * widthScale), font: 'courier', fontStyle: 'bold' },
+                    3: { cellWidth: Math.round(35 * widthScale) },
+                    4: { cellWidth: Math.round(20 * widthScale) },
+                    5: { cellWidth: Math.round(16 * widthScale), halign: 'center', fontStyle: 'bold' },
+                    6: { cellWidth: Math.round(18 * widthScale), halign: 'center' },
+                    7: { cellWidth: Math.round(18 * widthScale), halign: 'center', fontStyle: 'bold' }
                 },
                 didParseCell: function(data) {
                     if (data.section === 'body') {
@@ -3790,33 +4103,10 @@ window.exportCurrentReportCSV = function() {
         ].join(',');
     });
 
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `${currentReportPayload.id}_${Date.now()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    downloadCsvBlob(`${currentReportPayload.id}_${adminManilaDateKey()}.csv`, [headers.join(','), ...rows].join('\n'));
 
     showToast('CSV export downloaded!', 'success');
 };
-
-
-// =====================
-// REALTIME & INIT
-// =====================
-function setupRealtime() {
-    if (!isConnected || !supabaseClient) return;
-    supabaseClient.channel('admin-sync')
-        .on('postgres_changes', { event: '*',      schema: 'public', table: 'rfid_cards'   }, () => { loadData(); })
-        .on('postgres_changes', { event: '*',      schema: 'public', table: 'users'        }, () => { loadData(); })
-        .on('postgres_changes', { event: '*',      schema: 'public', table: 'special_tags' }, () => { loadData(); })
-        .on('postgres_changes', { event: '*',      schema: 'public', table: 'devices'      }, () => { loadData(); })
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'transactions' }, () => { loadData(); })
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'transactions' }, () => { loadData(); })
-        .subscribe();
-}
 
 // Special Tag Modal Actions
 window.openSpecialTagModal = function(id = null) {
@@ -4008,12 +4298,11 @@ window.renderSpecialTags = function() {
         }
     });
 
-    // Count today's visitor & emergency visits
-    const todayDate = new Date().toDateString();
+    // Count today's visitor & emergency visits (Asia/Manila)
+    const todayDateKey = adminManilaDateKey();
     const visitsToday = logs.filter(l => {
         if (!l.timestamp) return false;
-        const d = new Date(l.timestamp).toDateString();
-        if (d !== todayDate) return false;
+        if (adminManilaDateKey(l.timestamp) !== todayDateKey) return false;
         const rem = (l.remarks || '').toLowerCase();
         return rem.includes('visitor') || rem.includes('emergency') || l.role === 'VISITOR' || l.user_type === 'VISITOR';
     }).length;
@@ -4059,14 +4348,14 @@ window.renderSpecialTags = function() {
             }
             if (!holderName) holderName = isEmergency ? 'Emergency Responder' : (t.label && t.label !== 'Reusable Visitor Tag' ? t.label : 'Active Visitor');
             const holderPlate = insideMatch.vehicles?.plate_number || insideMatch.remarks?.match(/Plate:\s*([^|]+)/i)?.[1]?.trim() || 'N/A';
-            const enterTime = insideMatch.timestamp ? new Date(insideMatch.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--';
+            const enterTime = insideMatch.timestamp ? formatManilaTime(insideMatch.timestamp) : '--';
 
             statusBadge = `
                 <div class="flex flex-col gap-0.5">
                     <span class="px-2.5 py-1 rounded-full text-[10px] font-black uppercase bg-blue-100 text-blue-800 border border-blue-300 flex items-center gap-1.5 w-fit shadow-sm">
                         <span class="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span> IN USE (Inside Campus)
                     </span>
-                    <span class="text-[11px] font-bold text-slate-700">${holderName} <span class="font-mono text-slate-500 text-[10px]">(${holderPlate})</span></span>
+                    <span class="text-[11px] font-bold text-slate-700">${adminEsc(holderName)} <span class="font-mono text-slate-500 text-[10px]">(${adminEsc(holderPlate)})</span></span>
                     <span class="text-[10px] text-slate-400 font-medium">Entered: ${enterTime}</span>
                 </div>
             `;
@@ -4094,33 +4383,33 @@ window.renderSpecialTags = function() {
                 <td class="p-3.5 font-bold text-slate-800 text-xs">
                     <div class="flex items-center gap-2">
                         <i data-lucide="${isEmergency ? 'siren' : 'user-check'}" class="w-4 h-4 ${isEmergency ? 'text-red-500' : 'text-blue-500'}"></i>
-                        <span>${label}</span>
+                        <span>${adminEsc(label)}</span>
                     </div>
                 </td>
-                <td class="p-3.5 font-mono text-xs font-bold text-slate-600">${t.rfid_uid}</td>
+                <td class="p-3.5 font-mono text-xs font-bold text-slate-600">${adminEsc(t.rfid_uid)}</td>
                 <td class="p-3.5">
                     <span class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase border ${typeClass}">
-                        ${t.type}
+                        ${adminEsc(t.type)}
                     </span>
                 </td>
                 <td class="p-3.5">${statusBadge}</td>
-                <td class="p-3.5 text-xs text-slate-500 max-w-xs truncate">${t.description || '--'}</td>
+                <td class="p-3.5 text-xs text-slate-500 max-w-xs truncate">${adminEsc(t.description || '--')}</td>
                 <td class="p-3.5 text-right whitespace-nowrap">
                     <div class="flex items-center justify-end gap-1">
-                        <button type="button" onclick="openVisitorHistoryModal(decodeURIComponent('${encodeURIComponent(holderName)}'), '${t.rfid_uid}', decodeURIComponent('${encodeURIComponent(holderPlate)}'), 'Tag Inventory Audit')" class="px-2 py-1 rounded-lg text-blue-700 bg-blue-50 hover:bg-blue-600 hover:text-white border border-blue-200 transition-all text-xs font-bold flex items-center gap-1 shadow-xs" title="View complete visit history and frequency">
+                        <button type="button" onclick="openVisitorHistoryModal(decodeURIComponent('${adminUriAttr(holderName)}'), decodeURIComponent('${adminUriAttr(t.rfid_uid || '')}'), decodeURIComponent('${adminUriAttr(holderPlate)}'), 'Tag Inventory Audit')" class="px-2 py-1 rounded-lg text-blue-700 bg-blue-50 hover:bg-blue-600 hover:text-white border border-blue-200 transition-all text-xs font-bold flex items-center gap-1 shadow-xs" title="View complete visit history and frequency">
                             <i data-lucide="history" class="w-3.5 h-3.5"></i>
                             <span>History</span>
                         </button>
                         ${canVacate && !isEmergency ? `
-                            <button onclick="resetSpecialTagToVacant('${t.id}', '${t.rfid_uid}')" class="px-2 py-1 rounded-lg text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 transition-all text-xs font-bold flex items-center gap-1 shadow-sm" title="Reset tag to Vacant / Reusable state">
+                            <button onclick="resetSpecialTagToVacant('${adminEsc(t.id)}', decodeURIComponent('${adminUriAttr(t.rfid_uid || '')}'))" class="px-2 py-1 rounded-lg text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 transition-all text-xs font-bold flex items-center gap-1 shadow-sm" title="Reset tag to Vacant / Reusable state">
                                 <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i>
                                 <span>Vacate</span>
                             </button>
                         ` : ''}
-                        <button onclick="editSpecialTag('${t.id}')" class="p-1.5 rounded-lg text-slate-500 hover:text-charm-dark hover:bg-slate-100 transition-colors" title="Edit Tag">
+                        <button onclick="editSpecialTag('${adminEsc(t.id)}')" class="p-1.5 rounded-lg text-slate-500 hover:text-charm-dark hover:bg-slate-100 transition-colors" title="Edit Tag">
                             <i data-lucide="pencil" class="w-4 h-4"></i>
                         </button>
-                        <button onclick="deleteSpecialTag('${t.id}')" class="p-1.5 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete Tag">
+                        <button onclick="deleteSpecialTag('${adminEsc(t.id)}')" class="p-1.5 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete Tag">
                             <i data-lucide="trash-2" class="w-4 h-4"></i>
                         </button>
                     </div>
@@ -4171,7 +4460,7 @@ window.renderVisitorHistoryTable = function() {
         if (typeFilter === 'VISITOR' && isEmg) return false;
         if (typeFilter === 'EMERGENCY' && !isEmg) return false;
         if (typeFilter === 'TODAY') {
-            if (!l.timestamp || new Date(l.timestamp).toDateString() !== new Date().toDateString()) {
+            if (!l.timestamp || adminManilaDateKey(l.timestamp) !== adminManilaDateKey()) {
                 return false;
             }
         }
@@ -4229,9 +4518,9 @@ window.renderVisitorHistoryTable = function() {
 
     table.innerHTML = filtered.map(l => {
         const enterTime = l.timestamp ? new Date(l.timestamp) : new Date();
-        const isToday = enterTime.toDateString() === new Date().toDateString();
-        const dateStr = isToday ? 'Today' : enterTime.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
-        const timeStr = enterTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const isToday = adminManilaDateKey(enterTime) === adminManilaDateKey();
+        const dateStr = isToday ? 'Today' : formatManilaDate(enterTime);
+        const timeStr = formatManilaTime(enterTime, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
         const rem = l.remarks || '';
         const isEmg = rem.toLowerCase().includes('emergency') || l.users?.role === 'EMERGENCY' || l.user_type === 'EMERGENCY';
@@ -4262,10 +4551,10 @@ window.renderVisitorHistoryTable = function() {
         }
 
         const isEntry = l.direction === 'ENTRY';
-        const isAutoResolved = !isEntry && (l.gate === 'AUTO_RESOLVED_EXIT' || rem.includes('[AUTO_RESOLVED_EXIT]'));
+        const isAutoResolved = !isEntry && isSyntheticAutoExit(l);
         let eventBadge = '';
         if (isAutoResolved) {
-            eventBadge = `<span class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-purple-100 text-purple-800 border border-purple-300 shadow-sm" title="${rem}">AUTO EXIT</span>`;
+            eventBadge = `<span class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-purple-100 text-purple-800 border border-purple-300 shadow-sm" title="${adminEsc(rem)}">AUTO EXIT</span>`;
         } else if (isEntry) {
             eventBadge = `<span class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-sm flex items-center gap-1 w-fit mx-auto"><i data-lucide="arrow-down-right" class="w-3 h-3"></i> ENTRY</span>`;
         } else {
@@ -4287,12 +4576,12 @@ window.renderVisitorHistoryTable = function() {
                 </td>
                 <td class="p-3.5">
                     <div class="flex items-center gap-2.5">
-                        <div class="w-8 h-8 rounded-full ${isEmg ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-700'} flex items-center justify-center font-bold text-xs shrink-0 shadow-sm cursor-pointer hover:scale-105 transition-transform" onclick="openVisitorHistoryModal(decodeURIComponent('${encodeURIComponent(name)}'), '${l.rfid_uid || ''}', decodeURIComponent('${encodeURIComponent(plate || '')}'), decodeURIComponent('${encodeURIComponent(purpose || '')}'))" title="Click to view complete visit history">
+                        <div class="w-8 h-8 rounded-full ${isEmg ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-700'} flex items-center justify-center font-bold text-xs shrink-0 shadow-sm cursor-pointer hover:scale-105 transition-transform" onclick="openVisitorHistoryModal(decodeURIComponent('${adminUriAttr(name)}'), decodeURIComponent('${adminUriAttr(l.rfid_uid || '')}'), decodeURIComponent('${adminUriAttr(plate || '')}'), decodeURIComponent('${adminUriAttr(purpose || '')}'))" title="Click to view complete visit history">
                             <i data-lucide="${isEmg ? 'siren' : 'user'}" class="w-4 h-4"></i>
                         </div>
                         <div>
-                            <div class="font-bold text-slate-800 text-xs hover:text-blue-700 hover:underline cursor-pointer flex items-center gap-1.5 flex-wrap" onclick="openVisitorHistoryModal(decodeURIComponent('${encodeURIComponent(name)}'), '${l.rfid_uid || ''}', decodeURIComponent('${encodeURIComponent(plate || '')}'), decodeURIComponent('${encodeURIComponent(purpose || '')}'))" title="Click to view when and how many times this visitor entered">
-                                <span>${name}</span>
+                            <div class="font-bold text-slate-800 text-xs hover:text-blue-700 hover:underline cursor-pointer flex items-center gap-1.5 flex-wrap" onclick="openVisitorHistoryModal(decodeURIComponent('${adminUriAttr(name)}'), decodeURIComponent('${adminUriAttr(l.rfid_uid || '')}'), decodeURIComponent('${adminUriAttr(plate || '')}'), decodeURIComponent('${adminUriAttr(purpose || '')}'))" title="Click to view when and how many times this visitor entered">
+                                <span>${adminEsc(name)}</span>
                                 <span class="px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-800 text-[10px] font-black tracking-wide border border-blue-200">${visitBadge}</span>
                             </div>
                             <div class="text-[10px] text-slate-400 font-medium">${isEmg ? 'Emergency Pass' : 'Visitor Pass'}</div>
@@ -4310,17 +4599,17 @@ window.renderVisitorHistoryTable = function() {
                             <i data-lucide="footprints" class="w-3.5 h-3.5 text-slate-400"></i> Walk-in
                         </span>
                     ` : `
-                        <span class="font-mono text-xs font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">${plate}</span>
+                        <span class="font-mono text-xs font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">${adminEsc(plate)}</span>
                     `}
                 </td>
-                <td class="p-3.5 text-xs text-slate-600 max-w-xs truncate" title="${purpose}">${purpose}</td>
+                <td class="p-3.5 text-xs text-slate-600 max-w-xs truncate" title="${adminEsc(purpose)}">${adminEsc(purpose)}</td>
                 <td class="p-3.5 text-center">${eventBadge}</td>
-                <td class="p-3.5 text-xs font-semibold text-slate-600">${gateLabel}</td>
+                <td class="p-3.5 text-xs font-semibold text-slate-600">${adminEsc(gateLabel)}</td>
                 <td class="p-3.5">
-                    <span class="font-mono text-xs font-bold text-slate-600 bg-slate-50 px-2 py-0.5 rounded border border-slate-200" title="${l.rfid_uid || ''}">${l.rfid_uid || '--'}</span>
+                    <span class="font-mono text-xs font-bold text-slate-600 bg-slate-50 px-2 py-0.5 rounded border border-slate-200" title="${adminEsc(l.rfid_uid || '')}">${adminEsc(l.rfid_uid || '--')}</span>
                 </td>
                 <td class="p-3.5 text-right whitespace-nowrap">
-                    <button type="button" onclick="openVisitorHistoryModal(decodeURIComponent('${encodeURIComponent(name)}'), '${l.rfid_uid || ''}', decodeURIComponent('${encodeURIComponent(plate || '')}'), decodeURIComponent('${encodeURIComponent(purpose || '')}'))" class="px-2.5 py-1.5 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white border border-blue-200 transition-all text-xs font-bold flex items-center gap-1.5 shadow-xs ml-auto cursor-pointer" title="Click to see all entry dates, times, and total campus visits">
+                    <button type="button" onclick="openVisitorHistoryModal(decodeURIComponent('${adminUriAttr(name)}'), decodeURIComponent('${adminUriAttr(l.rfid_uid || '')}'), decodeURIComponent('${adminUriAttr(plate || '')}'), decodeURIComponent('${adminUriAttr(purpose || '')}'))" class="px-2.5 py-1.5 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white border border-blue-200 transition-all text-xs font-bold flex items-center gap-1.5 shadow-xs ml-auto cursor-pointer" title="Click to see all entry dates, times, and total campus visits">
                         <i data-lucide="history" class="w-3.5 h-3.5"></i>
                         <span>History (${totalVisits})</span>
                     </button>
@@ -4336,12 +4625,32 @@ window.resetSpecialTagToVacant = async function(id, uid) {
     if (!confirm(`Reset visitor tag (${uid}) back to Vacant / Reusable state?`)) return;
     try {
         showToast('Resetting tag to Vacant state...', 'info');
+        const cleanUid = (uid || '').replace(/[\s:-]/g, '').toUpperCase();
+        const insideList = window.currentInsideRoster || recomputeAdminOccupancy();
+        const openSession = insideList.find(e => (e.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase() === cleanUid);
+
         if (isConnected && supabaseClient) {
             const { error } = await supabaseClient.from('special_tags').update({
                 label: 'Reusable Visitor Tag',
                 description: null
             }).eq('id', id);
             if (error) throw error;
+
+            // Also close any unclosed campus ENTRY session so the tag transitions to VACANT immediately
+            if (openSession) {
+                const holderMatch = openSession.remarks?.match(/Visitor (?:Entry|Exit):\s*([^|]+)/i);
+                const holderLabel = holderMatch ? holderMatch[1].trim() : 'Visitor';
+                await supabaseClient.from('transactions').insert([{
+                    rfid_uid: openSession.rfid_uid || uid,
+                    rfid_type: openSession.rfid_type || 'CLOSE_RANGE',
+                    user_type: openSession.user_type || 'VISITOR',
+                    direction: 'EXIT',
+                    status: 'AUTHORIZED',
+                    gate: 'ADMIN_VACATE',
+                    remarks: `Visitor Exit: ${holderLabel} | Manually vacated by Administrator`,
+                    timestamp: new Date().toISOString()
+                }]);
+            }
         }
 
         const tagIdx = adminState.specialTags.findIndex(t => t.id === id);
@@ -4349,10 +4658,26 @@ window.resetSpecialTagToVacant = async function(id, uid) {
             adminState.specialTags[tagIdx].label = 'Reusable Visitor Tag';
             adminState.specialTags[tagIdx].description = null;
         }
+        if (openSession) {
+            const exitTx = {
+                id: 'LOCAL-VACATE-' + Date.now(),
+                rfid_uid: openSession.rfid_uid || uid,
+                rfid_type: openSession.rfid_type || 'CLOSE_RANGE',
+                user_type: openSession.user_type || 'VISITOR',
+                direction: 'EXIT',
+                status: 'AUTHORIZED',
+                gate: 'ADMIN_VACATE',
+                remarks: 'Visitor Exit: Manually vacated by Administrator',
+                timestamp: new Date().toISOString()
+            };
+            adminState.logs.unshift(exitTx);
+            adminState.activeInsideEntities = null;
+            recomputeAdminOccupancy();
+        }
 
         showToast('Tag reset to Vacant (Ready for next visitor)', 'success');
-        renderSpecialTags();
         if (isConnected) await loadData();
+        else renderAdmin();
     } catch(err) {
         console.error('Error resetting special tag:', err);
         showToast('Error resetting tag: ' + err.message, 'error');
@@ -4381,8 +4706,8 @@ window.exportVisitorHistoryCSV = function() {
     const headers = ['Date', 'Time', 'Visitor Name', 'Category', 'Vehicle Plate', 'Purpose', 'Event', 'Gate', 'RFID UID', 'Remarks'];
     const rows = visitorLogs.map(l => {
         const dt = l.timestamp ? new Date(l.timestamp) : new Date();
-        const dateStr = dt.toISOString().slice(0, 10);
-        const timeStr = dt.toLocaleTimeString([], { hour12: false });
+        const dateStr = adminManilaDateKey(dt);
+        const timeStr = formatManilaTime(dt, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
         let name = l.users?.full_name || '';
         const vMatch = (l.remarks || '').match(/Visitor (?:Entry|Exit):\s*([^|]+)/i) || (l.remarks || '').match(/Emergency (?:tag|Response):\s*([^|]+)/i);
@@ -4393,27 +4718,20 @@ window.exportVisitorHistoryCSV = function() {
         let purpose = (l.remarks || '').match(/Purpose:\s*([^|]+)/i)?.[1]?.trim() || ((l.remarks || '').includes('Emergency') ? 'Emergency Response' : 'Campus Visit');
 
         return [
-            dateStr,
-            timeStr,
-            `"${name.replace(/"/g, '""')}"`,
-            (l.remarks || '').includes('Emergency') ? 'EMERGENCY' : 'VISITOR',
-            `"${plate}"`,
-            `"${purpose.replace(/"/g, '""')}"`,
-            l.direction || 'ENTRY',
-            `"${(l.gate || '').replace(/"/g, '""')}"`,
-            `"${l.rfid_uid || ''}"`,
-            `"${(l.remarks || '').replace(/"/g, '""')}"`
+            `"${dateStr}"`,
+            `"${timeStr}"`,
+            `"${String(name).replace(/"/g, '""')}"`,
+            `"${(l.remarks || '').includes('Emergency') ? 'EMERGENCY' : 'VISITOR'}"`,
+            `"${String(plate).replace(/"/g, '""')}"`,
+            `"${String(purpose).replace(/"/g, '""')}"`,
+            `"${l.direction || 'ENTRY'}"`,
+            `"${String(l.gate || '').replace(/"/g, '""')}"`,
+            `"${String(l.rfid_uid || '').replace(/"/g, '""')}"`,
+            `"${String(l.remarks || '').replace(/"/g, '""')}"`
         ].join(',');
     });
 
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `CHARRMPASS_Visitor_History_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    downloadCsvBlob(`CHARRMPASS_Visitor_History_${adminManilaDateKey()}.csv`, [headers.join(','), ...rows].join('\n'));
     showToast(`Exported ${visitorLogs.length} visitor records to CSV!`, 'success');
 };
 
@@ -4623,15 +4941,15 @@ window.openReviewModal = function(id, targetType = 'PEDESTRIAN', vehicleId = nul
             const dirBadge = isEntry 
                 ? '<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800">ENTRY</span>' 
                 : '<span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-100 text-blue-800">EXIT</span>';
-            const timeStr = l.timestamp ? new Date(l.timestamp).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : '--';
-            const dateStr = l.timestamp ? new Date(l.timestamp).toLocaleDateString([], { month:'short', day:'numeric' }) : '';
+            const timeStr = l.timestamp ? formatManilaTime(l.timestamp) : '--';
+            const dateStr = l.timestamp ? formatManilaDate(l.timestamp, { month: 'short', day: 'numeric' }) : '';
             return `
             <tr class="hover:bg-slate-50">
                 <td class="p-3">${dirBadge}</td>
-                <td class="p-3 font-semibold text-slate-700">${l.gate || (isEntry ? 'Entry Gate #1' : 'Exit Gate #1')}</td>
+                <td class="p-3 font-semibold text-slate-700">${adminEsc(l.gate || (isEntry ? 'Entry Gate #1' : 'Exit Gate #1'))}</td>
                 <td class="p-3 text-slate-500">${dateStr} ${timeStr}</td>
-                <td class="p-3"><span class="px-2 py-0.5 rounded text-[10px] font-bold ${l.status==='AUTHORIZED'?'bg-emerald-50 text-emerald-700':'bg-red-50 text-red-700'}">${l.status||'AUTHORIZED'}</span></td>
-                <td class="p-3 text-slate-500">${l.remarks || 'Standard scan tap'}</td>
+                <td class="p-3"><span class="px-2 py-0.5 rounded text-[10px] font-bold ${l.status==='AUTHORIZED'?'bg-emerald-50 text-emerald-700':'bg-red-50 text-red-700'}">${adminEsc(l.status||'AUTHORIZED')}</span></td>
+                <td class="p-3 text-slate-500">${adminEsc(l.remarks || 'Standard scan tap')}</td>
             </tr>`;
         }).join('') : '<tr><td colspan="5" class="p-6 text-center text-slate-400">No gate tap logs recorded yet for this applicant.</td></tr>';
     }
@@ -4673,10 +4991,13 @@ window.openReviewModal = function(id, targetType = 'PEDESTRIAN', vehicleId = nul
                 : `Assign a physical UHF sticker (860-960MHz) ${veh ? `to vehicle plate ${veh.plate_number}` : ''} for automated vehicle drive-through.`;
         }
 
-        // Populate UID input with existing card of this type
+        // Populate UID input with existing card of this type (scoped to currentReviewVehicleId for multi-vehicle users)
         const userObj = adminState.users.find(x => x.id === currentReviewUserId);
         if (userObj) {
-            const cObj = (userObj.rfid_cards || []).find(c => c.rfid_type === type);
+            const cards = userObj.rfid_cards || [];
+            const cObj = type === 'LONG_RANGE'
+                ? ((currentReviewVehicleId && cards.find(c => c.vehicle_id === currentReviewVehicleId)) || cards.find(c => c.rfid_type === 'LONG_RANGE'))
+                : cards.find(c => !c.vehicle_id && c.rfid_type === 'CLOSE_RANGE');
             const val = (cObj?.rfid_uid && !cObj.rfid_uid.startsWith('UNASSIGNED_')) ? cObj.rfid_uid : '';
             if (el('revRfidUid')) {
                 el('revRfidUid').value = val;
@@ -5020,15 +5341,31 @@ window.generateTestUID = function() {
     }
 };
 
-window.printRegistrationSummary = function() {
+function printWithBodyClass(cls) {
+    document.body.classList.add(cls);
+    const cleanup = () => {
+        document.body.classList.remove(cls);
+        window.removeEventListener('afterprint', cleanup);
+    };
+    window.addEventListener('afterprint', cleanup);
     window.print();
+    setTimeout(cleanup, 1000);
+}
+
+window.printRegistrationSummary = function() {
+    printWithBodyClass('printing-review-modal');
+};
+
+window.viewFullImage = function(src) {
+    if (!src || String(src).startsWith('data:image/svg+xml')) return;
+    if (el('zoomImg')) el('zoomImg').src = src;
+    el('zoomModal')?.classList.remove('hidden');
 };
 
 window.zoomImage = function(container) {
-    const img = container.querySelector('img');
+    const img = container?.querySelector ? container.querySelector('img') : null;
     if (!img || !img.src) return;
-    el('zoomImg').src = img.src;
-    el('zoomModal').classList.remove('hidden');
+    window.viewFullImage(img.src);
 };
 
 
@@ -5097,10 +5434,10 @@ window.openVisitorHistoryModal = function(visitorName, rfidUid, plate, purpose) 
 
     const authLogs = visitorLogs.filter(l => l.status === 'AUTHORIZED');
     const totalEntries = authLogs.filter(l => l.direction === 'ENTRY').length;
-    const totalExits = authLogs.filter(l => l.direction === 'EXIT').length;
+    const totalExits = authLogs.filter(l => l.direction === 'EXIT' && !isSyntheticAutoExit(l)).length;
 
-    const todayStr = new Date().toISOString().split('T')[0];
-    const todayLogs = visitorLogs.filter(l => l.timestamp && l.timestamp.startsWith(todayStr));
+    const todayStr = adminManilaDateKey();
+    const todayLogs = visitorLogs.filter(l => l.timestamp && adminManilaDateKey(l.timestamp) === todayStr);
 
     // Check if currently inside campus
     const insideList = window.currentInsideRoster || [];
@@ -5152,8 +5489,8 @@ window.openVisitorHistoryModal = function(visitorName, rfidUid, plate, purpose) 
 
     if (visitorLogs.length > 0) {
         const lastLog = visitorLogs[0];
-        const lastTime = lastLog.timestamp ? new Date(lastLog.timestamp).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : '--';
-        const lastDate = lastLog.timestamp ? new Date(lastLog.timestamp).toLocaleDateString([], { month:'short', day:'numeric' }) : '';
+        const lastTime = lastLog.timestamp ? formatManilaTime(lastLog.timestamp) : '--';
+        const lastDate = lastLog.timestamp ? formatManilaDate(lastLog.timestamp, { month: 'short', day: 'numeric' }) : '';
         if (el('histLastActivity')) el('histLastActivity').textContent = `${lastLog.direction || 'SCAN'} via ${lastLog.gate || 'Gate'}`;
         if (el('histLastTimestamp')) el('histLastTimestamp').textContent = `${lastDate} at ${lastTime}`;
     } else {
@@ -5175,49 +5512,17 @@ window.openVisitorHistoryModal = function(visitorName, rfidUid, plate, purpose) 
     if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
 };
 
-window.openUserHistoryModal = function(userId) {
-    if (!userId) return;
-    let u = adminState.users.find(x => x.id === userId) || adminState.pendingUsers.find(x => x.id === userId);
-    if (!u) {
-        if (typeof window.openVisitorHistoryModal === 'function') {
-            window.openVisitorHistoryModal(userId);
-            return;
-        }
-        showToast('User not found.', 'error');
-        return;
-    }
-
-    activeUserHistoryData.user = u;
-    activeUserHistoryData.direction = 'ALL';
-
-    // Header Profile Elements
-    const avatar = u.profile_image || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.full_name)}&background=random`;
-    if (el('histUserAvatar')) el('histUserAvatar').src = avatar;
-    if (el('histUserName')) el('histUserName').textContent = u.full_name || '--';
-    if (el('histUserRole')) el('histUserRole').textContent = (u.role || 'USER').toUpperCase();
-    if (el('histUserProgram')) el('histUserProgram').textContent = `${u.program || 'No Program'} ${u.section ? '• ' + u.section : ''}`;
-    if (el('histUserPlate')) el('histUserPlate').textContent = `PLATE: ${u.plate_number || 'NO PLATE'}`;
-    if (el('histUserUid')) el('histUserUid').textContent = `RFID: ${u.rfid_uid || 'NOT ASSIGNED'}`;
-
-    // Filter all logs for this specific user
-    const userLogs = adminState.logs.filter(l => 
-        (l.user_id && l.user_id === u.id) || 
-        (u.rfid_uid && l.rfid_uid === u.rfid_uid) ||
-        (u.plate_number && (l.vehicles?.plate_number === u.plate_number || l.remarks?.includes(u.plate_number)))
-    );
-
-    // Sort descending by timestamp
-    userLogs.sort((a,b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+function populateUserHistoryStats(u, userLogs) {
+    userLogs.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
     activeUserHistoryData.logs = userLogs;
 
-    // Presence & KPI Calculations
     const onCampus = isUserOnCampus(u);
     const authLogs = userLogs.filter(l => l.status === 'AUTHORIZED');
     const totalEntries = authLogs.filter(l => l.direction === 'ENTRY').length;
-    const totalExits = authLogs.filter(l => l.direction === 'EXIT').length;
+    const totalExits = authLogs.filter(l => l.direction === 'EXIT' && !isSyntheticAutoExit(l)).length;
 
-    const todayStr = new Date().toISOString().split('T')[0];
-    const todayLogs = userLogs.filter(l => l.timestamp && l.timestamp.startsWith(todayStr));
+    const todayStr = adminManilaDateKey();
+    const todayLogs = userLogs.filter(l => l.timestamp && adminManilaDateKey(l.timestamp) === todayStr);
 
     if (el('histPresencePill')) {
         if (onCampus) {
@@ -5235,8 +5540,8 @@ window.openUserHistoryModal = function(userId) {
 
     if (userLogs.length > 0) {
         const lastLog = userLogs[0];
-        const lastTime = lastLog.timestamp ? new Date(lastLog.timestamp).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : '--';
-        const lastDate = lastLog.timestamp ? new Date(lastLog.timestamp).toLocaleDateString([], { month:'short', day:'numeric' }) : '';
+        const lastTime = lastLog.timestamp ? formatManilaTime(lastLog.timestamp) : '--';
+        const lastDate = lastLog.timestamp ? formatManilaDate(lastLog.timestamp, { month: 'short', day: 'numeric' }) : '';
         if (el('histLastActivity')) el('histLastActivity').textContent = `${lastLog.direction || 'SCAN'} via ${lastLog.gate || 'Gate'}`;
         if (el('histLastTimestamp')) el('histLastTimestamp').textContent = `${lastDate} at ${lastTime}`;
     } else {
@@ -5244,16 +5549,85 @@ window.openUserHistoryModal = function(userId) {
         if (el('histLastTimestamp')) el('histLastTimestamp').textContent = '--';
     }
 
-    // Reset Direction Filter
-    setUserHistDirection('ALL');
+    setUserHistDirection(activeUserHistoryData.direction || 'ALL');
+}
+
+window.openUserHistoryModal = function(userId) {
+    if (!userId) return;
+    let u = adminState.users.find(x => x.id === userId) || (adminState.pendingUsers || []).find(x => x.id === userId);
+    if (!u) {
+        if (typeof window.openVisitorHistoryModal === 'function') {
+            window.openVisitorHistoryModal(userId);
+            return;
+        }
+        showToast('User not found.', 'error');
+        return;
+    }
+
+    activeUserHistoryData.user = u;
+    activeUserHistoryData.direction = 'ALL';
+
+    const userUids = new Set(
+        [u.rfid_uid, ...(u.rfid_cards || []).map(c => c.rfid_uid)]
+            .filter(Boolean)
+            .filter(uid => !String(uid).startsWith('UNASSIGNED_'))
+            .map(uid => String(uid).replace(/[\s:-]/g, '').toUpperCase())
+    );
+    const userPlates = new Set(
+        [u.plate_number, ...(u.vehicles || []).map(v => v.plate_number)]
+            .filter(Boolean)
+            .filter(p => p !== 'PEDESTRIAN' && p !== 'None')
+            .map(p => String(p).replace(/[-\s]/g, '').toUpperCase())
+    );
+
+    const avatar = u.profile_image || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.full_name || 'User')}&background=random`;
+    if (el('histUserAvatar')) el('histUserAvatar').src = avatar;
+    if (el('histUserName')) el('histUserName').textContent = u.full_name || '--';
+    if (el('histUserRole')) el('histUserRole').textContent = (u.role || 'USER').toUpperCase();
+    if (el('histUserProgram')) el('histUserProgram').textContent = `${u.program || 'No Program'} ${u.section ? '• ' + u.section : ''}`;
+    if (el('histUserPlate')) el('histUserPlate').textContent = `PLATE: ${[...userPlates][0] || u.plate_number || 'NO PLATE'}`;
+    if (el('histUserUid')) el('histUserUid').textContent = `RFID: ${[...userUids][0] || 'NOT ASSIGNED'}`;
+
+    const userLogs = (adminState.logs || []).filter(l => {
+        if (l.user_id && l.user_id === u.id) return true;
+        const cleanUid = (l.rfid_uid || '').replace(/[\s:-]/g, '').toUpperCase();
+        if (cleanUid && userUids.has(cleanUid)) return true;
+        const cleanPlate = (l.vehicles?.plate_number || '').replace(/[-\s]/g, '').toUpperCase();
+        if (cleanPlate && userPlates.has(cleanPlate)) return true;
+        return false;
+    });
+
+    populateUserHistoryStats(u, userLogs);
+
+    // Fetch full DB history for this user so scans older than the live 1,000-row feed also appear
+    if (isConnected && supabaseClient) {
+        supabaseClient
+            .from('transactions')
+            .select('*, users(id, full_name, role, program, section), vehicles(plate_number, vehicle_type, vehicle_model)')
+            .eq('user_id', u.id)
+            .order('timestamp', { ascending: false })
+            .limit(1000)
+            .then(({ data }) => {
+                if (data && data.length && activeUserHistoryData.user?.id === u.id) {
+                    const mergedMap = new Map();
+                    [...data, ...userLogs].forEach(item => {
+                        mergedMap.set(item.id || `${item.rfid_uid}_${item.timestamp}`, item);
+                    });
+                    populateUserHistoryStats(u, Array.from(mergedMap.values()));
+                }
+            })
+            .catch(() => {});
+    }
 
     const modal = el('userHistoryModal');
-    modal.classList.remove('hidden');
-    setTimeout(() => { 
-        modal.classList.add('opacity-100'); 
-        el('userHistoryModalContent').classList.remove('scale-95'); 
-    }, 10);
-    lucide.createIcons();
+    if (modal) {
+        modal.classList.remove('hidden');
+        setTimeout(() => { 
+            modal.classList.add('opacity-100'); 
+            el('userHistoryModalContent')?.classList.remove('scale-95'); 
+        }, 10);
+    }
+    if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
 };
 
 window.closeUserHistoryModal = function() {
@@ -5331,8 +5705,8 @@ window.filterUserHistoryTable = function() {
                 : '<span class="px-2 py-0.5 rounded text-[10px] font-extrabold bg-red-50 text-red-700 border border-red-200">DENIED</span>';
 
             const dateObj = l.timestamp ? new Date(l.timestamp) : new Date();
-            const dateFormatted = dateObj.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
-            const timeFormatted = dateObj.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+            const dateFormatted = formatManilaDate(dateObj);
+            const timeFormatted = formatManilaTime(dateObj, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
             // Relative time calculation
             const diffMs = Date.now() - dateObj.getTime();
@@ -5370,7 +5744,7 @@ window.filterUserHistoryTable = function() {
                 <td class="p-3.5 font-bold text-slate-700">
                     <div class="flex items-center gap-1.5">
                         <i data-lucide="${isEntry ? 'log-in' : 'log-out'}" class="w-3.5 h-3.5 text-slate-400"></i>
-                        <span>${l.gate || (isEntry ? 'CHARRMPASS Entry Gate #1' : 'CHARRMPASS Exit Gate #1')}</span>
+                        <span>${adminEsc(l.gate || (isEntry ? 'CHARRMPASS Entry Gate #1' : 'CHARRMPASS Exit Gate #1'))}</span>
                     </div>
                 </td>
                 <td class="p-3.5">
@@ -5384,7 +5758,7 @@ window.filterUserHistoryTable = function() {
                     ${statusBadge}
                 </td>
                 <td class="p-3.5 text-slate-600 font-medium">
-                    ${l.remarks || 'Standard RFID gate scan'}
+                    ${adminEsc(l.remarks || 'Standard RFID gate scan')}
                 </td>
             </tr>`;
         }).join('');
@@ -5404,29 +5778,23 @@ window.exportSingleUserLogsCSV = function() {
     const rows = logs.map(l => [
         `"${l.timestamp || ''}"`,
         `"${l.direction || 'ENTRY'}"`,
-        `"${l.gate || 'Gate'}"`,
+        `"${String(l.gate || 'Gate').replace(/"/g, '""')}"`,
         `"${l.status || 'AUTHORIZED'}"`,
-        `"${(u.full_name || '').replace(/"/g, '""')}"`,
-        `"${u.role || ''}"`,
-        `"${u.plate_number || ''}"`,
-        `"${u.rfid_uid || ''}"`,
-        `"${(l.remarks || '').replace(/"/g, '""')}"`
+        `"${String(u.full_name || '').replace(/"/g, '""')}"`,
+        `"${String(u.role || '').replace(/"/g, '""')}"`,
+        `"${String(l.vehicles?.plate_number || u.plate_number || '').replace(/"/g, '""')}"`,
+        `"${String(l.rfid_uid || u.rfid_uid || '').replace(/"/g, '""')}"`,
+        `"${String(l.remarks || '').replace(/"/g, '""')}"`
     ]);
 
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    const dateStr = new Date().toISOString().split('T')[0];
-    link.setAttribute('download', `charrmpass_logs_${(u.full_name||'user').toLowerCase().replace(/\s+/g,'_')}_${dateStr}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const dateStr = adminManilaDateKey();
+    const safeSlug = String(u.full_name || 'user').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+    downloadCsvBlob(`charrmpass_logs_${safeSlug}_${dateStr}.csv`, [headers.join(','), ...rows.map(e => e.join(','))].join('\n'));
     showToast(`Exported ${logs.length} log records for ${u.full_name}`, 'success');
 };
 
 window.printSingleUserHistory = function() {
-    window.print();
+    printWithBodyClass('printing-user-history');
 };
 
 window.exportAllUsersCSV = function() {
@@ -5435,57 +5803,63 @@ window.exportAllUsersCSV = function() {
         return;
     }
 
-    const headers = ['User ID', 'Full Name', 'Role', 'Age', 'Sex', 'Program', 'Section', 'Address', 'Plate Number', 'Vehicle Type', 'Vehicle Model', 'Vehicle Color', 'RFID UID', 'Authorization Status', 'Registered Date'];
-    const rows = adminState.users.map(u => [
-        `"${u.id || ''}"`,
-        `"${(u.full_name || '').replace(/"/g, '""')}"`,
-        `"${u.role || ''}"`,
-        `"${u.age || ''}"`,
-        `"${u.sex || ''}"`,
-        `"${(u.program || '').replace(/"/g, '""')}"`,
-        `"${(u.section || '').replace(/"/g, '""')}"`,
-        `"${(u.address || '').replace(/"/g, '""')}"`,
-        `"${u.plate_number || ''}"`,
-        `"${u.vehicle_type || ''}"`,
-        `"${(u.vehicle_model || '').replace(/"/g, '""')}"`,
-        `"${(u.vehicle_color || '').replace(/"/g, '""')}"`,
-        `"${u.rfid_uid || ''}"`,
-        `"${u.authorization_status || 'PENDING'}"`,
-        `"${u.created_at || ''}"`
-    ]);
+    const headers = ['CPASS ID', 'User ID', 'Full Name', 'Role', 'Age', 'Sex', 'Program', 'Section', 'Address', 'Plates', 'Vehicle Types', 'RFID UIDs', 'Authorization Status', 'Registered Date'];
+    const rows = adminState.users.map(u => {
+        const plates = (u.vehicles || []).map(v => v.plate_number).filter(Boolean).join('; ') || u.plate_number || '';
+        const vTypes = (u.vehicles || []).map(v => v.vehicle_type).filter(Boolean).join('; ') || u.vehicle_type || '';
+        const uids = (u.rfid_cards || []).map(c => c.rfid_uid).filter(uid => uid && !uid.startsWith('UNASSIGNED_')).join('; ') || u.rfid_uid || '';
+        return [
+            `"${String(u.cpass_id || u.student_id || '').replace(/"/g, '""')}"`,
+            `"${u.id || ''}"`,
+            `"${String(u.full_name || '').replace(/"/g, '""')}"`,
+            `"${String(u.role || '').replace(/"/g, '""')}"`,
+            `"${u.age || ''}"`,
+            `"${u.sex || ''}"`,
+            `"${String(u.program || '').replace(/"/g, '""')}"`,
+            `"${String(u.section || '').replace(/"/g, '""')}"`,
+            `"${String(u.address || '').replace(/"/g, '""')}"`,
+            `"${String(plates).replace(/"/g, '""')}"`,
+            `"${String(vTypes).replace(/"/g, '""')}"`,
+            `"${String(uids).replace(/"/g, '""')}"`,
+            `"${u.authorization_status || 'PENDING'}"`,
+            `"${u.created_at || ''}"`
+        ];
+    });
 
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    const dateStr = new Date().toISOString().split('T')[0];
-    link.setAttribute('download', `charrmpass_registered_users_${dateStr}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const dateStr = adminManilaDateKey();
+    downloadCsvBlob(`charrmpass_registered_users_${dateStr}.csv`, [headers.join(','), ...rows.map(e => e.join(','))].join('\n'));
     showToast(`Exported ${adminState.users.length} users to CSV`, 'success');
 };
 
-// Account Modal logic (Guard Credentials Management)
+// Account Modal logic (Guard Credentials Management — never prefill plaintext passwords)
 window.openAccountModal = function(id = null) {
     const m = el('accountModal');
     if (!m) return;
     el('accountForm').reset();
     const modalTitle = el('accountModalContent')?.querySelector('h3');
+    const passInput = el('formAccPass');
     
     if (id) {
         const acc = adminState.accounts.find(a => a.id === id);
         if (acc) {
             el('formAccId').value = acc.id;
             el('formAccUser').value = acc.username || '';
-            el('formAccPass').value = acc.password || '';
+            if (passInput) {
+                passInput.value = '';
+                passInput.required = false;
+                passInput.placeholder = 'Leave blank to keep current password';
+            }
             el('formAccRole').value = acc.role || 'GUARD';
             if (modalTitle) modalTitle.textContent = `Edit Guard Account (${acc.username})`;
         }
     } else {
         el('formAccId').value = '';
         el('formAccUser').value = '';
-        el('formAccPass').value = '';
+        if (passInput) {
+            passInput.value = '';
+            passInput.required = true;
+            passInput.placeholder = 'Enter guard password';
+        }
         el('formAccRole').value = 'GUARD';
         if (modalTitle) modalTitle.textContent = 'Add New Guard Account';
     }
@@ -5514,8 +5888,12 @@ window.deleteAccount = async function(id) {
 
     if (isConnected) {
         try {
-            const { error } = await supabaseClient.from('system_accounts').delete().eq('id', id);
-            if (error) throw error;
+            if (typeof deleteSystemAccount === 'function') {
+                await deleteSystemAccount(id, supabaseClient);
+            } else {
+                const { error } = await supabaseClient.from('system_accounts').delete().eq('id', id);
+                if (error) throw error;
+            }
             showToast(`Guard account "${name}" deleted!`, 'success');
             await loadData();
             renderAll();
@@ -5536,28 +5914,28 @@ el('accountForm')?.addEventListener('submit', async (e) => {
     const password = el('formAccPass').value.trim();
     const role = el('formAccRole').value || 'GUARD';
 
-    if (!username || !password) {
+    if (!username || (!id && !password)) {
         showToast('Username and password are required', 'warning');
         return;
     }
 
     try {
         if (isConnected) {
-            const now = new Date().toISOString();
-            if (id) {
-                const { error } = await supabaseClient
-                    .from('system_accounts')
-                    .update({ username, password, role, updated_at: now })
-                    .eq('id', id);
-                if (error) throw error;
-                showToast(`Guard account "${username}" updated!`, 'success');
+            if (typeof upsertSystemAccount === 'function') {
+                await upsertSystemAccount({ id: id || null, username, password: password || null, role }, supabaseClient);
             } else {
-                const { error } = await supabaseClient
-                    .from('system_accounts')
-                    .insert({ username, password, role, updated_at: now });
-                if (error) throw error;
-                showToast(`New guard account "${username}" created!`, 'success');
+                const now = new Date().toISOString();
+                const updateFields = { username, role, updated_at: now };
+                if (password) updateFields.password = password;
+                if (id) {
+                    const { error } = await supabaseClient.from('system_accounts').update(updateFields).eq('id', id);
+                    if (error) throw error;
+                } else {
+                    const { error } = await supabaseClient.from('system_accounts').insert({ ...updateFields, password });
+                    if (error) throw error;
+                }
             }
+            showToast(id ? `Guard account "${username}" updated!` : `New guard account "${username}" created!`, 'success');
             closeAccountModal(); 
             await loadData();
             renderAll();
@@ -5638,7 +6016,7 @@ window.appendBleLog = function(message, type = 'info') {
     logEntry.innerHTML = `
         <span class="text-slate-500 select-none text-[11px] font-mono">[${getTimestampStr()}]</span>
         <span class="font-mono text-xs select-none">${prefix}</span>
-        <span class="flex-1 font-mono text-xs break-all">${message}</span>
+        <span class="flex-1 font-mono text-xs break-all">${adminEsc(message)}</span>
     `;
 
     logsContainer.appendChild(logEntry);
@@ -6084,32 +6462,47 @@ window.renderEsp32DevicesTable = function() {
     const tableBody = el('esp32DevicesTable');
     const devices = adminState.devices || [];
 
-    // Update target device dropdown
+    const isUhfDevice = (d) => {
+        if (!d) return false;
+        const range = String(d.rfid_range || '').toUpperCase();
+        const cat = String(d.device_category || '').toUpperCase();
+        const id = String(d.esp32_identifier || '').toUpperCase();
+        return range.includes('LONG_RANGE') || range.includes('UHF') || range.includes('860') || range.includes('900') ||
+               cat.includes('VEHICLE') ||
+               id === 'CHARRMPASS_GATE_01' || id === 'CHARRMPASS_GATE_02' || id.includes('UHF') || id.includes('VEHICLE') ||
+               d.gate_type === 'ENTRY_EXIT' || d.gate_type === 'BIDIRECTIONAL';
+    };
+
+    // Update target device dropdown with explicit BLE advertisement names for Entry vs Exit UHF units
     const devSelect = el('bleTargetDeviceType');
     if (devSelect && devices.length > 0) {
         const currentVal = devSelect.value;
-        devSelect.innerHTML = devices.map(d => `
-            <option value="${d.esp32_identifier || d.gate_type}">${d.device_name || d.esp32_identifier} (${d.gate_type || 'GATE'})</option>
-        `).join('') + `<option value="CUSTOM">Custom IoT Device (R.A.N. / EnerCharge Node)</option>`;
-        if (currentVal) devSelect.value = currentVal;
+        devSelect.innerHTML = devices.map(d => {
+            const uhf = isUhfDevice(d);
+            const isExit = d.gate_type === 'EXIT' || String(d.esp32_identifier || '').includes('02') || String(d.device_category || '').toUpperCase().includes('EXIT');
+            const bleHint = uhf
+                ? (isExit ? 'BLE: CHARRMPASS_UHF_EXIT' : 'BLE: CHARRMPASS_UHF_ENTRY')
+                : `${d.gate_type || 'GATE'} HF`;
+            return `<option value="${d.esp32_identifier || d.gate_type}">${d.device_name || d.esp32_identifier} (${bleHint})</option>`;
+        }).join('') + `<option value="CUSTOM">Custom IoT Device (R.A.N. / EnerCharge Node)</option>`;
+        if (currentVal && Array.from(devSelect.options).some(o => o.value === currentVal)) {
+            devSelect.value = currentVal;
+        }
     }
 
-    // Determine online status based on real database last_online or latest transaction
+    // Determine online status strictly from real database last_online or exact hardware gate identifier match
     const now = Date.now();
     let onlineCount = 0;
-
-    let entryGate = devices.find(d => (d.gate_type === 'ENTRY' || (d.esp32_identifier && d.esp32_identifier.includes('ENTRY'))));
-    let exitGate = devices.find(d => (d.gate_type === 'EXIT' || (d.esp32_identifier && d.esp32_identifier.includes('EXIT'))));
 
     // Calculate real activity for each device
     const deviceStatuses = devices.map(dev => {
         let lastSeenMs = dev.last_online ? new Date(dev.last_online).getTime() : 0;
-        
-        // Also check if any recent transaction matches this gate
-        const matchingTxn = adminState.logs.find(l => 
-            (l.gate && dev.esp32_identifier && l.gate.includes(dev.esp32_identifier)) ||
-            (l.direction === dev.gate_type)
-        );
+        const devIdUpper = String(dev.esp32_identifier || '').trim().toUpperCase();
+
+        // Match ONLY transactions explicitly reported by THIS hardware gate identifier
+        const matchingTxn = devIdUpper ? adminState.logs.find(l =>
+            l.gate && String(l.gate).trim().toUpperCase() === devIdUpper
+        ) : null;
         if (matchingTxn && matchingTxn.timestamp) {
             const txnMs = new Date(matchingTxn.timestamp).getTime();
             if (txnMs > lastSeenMs) lastSeenMs = txnMs;
@@ -6200,7 +6593,7 @@ window.renderEsp32DevicesTable = function() {
 
         // 4. Active Buzzer
         if (isUhf) {
-            if (isOnline) setBadge(`${prefix}BuzzerStatus`, (dev && dev.buzzer_status) || '3/3 MATCH BEEP (GPIO 27)', 'good');
+            if (isOnline) setBadge(`${prefix}BuzzerStatus`, (dev && dev.buzzer_status) || '3/3 MATCH BEEP (GPIO 15)', 'good');
             else if (isStandby) setBadge(`${prefix}BuzzerStatus`, 'STANDBY ARMED', 'good');
             else setBadge(`${prefix}BuzzerStatus`, 'LOCAL FEEDBACK', 'warn');
         } else {
@@ -6226,62 +6619,47 @@ window.renderEsp32DevicesTable = function() {
         }
     };
 
-    // 1. Entry Gate Unit
-    const entryDev = deviceStatuses.find(d => d.gate_type === 'ENTRY' || (d.esp32_identifier && d.esp32_identifier.includes('ENTRY')));
-    if (el('entryGateStatusBadge')) {
-        if (entryDev && entryDev.computedStatus === 'ONLINE') {
-            el('entryGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> ONLINE (Active)`;
-            el('entryGateStatusBadge').className = 'text-xs font-black text-emerald-700 flex items-center gap-1.5';
-            if (el('entryGateIpText')) el('entryGateIpText').textContent = `${entryDev.device_location || 'Entry Gate'} • ${entryDev.lastSeenText}`;
-        } else if (entryDev && entryDev.computedStatus === 'STANDBY') {
-            el('entryGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-500"></span> STANDBY`;
-            el('entryGateStatusBadge').className = 'text-xs font-black text-amber-700 flex items-center gap-1.5';
-            if (el('entryGateIpText')) el('entryGateIpText').textContent = `${entryDev.lastSeenText}`;
+    const updateCardHeaderState = (badgeId, ipTextId, dev, defaultLocation) => {
+        const badgeEl = el(badgeId);
+        if (!badgeEl) return;
+        if (dev && dev.computedStatus === 'ONLINE') {
+            badgeEl.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> ONLINE (Active)`;
+            badgeEl.className = 'text-xs font-black text-emerald-700 flex items-center gap-1.5';
+            if (el(ipTextId)) el(ipTextId).textContent = `${dev.device_location || defaultLocation}${dev.ip_address ? ` (${dev.ip_address})` : ''} • ${dev.lastSeenText}`;
+        } else if (dev && dev.computedStatus === 'STANDBY') {
+            badgeEl.innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-500"></span> STANDBY`;
+            badgeEl.className = 'text-xs font-black text-amber-700 flex items-center gap-1.5';
+            if (el(ipTextId)) el(ipTextId).textContent = `${dev.lastSeenText}`;
         } else {
-            el('entryGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-slate-400"></span> OFFLINE / STANDBY`;
-            el('entryGateStatusBadge').className = 'text-xs font-black text-slate-500 flex items-center gap-1.5';
-            if (el('entryGateIpText')) el('entryGateIpText').textContent = entryDev ? entryDev.lastSeenText : 'Offline Fallback Enabled';
+            badgeEl.innerHTML = `<span class="w-2 h-2 rounded-full bg-slate-400"></span> OFFLINE / STANDBY`;
+            badgeEl.className = 'text-xs font-black text-slate-500 flex items-center gap-1.5';
+            if (el(ipTextId)) el(ipTextId).textContent = dev ? dev.lastSeenText : 'Offline Fallback Enabled';
         }
-    }
+    };
+
+    // 1. Pedestrian Entry Gate Unit (13.56 MHz HF - strictly excludes UHF)
+    const entryDev = deviceStatuses.find(d => d.esp32_identifier === 'CHARRMPASS_GATE_ENTRY')
+        || deviceStatuses.find(d => !isUhfDevice(d) && d.gate_type === 'ENTRY');
+    updateCardHeaderState('entryGateStatusBadge', 'entryGateIpText', entryDev, 'Pedestrian Entry Gate');
     updateUnitComponents('entry', entryDev, false);
 
-    // 2. Exit Gate Unit
-    const exitDev = deviceStatuses.find(d => d.gate_type === 'EXIT' || (d.esp32_identifier && d.esp32_identifier.includes('EXIT')));
-    if (el('exitGateStatusBadge')) {
-        if (exitDev && exitDev.computedStatus === 'ONLINE') {
-            el('exitGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> ONLINE (Active)`;
-            el('exitGateStatusBadge').className = 'text-xs font-black text-emerald-700 flex items-center gap-1.5';
-            if (el('exitGateIpText')) el('exitGateIpText').textContent = `${exitDev.device_location || 'Exit Gate'} • ${exitDev.lastSeenText}`;
-        } else if (exitDev && exitDev.computedStatus === 'STANDBY') {
-            el('exitGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-500"></span> STANDBY`;
-            el('exitGateStatusBadge').className = 'text-xs font-black text-amber-700 flex items-center gap-1.5';
-            if (el('exitGateIpText')) el('exitGateIpText').textContent = `${exitDev.lastSeenText}`;
-        } else {
-            el('exitGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-slate-400"></span> OFFLINE / STANDBY`;
-            el('exitGateStatusBadge').className = 'text-xs font-black text-slate-500 flex items-center gap-1.5';
-            if (el('exitGateIpText')) el('exitGateIpText').textContent = exitDev ? exitDev.lastSeenText : 'Offline Fallback Enabled';
-        }
-    }
+    // 2. Pedestrian Exit Gate Unit (13.56 MHz HF - strictly excludes UHF so CHARRMPASS_GATE_02 never hijacks this card!)
+    const exitDev = deviceStatuses.find(d => d.esp32_identifier === 'CHARRMPASS_GATE_EXIT')
+        || deviceStatuses.find(d => !isUhfDevice(d) && d.gate_type === 'EXIT');
+    updateCardHeaderState('exitGateStatusBadge', 'exitGateIpText', exitDev, 'Pedestrian Exit Gate');
     updateUnitComponents('exit', exitDev, false);
 
-    // 3. Automated Vehicle UHF Gate Monitor (Gate Unit 1: Vehicle Entry - No Barrier)
-    const uhfDev = deviceStatuses.find(d => d.gate_type === 'ENTRY_EXIT' || d.gate_type === 'ENTRY' && (d.rfid_range === 'LONG_RANGE' || (d.esp32_identifier && (d.esp32_identifier.includes('01') || d.esp32_identifier.includes('UHF')))) || d.gate_type === 'BIDIRECTIONAL' || (d.esp32_identifier && (d.esp32_identifier.includes('UHF') || d.esp32_identifier.includes('01') || d.esp32_identifier.includes('VEHICLE'))));
-    if (el('uhfGateStatusBadge')) {
-        if (uhfDev && uhfDev.computedStatus === 'ONLINE') {
-            el('uhfGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> ONLINE (Active)`;
-            el('uhfGateStatusBadge').className = 'text-xs font-black text-emerald-700 flex items-center gap-1.5';
-            if (el('uhfGateIpText')) el('uhfGateIpText').textContent = `${uhfDev.device_location || 'Main Gate'} • ${uhfDev.lastSeenText}`;
-        } else if (uhfDev && uhfDev.computedStatus === 'STANDBY') {
-            el('uhfGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-500"></span> STANDBY`;
-            el('uhfGateStatusBadge').className = 'text-xs font-black text-amber-700 flex items-center gap-1.5';
-            if (el('uhfGateIpText')) el('uhfGateIpText').textContent = `${uhfDev.lastSeenText}`;
-        } else {
-            el('uhfGateStatusBadge').innerHTML = `<span class="w-2 h-2 rounded-full bg-slate-400"></span> OFFLINE / STANDBY`;
-            el('uhfGateStatusBadge').className = 'text-xs font-black text-slate-500 flex items-center gap-1.5';
-            if (el('uhfGateIpText')) el('uhfGateIpText').textContent = uhfDev ? uhfDev.lastSeenText : 'Offline Fallback Enabled';
-        }
-    }
+    // 3. Automated Vehicle UHF Entry Monitor (Gate Unit 1: CHARRMPASS_GATE_01)
+    const uhfDev = deviceStatuses.find(d => d.esp32_identifier === 'CHARRMPASS_GATE_01')
+        || deviceStatuses.find(d => isUhfDevice(d) && d.gate_type !== 'EXIT');
+    updateCardHeaderState('uhfGateStatusBadge', 'uhfGateIpText', uhfDev, 'Main Gate (Inbound)');
     updateUnitComponents('uhf', uhfDev, true);
+
+    // 4. Automated Vehicle UHF Exit Monitor (Gate Unit 2: CHARRMPASS_GATE_02)
+    const uhfExitDev = deviceStatuses.find(d => d.esp32_identifier === 'CHARRMPASS_GATE_02')
+        || deviceStatuses.find(d => isUhfDevice(d) && d.gate_type === 'EXIT');
+    updateCardHeaderState('uhfExitGateStatusBadge', 'uhfExitGateIpText', uhfExitDev, 'Main Gate (Outbound)');
+    updateUnitComponents('uhfExit', uhfExitDev, true);
 
     if (el('syncedGatesCount')) {
         el('syncedGatesCount').textContent = `${onlineCount} of ${devices.length} Nodes Active`;
@@ -6306,10 +6684,13 @@ window.renderEsp32DevicesTable = function() {
         }
 
         tableBody.innerHTML = deviceStatuses.map(d => {
-            const isUhf = d.rfid_range === 'LONG_RANGE' || d.gate_type === 'ENTRY_EXIT' || d.gate_type === 'BIDIRECTIONAL' || (d.esp32_identifier && (d.esp32_identifier.includes('UHF') || d.esp32_identifier.includes('01') || d.esp32_identifier.includes('VEHICLE')));
-            
+            const isUhf = isUhfDevice(d);
+            const isUhfExit = isUhf && (d.gate_type === 'EXIT' || String(d.esp32_identifier || '').includes('02') || String(d.device_category || '').toUpperCase().includes('EXIT'));
+
             const roleBadge = isUhf
-                ? '<span class="px-2 py-0.5 rounded text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">VEHICLE (ENTRY &amp; EXIT - 1 DEVICE)</span>'
+                ? (isUhfExit
+                    ? '<span class="px-2 py-0.5 rounded text-[10px] font-black bg-indigo-100 text-indigo-900 border border-indigo-300">VEHICLE (EXIT)</span>'
+                    : '<span class="px-2 py-0.5 rounded text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">VEHICLE (ENTRY)</span>')
                 : (d.gate_type === 'ENTRY' 
                     ? '<span class="px-2 py-0.5 rounded text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">PEDESTRIAN (ENTRY)</span>'
                     : (d.gate_type === 'EXIT' 
@@ -6317,16 +6698,18 @@ window.renderEsp32DevicesTable = function() {
                         : '<span class="px-2 py-0.5 rounded text-[10px] font-black bg-purple-100 text-purple-800">ADMIN GATE</span>'));
 
             const rangeBadge = isUhf
-                ? '<span class="font-mono text-amber-800 font-bold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">~860–960 MHz UHF</span>'
+                ? `<span class="font-mono ${isUhfExit ? 'text-indigo-800 bg-indigo-50 border-indigo-200' : 'text-amber-800 bg-amber-50 border-amber-200'} font-bold px-1.5 py-0.5 rounded border">~860–960 MHz UHF</span>`
                 : '<span class="font-mono text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">13.56 MHz HF</span>';
 
-            const categoryText = isUhf ? 'MAIN GATE' : (d.gate_type === 'ENTRY' ? 'PEDESTRIAN (ENTRY)' : 'PEDESTRIAN (EXIT)');
+            const categoryText = isUhf
+                ? (isUhfExit ? 'VEHICLE (EXIT) • MAIN GATE' : 'VEHICLE (ENTRY) • MAIN GATE')
+                : (d.gate_type === 'ENTRY' ? 'PEDESTRIAN (ENTRY)' : 'PEDESTRIAN (EXIT)');
 
             return `
             <tr class="hover:bg-slate-50 transition-colors">
                 <td class="p-3.5">
                     <div class="flex items-center gap-2">
-                        <div class="w-8 h-8 rounded-xl ${isUhf ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700'} flex items-center justify-center font-bold">
+                        <div class="w-8 h-8 rounded-xl ${isUhf ? (isUhfExit ? 'bg-indigo-100 text-indigo-800' : 'bg-amber-100 text-amber-800') : 'bg-slate-100 text-slate-700'} flex items-center justify-center font-bold">
                             <i data-lucide="${isUhf ? 'car' : 'footprints'}" class="w-4 h-4"></i>
                         </div>
                         <div>
@@ -6584,9 +6967,13 @@ window.openChangeGateWifiModal = function(deviceId = null, deviceName = '', esp3
         if (devices.length > 0) {
             devSelect.innerHTML = devices.map(d => {
                 const isSelected = (deviceId && d.id === deviceId) || (esp32Identifier && d.esp32_identifier === esp32Identifier);
-                const isUhf = d.rfid_range === 'LONG_RANGE' || d.gate_type === 'ENTRY_EXIT' || d.gate_type === 'BIDIRECTIONAL' || (d.esp32_identifier && (d.esp32_identifier.includes('01') || d.esp32_identifier.includes('UHF')));
+                const rangeUpper = String(d.rfid_range || '').toUpperCase();
+                const catUpper = String(d.device_category || '').toUpperCase();
+                const idUpper = String(d.esp32_identifier || '').toUpperCase();
+                const isUhf = rangeUpper.includes('LONG_RANGE') || rangeUpper.includes('UHF') || rangeUpper.includes('860') || catUpper.includes('VEHICLE') || idUpper.includes('01') || idUpper.includes('02') || idUpper.includes('UHF');
+                const isExit = d.gate_type === 'EXIT' || idUpper.includes('02') || catUpper.includes('EXIT');
                 const typeLabel = isUhf
-                    ? '[~860–960 MHz UHF — VEHICLE (ENTRY)]'
+                    ? (isExit ? '[~860–960 MHz UHF — VEHICLE (EXIT)]' : '[~860–960 MHz UHF — VEHICLE (ENTRY)]')
                     : (d.gate_type === 'ENTRY' ? '[13.56 MHz HF — PEDESTRIAN (ENTRY)]' : '[13.56 MHz HF — PEDESTRIAN (EXIT)]');
                 const wifiInfo = d.wifi_ssid ? ` • Current Wi-Fi: ${d.wifi_ssid}` : '';
                 return `<option value="${d.id}" data-identifier="${d.esp32_identifier}" data-name="${(d.device_name || d.esp32_identifier).replace(/"/g, '&quot;')}" ${isSelected ? 'selected' : ''}>
@@ -6598,6 +6985,7 @@ window.openChangeGateWifiModal = function(deviceId = null, deviceName = '', esp3
                 <option value="GATE_ENTRY" data-identifier="CHARRMPASS_GATE_ENTRY" data-name="CHARRMPASS Entry Unit">CHARRMPASS Entry Unit [13.56 MHz HF] - PEDESTRIAN (ENTRY) (CHARRMPASS_GATE_ENTRY)</option>
                 <option value="GATE_EXIT" data-identifier="CHARRMPASS_GATE_EXIT" data-name="CHARRMPASS Exit Unit">CHARRMPASS Exit Unit [13.56 MHz HF] - PEDESTRIAN (EXIT) (CHARRMPASS_GATE_EXIT)</option>
                 <option value="GATE_01" data-identifier="CHARRMPASS_GATE_01" data-name="CHARRMPASS Gate Unit 1">CHARRMPASS Gate Unit 1 [~860–960 MHz UHF] - VEHICLE (ENTRY) (CHARRMPASS_GATE_01)</option>
+                <option value="GATE_02" data-identifier="CHARRMPASS_GATE_02" data-name="CHARRMPASS Gate Unit 2">CHARRMPASS Gate Unit 2 [~860–960 MHz UHF] - VEHICLE (EXIT) (CHARRMPASS_GATE_02)</option>
             `;
         }
     }
@@ -6661,14 +7049,20 @@ window.forgetGateWifiRemote = async function() {
                     .update(resetFields)
                     .eq('esp32_identifier', esp32Identifier);
                 updateError = error;
-            } else if (deviceId && !['DEFAULT_GATE', 'GATE_ENTRY', 'GATE_EXIT', 'GATE_01'].includes(deviceId)) {
+            } else if (deviceId && !['DEFAULT_GATE', 'GATE_ENTRY', 'GATE_EXIT', 'GATE_01', 'GATE_02'].includes(deviceId)) {
                 const { error } = await supabaseClient
                     .from('devices')
                     .update(resetFields)
                     .eq('id', deviceId);
                 updateError = error;
             } else {
-                const fallbackId = (deviceId === 'GATE_EXIT') ? 'CHARRMPASS_GATE_EXIT' : 'CHARRMPASS_GATE_ENTRY';
+                const fallbackMap = {
+                    GATE_ENTRY: 'CHARRMPASS_GATE_ENTRY',
+                    GATE_EXIT: 'CHARRMPASS_GATE_EXIT',
+                    GATE_01: 'CHARRMPASS_GATE_01',
+                    GATE_02: 'CHARRMPASS_GATE_02'
+                };
+                const fallbackId = fallbackMap[deviceId] || 'CHARRMPASS_GATE_ENTRY';
                 const { error } = await supabaseClient
                     .from('devices')
                     .update(resetFields)
@@ -6695,10 +7089,15 @@ window.forgetGateWifiRemote = async function() {
         // Pre-select matching target in Bluetooth provisioning form
         const bleTarget = el('bleTargetDeviceType');
         if (bleTarget) {
-            const lowerText = (deviceText + ' ' + esp32Identifier).toLowerCase();
-            if (lowerText.includes('entry')) bleTarget.value = 'ENTRY';
-            else if (lowerText.includes('exit')) bleTarget.value = 'EXIT';
-            else if (lowerText.includes('01') || lowerText.includes('uhf')) bleTarget.value = 'UHF';
+            if (esp32Identifier && Array.from(bleTarget.options).some(o => o.value === esp32Identifier)) {
+                bleTarget.value = esp32Identifier;
+            } else {
+                const lowerText = (deviceText + ' ' + esp32Identifier).toLowerCase();
+                if (lowerText.includes('02') || (lowerText.includes('uhf') && lowerText.includes('exit'))) bleTarget.value = 'CHARRMPASS_GATE_02';
+                else if (lowerText.includes('01') || lowerText.includes('uhf')) bleTarget.value = 'CHARRMPASS_GATE_01';
+                else if (lowerText.includes('exit')) bleTarget.value = 'CHARRMPASS_GATE_EXIT';
+                else if (lowerText.includes('entry')) bleTarget.value = 'CHARRMPASS_GATE_ENTRY';
+            }
         }
 
         // Clear SSID/Password inputs & focus so user can encode new credentials right away
@@ -7905,23 +8304,23 @@ function renderBulkPreviewRows(recordsToRender) {
 
     tableBody.innerHTML = recordsToRender.map(r => `
         <tr class="hover:bg-slate-50 border-b border-slate-100 transition-colors ${!r.isValid ? 'bg-red-50/60' : ''}">
-            <td class="p-2.5 text-center font-mono font-bold text-slate-400 text-[11px]">${r.rowNumber}</td>
+            <td class="p-2.5 text-center font-mono font-bold text-slate-400 text-[11px]">${Number(r.rowNumber) || 0}</td>
             <td class="p-2.5 font-mono font-bold text-slate-800 text-xs">
-                ${r.student_id ? `<span class="bg-slate-100 px-2 py-0.5 rounded-md">${r.student_id}</span>` : '<span class="text-slate-400 italic text-[11px]">Auto CPASS</span>'}
+                ${r.student_id ? `<span class="bg-slate-100 px-2 py-0.5 rounded-md">${adminEsc(r.student_id)}</span>` : '<span class="text-slate-400 italic text-[11px]">Auto CPASS</span>'}
             </td>
             <td class="p-2.5 font-bold text-slate-800">
                 <div class="flex items-center gap-1.5 flex-wrap">
-                    <span>${r.full_name || '<span class="text-red-500 font-bold text-xs">⚠️ Missing Full Name!</span>'}</span>
+                    <span>${r.full_name ? adminEsc(r.full_name) : '<span class="text-red-500 font-bold text-xs">⚠️ Missing Full Name!</span>'}</span>
                     ${r.isDuplicate ? '<span class="text-[9px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-bold border border-amber-200">Will Update</span>' : ''}
                 </div>
             </td>
-            <td class="p-2.5"><span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700">${r.role}</span></td>
+            <td class="p-2.5"><span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700">${adminEsc(r.role)}</span></td>
             <td class="p-2.5 font-semibold text-slate-700 text-xs">
-                <span class="font-bold text-emerald-800">${r.program}</span> <span class="text-slate-400">• ${r.section}</span>
+                <span class="font-bold text-emerald-800">${adminEsc(r.program)}</span> <span class="text-slate-400">• ${adminEsc(r.section)}</span>
             </td>
             <td class="p-2.5 font-mono text-xs">
                 ${r.default_transit_mode === 'VEHICLE' 
-                    ? `<span class="text-emerald-700 font-bold flex items-center gap-1">🚗 ${r.plate_number || 'Vehicle'}</span>` 
+                    ? `<span class="text-emerald-700 font-bold flex items-center gap-1">🚗 ${adminEsc(r.plate_number || 'Vehicle')}</span>` 
                     : '<span class="text-slate-500 flex items-center gap-1">🚶 Pedestrian</span>'}
             </td>
             <td class="p-2.5 text-center">
@@ -8009,9 +8408,93 @@ window.executeBulkImport = async function() {
 
     try {
         if (isConnected && supabaseClient) {
-            // Direct Supabase Client batch insert/update
-            for (let i = 0; i < validRecords.length; i++) {
-                const r = validRecords[i];
+            const updateProgress = (done) => {
+                const pct = Math.min(100, Math.round((done / total) * 100));
+                if (progressBarFill) progressBarFill.style.width = `${pct}%`;
+                if (progressPercent) progressPercent.textContent = `${pct}%`;
+                if (progressLabel) progressLabel.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin text-emerald-600"></i> Enrolled ${insertedCount} of ${total} records...`;
+            };
+
+            // Index existing users in O(1) memory maps first
+            const byCpass = new Map();
+            const byName = new Map();
+            (adminState.users || []).forEach(u => {
+                if (u.cpass_id) byCpass.set(String(u.cpass_id).toUpperCase(), u);
+                if (u.student_id) byCpass.set(String(u.student_id).toUpperCase(), u);
+                if (u.full_name) byName.set(u.full_name.trim().toLowerCase(), u);
+            });
+
+            const pureNewBatch = [];
+            const individualRows = [];
+            const seenBatchKeys = new Set();
+
+            validRecords.forEach(r => {
+                const cleanCpass = (r.student_id || r.cpass_id || '').trim().toUpperCase();
+                const nameKey = (r.full_name || '').trim().toLowerCase();
+                const hasVeh = !!(r.plate_number && r.plate_number !== 'PENDING-PLATE' && r.plate_number !== 'NONE' && r.plate_number.trim());
+                const hasExplicitRfid = !!(r.rfid_uid && r.rfid_uid.trim());
+                const existing = (cleanCpass && byCpass.get(cleanCpass)) || (nameKey && byName.get(nameKey));
+                const dedupeKey = cleanCpass || nameKey;
+
+                if (!existing && !hasVeh && !hasExplicitRfid && dedupeKey && !seenBatchKeys.has(dedupeKey)) {
+                    seenBatchKeys.add(dedupeKey);
+                    pureNewBatch.push(r);
+                } else {
+                    individualRows.push(r);
+                }
+            });
+
+            // Fast path: chunked 50-row bulk inserts for new pedestrian stakeholders
+            const CHUNK_SIZE = 50;
+            let processedCount = 0;
+            for (let start = 0; start < pureNewBatch.length; start += CHUNK_SIZE) {
+                const chunk = pureNewBatch.slice(start, start + CHUNK_SIZE);
+                const payloads = chunk.map(r => {
+                    const cleanCpass = (r.student_id || r.cpass_id || '').trim().toUpperCase();
+                    const p = {
+                        full_name: r.full_name,
+                        student_id: r.student_id || null,
+                        role: r.role || 'Student',
+                        program: r.program || null,
+                        section: r.section || null,
+                        sex: r.sex || 'Male',
+                        age: r.age || null,
+                        address: r.address || null,
+                        default_transit_mode: r.default_transit_mode || 'PEDESTRIAN',
+                        approval_status: r.approval_status || 'APPROVED'
+                    };
+                    if (cleanCpass) p.cpass_id = cleanCpass;
+                    return p;
+                });
+
+                const { data: insertedUsers, error: batchErr } = await supabaseClient
+                    .from('users')
+                    .insert(payloads)
+                    .select();
+
+                if (batchErr || !insertedUsers) {
+                    // Fallback to individual handling for this chunk if any constraint collided
+                    individualRows.push(...chunk);
+                } else {
+                    insertedCount += insertedUsers.length;
+                    processedCount += chunk.length;
+                    const cardPayloads = insertedUsers.map((uRow, idx) => ({
+                        user_id: uRow.id,
+                        rfid_uid: `UNASSIGNED_${Date.now()}_${start + idx}_${Math.floor(Math.random() * 1000)}`,
+                        rfid_type: 'CLOSE_RANGE',
+                        user_type: 'PEDESTRIAN',
+                        authorization_status: 'PENDING'
+                    }));
+                    if (cardPayloads.length) {
+                        await supabaseClient.from('rfid_cards').insert(cardPayloads);
+                    }
+                    updateProgress(processedCount);
+                }
+            }
+
+            // Individual path for updates, vehicle attachments, or pre-assigned RFID tags (safe .eq lookups)
+            for (let i = 0; i < individualRows.length; i++) {
+                const r = individualRows[i];
                 const cleanCpass = (r.student_id || r.cpass_id || '').trim().toUpperCase();
 
                 const userPayload = {
@@ -8026,68 +8509,34 @@ window.executeBulkImport = async function() {
                     default_transit_mode: r.default_transit_mode || 'PEDESTRIAN',
                     approval_status: r.approval_status || 'APPROVED'
                 };
-                if (cleanCpass) {
-                    userPayload.cpass_id = cleanCpass;
-                }
+                if (cleanCpass) userPayload.cpass_id = cleanCpass;
 
-                // Check for existing user to update or insert
-                let existingUser = null;
-                if (cleanCpass) {
-                    existingUser = (adminState.users || []).find(u => 
-                        (u.cpass_id && u.cpass_id.toUpperCase() === cleanCpass) ||
-                        (u.student_id && u.student_id.toUpperCase() === cleanCpass)
-                    );
-                    if (!existingUser) {
-                        const { data: dbMatches } = await supabaseClient
-                            .from('users')
-                            .select('id, cpass_id, student_id')
-                            .or(`cpass_id.eq.${cleanCpass},student_id.eq.${cleanCpass}`)
-                            .limit(1);
-                        if (dbMatches && dbMatches.length) existingUser = dbMatches[0];
+                let existingUser = (cleanCpass && byCpass.get(cleanCpass)) || null;
+                if (!existingUser && cleanCpass) {
+                    const { data: cMatch } = await supabaseClient.from('users').select('id, cpass_id, student_id').eq('cpass_id', cleanCpass).maybeSingle();
+                    if (cMatch) existingUser = cMatch;
+                    else {
+                        const { data: sMatch } = await supabaseClient.from('users').select('id, cpass_id, student_id').eq('student_id', cleanCpass).maybeSingle();
+                        if (sMatch) existingUser = sMatch;
                     }
                 }
                 if (!existingUser && r.full_name) {
-                    existingUser = (adminState.users || []).find(u => 
-                        u.full_name && u.full_name.trim().toLowerCase() === r.full_name.trim().toLowerCase()
-                    );
+                    existingUser = byName.get(r.full_name.trim().toLowerCase()) || null;
                 }
 
-                let userData = null;
-                let userError = null;
+                const res = existingUser
+                    ? await supabaseClient.from('users').update(userPayload).eq('id', existingUser.id).select().single()
+                    : await supabaseClient.from('users').insert([userPayload]).select().single();
 
-                if (existingUser) {
-                    const updateRes = await supabaseClient
-                        .from('users')
-                        .update(userPayload)
-                        .eq('id', existingUser.id)
-                        .select()
-                        .single();
-                    userData = updateRes.data;
-                    userError = updateRes.error;
-                } else {
-                    const insertRes = await supabaseClient
-                        .from('users')
-                        .insert([userPayload])
-                        .select()
-                        .single();
-                    userData = insertRes.data;
-                    userError = insertRes.error;
-                }
-
-                if (userError) {
-                    console.error('❌ User enroll error for row', r.rowNumber, r.full_name, userError);
+                const userData = res.data;
+                if (res.error) {
+                    console.error('❌ User enroll error for row', r.rowNumber, r.full_name, res.error);
                 } else if (userData) {
                     insertedCount++;
 
-                    // Attach Vehicle if plate provided
                     if (r.plate_number && r.plate_number !== 'PENDING-PLATE' && r.plate_number !== 'NONE' && r.plate_number.trim()) {
                         const cleanPlate = r.plate_number.trim().toUpperCase();
-                        const { data: existingVeh } = await supabaseClient
-                            .from('vehicles')
-                            .select('id')
-                            .eq('plate_number', cleanPlate)
-                            .maybeSingle();
-
+                        const { data: existingVeh } = await supabaseClient.from('vehicles').select('id').eq('plate_number', cleanPlate).maybeSingle();
                         if (existingVeh) {
                             await supabaseClient.from('vehicles').update({
                                 user_id: userData.id,
@@ -8106,16 +8555,10 @@ window.executeBulkImport = async function() {
                         }
                     }
 
-                    // Attach RFID tag if provided in CSV
                     if (r.rfid_uid && r.rfid_uid.trim()) {
                         const cleanRfid = r.rfid_uid.trim().toUpperCase();
                         const isVeh = r.default_transit_mode === 'VEHICLE';
-                        const { data: existingCard } = await supabaseClient
-                            .from('rfid_cards')
-                            .select('id')
-                            .eq('rfid_uid', cleanRfid)
-                            .maybeSingle();
-
+                        const { data: existingCard } = await supabaseClient.from('rfid_cards').select('id').eq('rfid_uid', cleanRfid).maybeSingle();
                         if (existingCard) {
                             await supabaseClient.from('rfid_cards').update({
                                 user_id: userData.id,
@@ -8132,22 +8575,19 @@ window.executeBulkImport = async function() {
                                 authorization_status: r.approval_status === 'APPROVED' ? 'AUTHORIZED' : 'PENDING'
                             }]);
                         }
-                    } else if (r.default_transit_mode === 'PEDESTRIAN' || !r.plate_number) {
-                        // Generate placeholder unassigned pedestrian close-range card ready for physical RFID assignment
+                    } else if (!existingUser && (r.default_transit_mode === 'PEDESTRIAN' || !r.plate_number)) {
                         await supabaseClient.from('rfid_cards').insert([{
                             user_id: userData.id,
                             rfid_uid: 'UNASSIGNED_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
                             rfid_type: 'CLOSE_RANGE',
                             user_type: 'PEDESTRIAN',
-                            authorization_status: r.approval_status === 'APPROVED' ? 'PENDING' : 'PENDING'
+                            authorization_status: 'PENDING'
                         }]);
                     }
                 }
 
-                const pct = Math.min(100, Math.round(((i + 1) / total) * 100));
-                if (progressBarFill) progressBarFill.style.width = `${pct}%`;
-                if (progressPercent) progressPercent.textContent = `${pct}%`;
-                if (progressLabel) progressLabel.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin text-emerald-600"></i> Enrolled ${insertedCount} of ${total} records...`;
+                processedCount++;
+                updateProgress(processedCount);
             }
 
             showToast(`🎉 Successfully enrolled ${insertedCount} of ${total} ${bulkUploadState.fileType === 'students' ? 'students' : 'members'} into CHARRMPASS!`, 'success');
@@ -8222,7 +8662,5 @@ window.executeBulkImport = async function() {
 
 // Initialize on page load
 loadAcademicData();
-
-setupRealtime();
 loadData();
 

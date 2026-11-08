@@ -1,0 +1,12 @@
+# Prevent sensitive database dumps, firmware source, SQL migrations, and thesis docs from being served publicly on Vercel
+*backup*.json
+*_audit_*.json
+supabase/
+esp32_rfid_long_range/
+esp32_rfid_long_range_exit/
+*.ino
+*.sql
+*.docx
+scratch/
+SESSION_NOTES_*.md
+WEB_IMPROVEMENTS_PLAN.md

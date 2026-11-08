@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CHARRMPASS: A Web-Based Smart Entry and Exit Monitoring System Using RFID Technology for Aklan State University - Ibajay Campus</title>
-    <link rel="icon" type="image/png" href="logocharrmpark.png">
+    <link rel="icon" type="image/png" href="icon-192.png">
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#0E4B3A">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="CHARRMPASS">
-    <link rel="apple-touch-icon" href="logocharrmpark.png">
+    <link rel="apple-touch-icon" href="icon-192.png">
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -36,7 +36,7 @@
     </script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
     <script>
-        // RBAC Session Protection
+        // RBAC Session Protection (with 12-hour session expiration)
         (function() {
             const session = sessionStorage.getItem('charrmpass_session');
             if (!session) {
@@ -45,10 +45,13 @@
             }
             try {
                 const s = JSON.parse(session);
-                if (s.role !== 'ADMIN') {
+                const issuedAt = Number(s.loginTime || s.timestamp || 0);
+                if (s.role !== 'ADMIN' || (issuedAt > 0 && (Date.now() - issuedAt) > 12 * 60 * 60 * 1000)) {
+                    sessionStorage.removeItem('charrmpass_session');
                     window.location.href = 'index.html';
                 }
             } catch(e) {
+                sessionStorage.removeItem('charrmpass_session');
                 window.location.href = 'index.html';
             }
         })();
@@ -298,6 +301,7 @@
                                 <tbody id="usersTable" class="text-sm divide-y divide-slate-100"></tbody>
                             </table>
                         </div>
+                        <div id="usersPaginationBar" class="hidden pt-3 px-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 font-semibold border-t border-slate-100 mt-3"></div>
                     </div>
                 </div>
 
@@ -394,14 +398,46 @@
             }
             /* Hide all navigation, background overlays, sidebars, headers, action buttons */
             aside, header, footer, #toastContainer, .no-print, button, .analytics-tab, .admin-log-tab, 
-            .app-view:not(#aview-reports), .modal-backdrop, .sidebar-item, #customDatePanel, .fixed, .cinematic-overlay, .bg-video-container { 
+            .modal-backdrop, .sidebar-item, #customDatePanel, .cinematic-overlay, .bg-video-container { 
                 display: none !important; 
             }
-            #aview-reports { 
+            body:not(.printing-review-modal):not(.printing-user-history) .fixed,
+            body:not(.printing-review-modal):not(.printing-user-history) .app-view:not(#aview-reports) {
+                display: none !important;
+            }
+            body:not(.printing-review-modal):not(.printing-user-history) #aview-reports { 
                 display: block !important; 
                 padding: 0 !important; 
                 margin: 0 !important; 
                 background: white !important;
+            }
+            body.printing-review-modal .flex.h-screen,
+            body.printing-review-modal .fixed:not(#reviewModal),
+            body.printing-user-history .flex.h-screen,
+            body.printing-user-history .fixed:not(#userHistoryModal),
+            body.printing-user-history #userHistSearch {
+                display: none !important;
+            }
+            body.printing-review-modal #reviewModal,
+            body.printing-user-history #userHistoryModal {
+                display: block !important;
+                position: static !important;
+                opacity: 1 !important;
+                background: white !important;
+                backdrop-filter: none !important;
+                padding: 0 !important;
+                overflow: visible !important;
+            }
+            body.printing-review-modal #reviewModalContent,
+            body.printing-user-history #userHistoryModalContent,
+            body.printing-review-modal #reviewModalContent > div,
+            body.printing-user-history #userHistoryModalContent > div {
+                max-height: none !important;
+                max-width: 100% !important;
+                width: 100% !important;
+                overflow: visible !important;
+                box-shadow: none !important;
+                transform: none !important;
             }
             /* Hide quick reports cards and other subpanels in reports view */
             #aview-reports > div:first-child,
@@ -916,9 +952,15 @@
                 <!-- ============================================== -->
                 <div id="aview-reports" class="app-view hidden p-6 lg:p-8 flex-col gap-6 animate-slide-up">
                     <!-- Header -->
-                    <div class="bg-white/70 backdrop-blur-md p-6 rounded-3xl border border-white/60 shadow-glass">
-                        <h2 class="text-3xl font-display font-extrabold text-slate-800 tracking-tight">Official Reports</h2>
-                        <p class="text-slate-500 font-medium text-sm mt-1">Generate, download, and print official CHARRMPASS access records and summaries.</p>
+                    <div class="bg-white/70 backdrop-blur-md p-6 rounded-3xl border border-white/60 shadow-glass flex flex-col sm:flex-row sm:items-center justify-between gap-4 no-print">
+                        <div>
+                            <h2 class="text-3xl font-display font-extrabold text-slate-800 tracking-tight">Official Reports</h2>
+                            <p class="text-slate-500 font-medium text-sm mt-1">Generate, download, and print official CHARRMPASS access records and summaries.</p>
+                        </div>
+                        <button type="button" onclick="openReportModal()" class="px-5 py-2.5 rounded-xl bg-charm-dark text-white text-xs font-bold hover:bg-opacity-90 shadow-md flex items-center gap-2 transition-all self-start sm:self-center shrink-0">
+                            <i data-lucide="sliders-horizontal" class="w-4 h-4 text-charm-yellow"></i>
+                            <span>Custom Report Builder</span>
+                        </button>
                     </div>
 
                     <!-- Professional Report Timeframe Selector Bar -->
@@ -1008,7 +1050,7 @@
                             <!-- Official Header -->
                             <div class="text-center border-b-2 border-slate-800 pb-5 mb-6">
                                 <div class="flex items-center justify-center gap-4 mb-2">
-                                    <img id="repDocLogoImg" src="logocharrmpark.png" alt="ASU Logo" class="w-16 h-16 object-contain" onerror="this.style.display='none'">
+                                    <img id="repDocLogoImg" src="icon-512.png" alt="ASU Logo" class="w-16 h-16 object-contain" onerror="this.style.display='none'">
                                     <div class="text-left">
                                         <h2 class="font-display font-black text-2xl text-[#0E5C4A] uppercase tracking-wide">Aklan State University</h2>
                                         <h5 class="text-xs font-bold text-slate-600 uppercase tracking-wider">Ibajay Campus • Ibajay, Aklan</h5>
@@ -1029,7 +1071,7 @@
                             </div>
 
                             <!-- Executive Summary & Analytics Overview -->
-                            <div class="mb-8">
+                            <div id="repSummarySection" class="mb-8">
                                 <h4 class="font-display font-bold text-sm uppercase tracking-wider text-slate-800 mb-3 flex items-center gap-2 border-b border-slate-200 pb-1">
                                     <i data-lucide="bar-chart-2" class="w-4 h-4 text-emerald-700"></i> Executive Summary &amp; Analytics
                                 </h4>
@@ -1096,7 +1138,7 @@
                             </div>
 
                             <!-- Detailed Logs Table (Complete RFID UIDs) -->
-                            <div class="mb-8">
+                            <div id="repDetailedLogsSection" class="mb-8">
                                 <h4 class="font-display font-bold text-sm uppercase tracking-wider text-slate-800 mb-3 flex items-center gap-2 border-b border-slate-200 pb-1">
                                     <i data-lucide="list" class="w-4 h-4 text-slate-700"></i> Detailed Access Transactions Log
                                 </h4>
@@ -1541,9 +1583,10 @@
                                     <div class="space-y-1">
                                         <label class="form-label font-bold text-xs">Target Gate / Node Type</label>
                                         <select id="bleTargetDeviceType" class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white font-semibold text-slate-700 text-sm focus:ring-2 focus:ring-charm-dark outline-none">
-                                            <option value="ENTRY">CHARRMPASS Entry Gate Unit (ESP32-WROOM)</option>
-                                            <option value="EXIT">CHARRMPASS Exit Gate Unit (ESP32-WROOM)</option>
-                                            <option value="UHF">CHARRMPASS UHF Long-Range Gate Unit (ESP32-WROOM)</option>
+                                            <option value="CHARRMPASS_GATE_ENTRY">CHARRMPASS Entry Unit — Pedestrian HF (CHARRMPASS_GATE_ENTRY)</option>
+                                            <option value="CHARRMPASS_GATE_EXIT">CHARRMPASS Exit Unit — Pedestrian HF (CHARRMPASS_GATE_EXIT)</option>
+                                            <option value="CHARRMPASS_GATE_01">CHARRMPASS Gate Unit 1 — Vehicle UHF Entry (BLE: CHARRMPASS_UHF_ENTRY)</option>
+                                            <option value="CHARRMPASS_GATE_02">CHARRMPASS Gate Unit 2 — Vehicle UHF Exit (BLE: CHARRMPASS_UHF_EXIT)</option>
                                             <option value="CUSTOM">Custom IoT Device (R.A.N. / EnerCharge Node)</option>
                                         </select>
                                     </div>
@@ -1672,7 +1715,7 @@
                             </button>
                         </div>
 
-                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5" id="gateHealthCardsContainer">
+                        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5" id="gateHealthCardsContainer">
                             <!-- 1. CHARRMPASS Entry Unit -->
                             <div class="p-5 rounded-2xl bg-white border border-slate-200/80 shadow-sm flex flex-col justify-between space-y-3 hover:shadow-md transition-shadow" id="entryGateCard">
                                 <div>
@@ -1841,12 +1884,69 @@
                                     </div>
                                 </div>
                             </div>
+
+                            <!-- 4. CHARRMPASS Gate Unit 2 (Long-Range UHF Vehicle Exit) -->
+                            <div class="p-5 rounded-2xl bg-white border border-indigo-200/80 shadow-sm flex flex-col justify-between space-y-3 hover:shadow-md transition-shadow" id="uhfExitGateCard">
+                                <div>
+                                    <div class="flex items-start justify-between gap-2 border-b border-indigo-100 pb-3">
+                                        <div>
+                                            <span class="text-[10px] font-black text-indigo-700 uppercase bg-indigo-50 px-2.5 py-0.5 rounded border border-indigo-200 tracking-wider whitespace-nowrap">~860–960 MHz UHF</span>
+                                            <div class="text-sm font-black text-slate-900 mt-1">CHARRMPASS Gate Unit 2</div>
+                                            <div class="text-[11px] font-bold text-indigo-800">VEHICLE (EXIT) • Main Gate</div>
+                                            <div class="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200 mt-1 inline-block">Free-Flow Automated Exit (No Barrier)</div>
+                                            <div class="text-[10px] text-slate-400 font-mono mt-0.5">CHARRMPASS_GATE_02</div>
+                                        </div>
+                                        <button onclick="openChangeGateWifiModal(null, 'CHARRMPASS Gate Unit 2', 'CHARRMPASS_GATE_02')" class="text-xs font-bold text-indigo-800 hover:text-indigo-900 flex items-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-xl border border-indigo-200 transition-all shadow-sm shrink-0" title="Change Wi-Fi for Gate Unit 2">
+                                            <i data-lucide="bluetooth" class="w-3.5 h-3.5 text-blue-600"></i> Change Wi-Fi
+                                        </button>
+                                    </div>
+
+                                    <!-- Microcontroller State -->
+                                    <div class="mt-3 flex items-center justify-between bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                                        <span class="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                                            <i data-lucide="cpu" class="w-3.5 h-3.5 text-slate-500"></i> ESP32 Controller
+                                        </span>
+                                        <span class="text-xs font-black" id="uhfExitGateStatusBadge">
+                                            <span class="w-2 h-2 rounded-full bg-slate-300 inline-block mr-1"></span> CHECKING...
+                                        </span>
+                                    </div>
+                                    <div class="text-[10px] text-slate-500 font-mono mt-1 px-1" id="uhfExitGateIpText">Checking Cloud Sync...</div>
+
+                                    <!-- Component Telemetry Breakdown -->
+                                    <div class="mt-3.5 space-y-2 border-t border-slate-100 pt-3 text-xs">
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="hard-drive" class="w-3.5 h-3.5 text-indigo-500"></i> MicroSD Memory:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="uhfExitSdStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> MOUNTED (HSPI)</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="radio" class="w-3.5 h-3.5 text-indigo-600"></i> Boland UHF Reader:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="uhfExitRfidStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> WIEGAND 26/34</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="traffic-cone" class="w-3.5 h-3.5 text-amber-500"></i> Status &amp; Pass LEDs:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="uhfExitLedStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> 🔴 🟢 OPERATIONAL</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="volume-2" class="w-3.5 h-3.5 text-purple-500"></i> Audio Buzzer:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="uhfExitBuzzerStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> 3/3 MATCH BEEP</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="monitor" class="w-3.5 h-3.5 text-cyan-500"></i> 16x2 I2C LCD:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="uhfExitLcdStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> INITIALIZED</span>
+                                        </div>
+                                        <div class="flex items-center justify-between text-slate-700 gap-2">
+                                            <span class="flex items-center gap-1.5 shrink-0"><i data-lucide="toggle-right" class="w-3.5 h-3.5 text-slate-500"></i> Pass Signal / Relay:</span>
+                                            <span class="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] flex items-center gap-1 shrink-0 whitespace-nowrap" id="uhfExitRelayStatus"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> SIGNAL ARMED</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
 
                         <div class="flex flex-col sm:flex-row items-center justify-between p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 font-semibold gap-2">
                             <span class="flex items-center gap-2">
                                 <i data-lucide="check-circle-2" class="w-4 h-4 text-emerald-600"></i>
-                                <span>Hardware Subsystem Architecture: All 3 Core ESP32 Gate Nodes Monitored</span>
+                                <span>Hardware Subsystem Architecture: All 4 Core ESP32 Gate Nodes Monitored (2 Pedestrian HF + 2 Vehicle UHF)</span>
                             </span>
                             <span class="font-mono font-bold text-[11px] bg-white px-3 py-1 rounded-lg border border-emerald-200 shadow-sm" id="syncedGatesCount">Syncing Component Diagnostics...</span>
                         </div>
@@ -2009,11 +2109,11 @@
                         <label class="form-label">Additional Documents (ID Front & Back)</label>
                         <div class="grid grid-cols-2 gap-4">
                             <div class="text-center">
-                                <img id="prevIDFront" src="https://via.placeholder.com/150?text=ID+Front" class="w-full h-20 rounded-lg object-cover border border-slate-200 mb-2 cursor-pointer" onclick="viewFullImage(this.src)">
+                                <img id="prevIDFront" src="data:image/svg+xml;charset=UTF-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22320%22%20height%3D%22200%22%20viewBox%3D%220%200%20320%20200%22%3E%3Crect%20width%3D%22320%22%20height%3D%22200%22%20rx%3D%2212%22%20fill%3D%22%23f1f5f9%22%2F%3E%3Crect%20x%3D%2212%22%20y%3D%2212%22%20width%3D%22296%22%20height%3D%22176%22%20rx%3D%228%22%20fill%3D%22%23ffffff%22%20stroke%3D%22%23cbd5e1%22%20stroke-dasharray%3D%226%204%22%2F%3E%3Ctext%20x%3D%22160%22%20y%3D%22105%22%20text-anchor%3D%22middle%22%20font-family%3D%22Inter%2CArial%2Csans-serif%22%20font-size%3D%2213%22%20font-weight%3D%22700%22%20fill%3D%22%2394a3b8%22%3EID%20Front%3C%2Ftext%3E%3C%2Fsvg%3E" class="w-full h-20 rounded-lg object-cover border border-slate-200 mb-2 cursor-pointer" onclick="viewFullImage(this.src)">
                                 <label class="text-[9px] font-bold text-slate-400 uppercase">ID Front</label>
                             </div>
                             <div class="text-center">
-                                <img id="prevIDBack" src="https://via.placeholder.com/150?text=ID+Back" class="w-full h-20 rounded-lg object-cover border border-slate-200 mb-2 cursor-pointer" onclick="viewFullImage(this.src)">
+                                <img id="prevIDBack" src="data:image/svg+xml;charset=UTF-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22320%22%20height%3D%22200%22%20viewBox%3D%220%200%20320%20200%22%3E%3Crect%20width%3D%22320%22%20height%3D%22200%22%20rx%3D%2212%22%20fill%3D%22%23f1f5f9%22%2F%3E%3Crect%20x%3D%2212%22%20y%3D%2212%22%20width%3D%22296%22%20height%3D%22176%22%20rx%3D%228%22%20fill%3D%22%23ffffff%22%20stroke%3D%22%23cbd5e1%22%20stroke-dasharray%3D%226%204%22%2F%3E%3Ctext%20x%3D%22160%22%20y%3D%22105%22%20text-anchor%3D%22middle%22%20font-family%3D%22Inter%2CArial%2Csans-serif%22%20font-size%3D%2213%22%20font-weight%3D%22700%22%20fill%3D%22%2394a3b8%22%3EID%20Back%3C%2Ftext%3E%3C%2Fsvg%3E" class="w-full h-20 rounded-lg object-cover border border-slate-200 mb-2 cursor-pointer" onclick="viewFullImage(this.src)">
                                 <label class="text-[9px] font-bold text-slate-400 uppercase">ID Back</label>
                             </div>
                         </div>
@@ -2534,7 +2634,7 @@
                     if (el.textContent === 'Admin User') el.textContent = session.username;
                 });
                 const img = document.querySelector('img[src*="ui-avatars.com"]');
-                if (img) img.src = `https://ui-avatars.com/api/?name=${session.username}&background=7C3AED&color=fff`;
+                if (img) img.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(session.username || 'Admin')}&background=7C3AED&color=fff`;
             }
         })();
 
@@ -3225,9 +3325,12 @@
                         <div class="space-y-1">
                             <label class="form-label font-bold text-xs">Category</label>
                             <select id="formDevCategory" class="form-input text-xs font-semibold">
-                                <option value="VEHICLE_BARRIER">Main Gate</option>
-                                <option value="PEDESTRIAN_TURNSTILE">Pedestrian Turnstile</option>
-                                <option value="PORTABLE_SCANNER">Portable Scanner</option>
+                                <option value="VEHICLE (ENTRY)">Vehicle (Entry) — Main Gate</option>
+                                <option value="VEHICLE (EXIT)">Vehicle (Exit) — Main Gate</option>
+                                <option value="PEDESTRIAN (ENTRY)">Pedestrian (Entry)</option>
+                                <option value="PEDESTRIAN (EXIT)">Pedestrian (Exit)</option>
+                                <option value="VEHICLE_BARRIER">Main Gate (Legacy)</option>
+                                <option value="PEDESTRIAN_TURNSTILE">Pedestrian Turnstile (Legacy)</option>
                                 <option value="ADMIN_STATION">Admin Station</option>
                             </select>
                         </div>
@@ -3236,9 +3339,10 @@
                         <div class="space-y-1">
                             <label class="form-label font-bold text-xs">RFID Range Mode</label>
                             <select id="formDevRange" class="form-input text-xs font-semibold">
-                                <option value="LONG_RANGE">Long-Range UHF (900MHz)</option>
-                                <option value="CLOSE_RANGE">Close-Range (13.56MHz/125kHz)</option>
-                                <option value="HYBRID">Hybrid Dual-Range</option>
+                                <option value="~860–960 MHz UHF">~860–960 MHz UHF (Long-Range)</option>
+                                <option value="13.56 MHz HF">13.56 MHz HF (Close-Range)</option>
+                                <option value="LONG_RANGE">Long-Range UHF (Legacy)</option>
+                                <option value="CLOSE_RANGE">Close-Range HF (Legacy)</option>
                             </select>
                         </div>
                         <div class="space-y-1">

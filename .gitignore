@@ -14,6 +14,6 @@ Thumbs.db
 *.user
 
 # ─── LOCAL DATA BACKUPS & AUDITS ───────────────────
-*_backup_*.json
+*backup*.json
 *_audit_*.json
 scratch/

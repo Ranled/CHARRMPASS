@@ -5,13 +5,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CHARRMPASS: A Web-Based Smart Entry and Exit Monitoring System Using RFID Technology for Aklan State University - Ibajay Campus</title>
-    <link rel="icon" type="image/png" href="logocharrmpark.png">
+    <link rel="icon" type="image/png" href="icon-192.png">
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#0E4B3A">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="CHARRMPASS">
-    <link rel="apple-touch-icon" href="logocharrmpark.png">
+    <link rel="apple-touch-icon" href="icon-192.png">
     <meta name="description"
         content="CHARRMPASS: A Web-Based Smart Entry and Exit Monitoring System Using RFID Technology for Aklan State University - Ibajay Campus">
 
@@ -72,7 +72,7 @@
 
     <!-- Subtle Ambient Video Background -->
     <div class="bg-video-container">
-        <video id="bgVideo" class="bg-video" autoplay loop muted playsinline poster="landingbg.jpg">
+        <video id="bgVideo" class="bg-video" autoplay loop muted playsinline preload="metadata" poster="landingbg.jpg">
             <source src="INTRO_VIDEO.mp4" type="video/mp4">
         </video>
     </div>
@@ -88,7 +88,7 @@
         <!-- Logo with subtle warm glow -->
         <div
             class="w-16 h-16 bg-gradient-to-br from-[#0E5C4A] to-[#147a63] border-2 border-emerald-400/40 rounded-2xl mb-3 flex items-center justify-center backdrop-blur-md shadow-lg shadow-emerald-950/50 transition-transform duration-300 hover:scale-105">
-            <img src="logocharrmpark.png" alt="CHARRMPASS Logo"
+            <img src="icon-192.png" alt="CHARRMPASS Logo"
                 class="w-11 h-11 object-contain drop-shadow"
                 onerror="this.style.display='none'; this.parentElement.innerHTML='<i data-lucide=&quot;shield-check&quot; class=&quot;w-8 h-8 text-[#F5B335]&quot;></i>'; lucide.createIcons();">
         </div>
@@ -363,7 +363,10 @@
             const iconName = type === 'error' ? 'alert-circle' : (type === 'success' ? 'check-circle' : 'info');
 
             toast.className = `${bgColor} px-4 py-3 rounded-xl shadow-xl flex items-center gap-2.5 text-xs md:text-sm font-medium transition-all duration-200 transform translate-x-full pointer-events-auto max-w-sm`;
-            toast.innerHTML = `<i data-lucide="${iconName}" class="w-4 h-4 flex-shrink-0"></i><span>${message}</span>`;
+            toast.innerHTML = `<i data-lucide="${iconName}" class="w-4 h-4 flex-shrink-0"></i>`;
+            const msgSpan = document.createElement('span');
+            msgSpan.textContent = String(message == null ? '' : message);
+            toast.appendChild(msgSpan);
 
             container.appendChild(toast);
             if (window.lucide) lucide.createIcons();
@@ -430,20 +433,7 @@
             }, 120);
         };
 
-        // Master Emergency Secret Keys recognized for authorized thesis recovery
-        function getAuthorizedMasterKeys() {
-            const list = ['CHARRMPASS-MASTER-2026', 'ADMIN-RECOVERY-KEY'];
-            try {
-                const customKey = localStorage.getItem('charrmpass_master_key');
-                if (customKey && customKey.trim()) {
-                    list.unshift(customKey.trim());
-                }
-            } catch (e) {}
-            if (typeof window !== 'undefined' && window.MASTER_RECOVERY_KEY && typeof window.MASTER_RECOVERY_KEY === 'string') {
-                list.unshift(window.MASTER_RECOVERY_KEY.trim());
-            }
-            return list.map(k => k.toUpperCase());
-        }
+        // Master recovery verification is delegated to Supabase SECURITY DEFINER RPC
 
         // Modal Helpers for Emergency Recovery
         window.openForgotModal = function () {
@@ -563,22 +553,10 @@
                 if (window.lucide) lucide.createIcons();
 
                 try {
-                    let data = null;
                     const client = supabase || supabaseClient;
-                    if (client) {
-                        const { data: dbAccount, error: dbErr } = await client
-                            .from('system_accounts')
-                            .select('*')
-                            .eq('username', username)
-                            .eq('password', password)
-                            .maybeSingle();
-                        
-                        if (dbErr) {
-                            console.error('Login query error:', dbErr);
-                        }
-                        if (dbAccount) {
-                            data = dbAccount;
-                        }
+                    const { account: data, error: dbErr } = await verifySystemAccount(username, password, client);
+                    if (dbErr) {
+                        console.error('Login query error:', dbErr);
                     }
 
                     if (!data) {
@@ -591,7 +569,7 @@
 
                     showNotification(`Welcome back, ${data.username}!`, 'success');
 
-                    // Save Session for Dashboard Authentication
+                    // Save Session for Dashboard Authentication (never store plaintext password)
                     sessionStorage.setItem('charrmpass_session', JSON.stringify({
                         id: data.id,
                         username: data.username,
@@ -637,13 +615,6 @@
                         return;
                     }
 
-                    // 1. Authorize Master Key
-                    if (!getAuthorizedMasterKeys().includes(masterKey.toUpperCase())) {
-                        showNotification('Invalid Master Emergency Key! Recovery unauthorized.', 'error');
-                        return;
-                    }
-
-                    // 2. Validate password match & length
                     if (newPassword !== confirmPassword) {
                         showNotification('New passwords do not match. Please verify.', 'error');
                         return;
@@ -665,50 +636,16 @@
                     if (window.lucide) lucide.createIcons();
 
                     try {
-                        // Check if account exists
-                        const { data: userAccount, error: fetchErr } = await client
-                            .from('system_accounts')
-                            .select('id, username, role')
-                            .ilike('username', username)
-                            .maybeSingle();
-
-                        if (fetchErr) {
-                            console.error('Account lookup error:', fetchErr);
-                            showNotification('Database lookup error: ' + (fetchErr.message || 'Unknown error'), 'error');
-                            recoverySubmitBtn.disabled = false;
-                            recoverySubmitBtn.innerHTML = originalBtnContent;
-                            if (window.lucide) lucide.createIcons();
-                            return;
-                        }
-
-                        if (!userAccount) {
-                            showNotification(`Account "${username}" was not found in system accounts.`, 'error');
-                            recoverySubmitBtn.disabled = false;
-                            recoverySubmitBtn.innerHTML = originalBtnContent;
-                            if (window.lucide) lucide.createIcons();
-                            return;
-                        }
-
-                        // Update password in Supabase
-                        const { error: updateErr } = await client
-                            .from('system_accounts')
-                            .update({ password: newPassword })
-                            .eq('id', userAccount.id);
-
-                        if (updateErr) {
-                            console.error('Password reset error:', updateErr);
-                            showNotification('Failed to update password: ' + (updateErr.message || 'Database error'), 'error');
-                            recoverySubmitBtn.disabled = false;
-                            recoverySubmitBtn.innerHTML = originalBtnContent;
-                            if (window.lucide) lucide.createIcons();
+                        const { account: userAccount, error: resetErr } = await resetPasswordWithMasterKey(username, masterKey, newPassword, client);
+                        if (resetErr || !userAccount) {
+                            const errMsg = resetErr?.message || 'Recovery failed. Check username and Master Emergency Key.';
+                            showNotification(errMsg, 'error');
                             return;
                         }
 
                         showNotification(`Password reset successful for "${userAccount.username}" (${userAccount.role})! You can now sign in.`, 'success');
-                        
                         closeForgotModal();
 
-                        // Fill in username in main form and focus password
                         const mainUser = document.getElementById('username');
                         const mainPass = document.getElementById('password');
                         if (mainUser) mainUser.value = userAccount.username;

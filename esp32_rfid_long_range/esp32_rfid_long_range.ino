@@ -4,11 +4,11 @@
  * =====================================================================================
  *
  * DEDICATED VEHICLE ENTRY GATE MONITOR:
- *   - Operating Frequency: ~860–960 MHz UHF (Boland / Wiegand 26/34 Long-Range RFID)
+ *   - Operating Frequency: ~860–960 MHz UHF (Boland UHF Reader via UART Serial2 RX/TX)
  *   - Role: Dedicated Automated Vehicle Entry Monitor (Free-flow automated logging, NO barrier arm)
  *   - High-throughput Inbound Detection:
  *       * All detected vehicles are logged as "ENTRY"
- *       * 15-second Transit Anti-Passback Debounce suppresses duplicate repeat scans as car passes
+ *       * 8-second minimum cooldown + 3-second beam-clearance hold suppresses non-stop repeat scans
  *   - Standalone Vehicle Device: Free-flow automated drive-through monitoring for ASU-Ibajay campus.
  *
  * ARDUINO IDE UPLOAD SETTINGS (IMPORTANT):
@@ -39,7 +39,6 @@
 #include <ArduinoJson.h>
 #include <FS.h>
 #include <HTTPClient.h>
-#include <MFRC522.h>
 #include <Preferences.h>
 #include <SD.h>
 #include <SPI.h>
@@ -60,7 +59,7 @@
 // BLE Service & Characteristic UUIDs (Matches CHARRMPASS Web App)
 #define BLE_SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define BLE_CHAR_UUID    "beb5483e-36e1-4688-b7f5-ea07361b26a8"
-#define BLE_DEVICE_NAME  "CHARRMPASS_UHF_BLE"
+#define BLE_DEVICE_NAME  "CHARRMPASS_UHF_ENTRY"
 
 // =======================
 // WI-FI CREDENTIALS & SETTINGS
@@ -79,92 +78,12 @@ uint32_t currentUhfBaud = UHF_SERIAL_BAUD;
 bool invertUhfSerial = true; // Inverted logic enabled by default on boot for Boland RS-232 serial
 volatile uint32_t uhfTotalBytesReceived = 0;
 
-// Hardware Pin Configuration — Boland UHF Reader (Wiegand)
-#define ENABLE_WIEGAND true
-#define WIEGAND_D0_PIN                                                         \
-  32 // PURPLE wire: Wiegand Data 0 (D0) with internal pull-up
-#define WIEGAND_D1_PIN                                                         \
-  33 // GRAY wire: Wiegand Data 1 (D1) with internal pull-up
-
-// -----------------------------------------------------
-// WIEGAND DOUBLE-SCAN CONFIRMATION
-// -----------------------------------------------------
-// The exact same raw frame must be received this many times in a row (within
-// the window) before the tag is processed. UHF readers repeat the tag
-// continuously while it is in the field, so this adds almost no delay.
-// Set WIEGAND_CONFIRM_READS to 1 for instant single-scan confirmation.
-#define WIEGAND_CONFIRM_READS 1
-#define WIEGAND_CONFIRM_WINDOW_MS 1000
-
-// Interrupt-safe Wiegand pulse buffer with inter-line noise filtering
-volatile uint64_t wiegandRawBits = 0;
-volatile int wiegandBitCount = 0;
-volatile uint32_t lastPulseD0Us = 0;
-volatile uint32_t lastPulseD1Us = 0;
-volatile uint32_t lastAnyPulseUs = 0;
-volatile uint32_t lastWiegandActivityUs = 0;
-volatile uint32_t countD0 = 0;
-volatile uint32_t countD1 = 0;
-volatile uint32_t wiegandTotalPulses = 0;
-
-void IRAM_ATTR isrWiegandD0() {
-  uint32_t now = micros();
-  // Filter electrical ringing under 30us on the same line
-  if (now - lastPulseD0Us < 30)
-    return;
-  // Filter simultaneous cross-line EMI spike under 20us
-  if (now - lastAnyPulseUs < 20)
-    return;
-
-  lastPulseD0Us = now;
-  lastAnyPulseUs = now;
-  lastWiegandActivityUs = now;
-  countD0++;
-  wiegandTotalPulses++;
-  if (wiegandBitCount < 64) {
-    wiegandRawBits <<= 1;
-    wiegandBitCount++;
-  } else {
-    wiegandBitCount++; // Track true frame length without corrupting 64-bit buffer
-  }
-}
-
-void IRAM_ATTR isrWiegandD1() {
-  uint32_t now = micros();
-  // Filter electrical ringing under 30us on the same line
-  if (now - lastPulseD1Us < 30)
-    return;
-  // Filter simultaneous cross-line EMI spike under 20us
-  if (now - lastAnyPulseUs < 20)
-    return;
-
-  lastPulseD1Us = now;
-  lastAnyPulseUs = now;
-  lastWiegandActivityUs = now;
-  countD1++;
-  wiegandTotalPulses++;
-  if (wiegandBitCount < 64) {
-    wiegandRawBits = (wiegandRawBits << 1) | 1ULL;
-    wiegandBitCount++;
-  } else {
-    wiegandBitCount++; // Track true frame length without corrupting 64-bit buffer
-  }
-}
-
-#define ENABLE_SPI_MFRC522 true
-#define RFID_SS_PIN 5
-#define RFID_RST_PIN 27
-
 #define SD_CS_PIN 13
 #define SD_MOSI_PIN 12
 #define SD_MISO_PIN 14
 #define SD_SCK_PIN 26
 
-#define RED_LED 2     // Traffic Light: RED (Standby / Idle / Denied)
-#define YELLOW_LED 25 // Traffic Light: YELLOW (Offline Standby Blink / Processing)
-#define GREEN_LED 4   // Traffic Light: GREEN (Done / Access Granted)
-#define RELAY_PIN 25  // Auxiliary pass indicator / beacon relay (shared on GPIO 25)
-#define BUZZER_PIN 15
+#define RELAY_PIN 25      // Auxiliary pass signal / beacon relay (GPIO 25)
 #define BOOT_BUTTON_PIN 0 // ESP32 onboard BOOT button
 
 // =====================================================
@@ -181,7 +100,6 @@ const char *SUPABASE_ANON =
 // 3. GLOBAL OBJECTS & STATE
 // =====================================================
 hd44780_I2Cexp lcd;
-MFRC522 rfid(RFID_SS_PIN, RFID_RST_PIN);
 SPIClass spiSD(HSPI);
 Preferences preferences;
 WiFiClientSecure secureClient;
@@ -199,7 +117,7 @@ String pendingBleSsid = "";
 String pendingBlePass = "";
 
 // BLE callbacks run on the Bluetooth stack task. They must NOT touch the I2C
-// LCD, buzzer delays, or Wi-Fi. They only raise these flags; loop() does the work.
+// LCD or Wi-Fi. They only raise these flags; loop() does the work.
 volatile bool bleEvtConnected = false;
 volatile bool bleEvtDisconnected = false;
 
@@ -287,17 +205,15 @@ String isoUtcNow() {
 //    (Prioritizes Correctness over Speed)
 // =====================================================
 const int REQUIRED_MATCHES =
-    1; // 1 = Instant once a frame is accepted. Wiegand frames are already
-       // double-scan confirmed (WIEGAND_CONFIRM_READS) in
-       // checkWiegandReader(), so the MFRC522/manual paths stay instant.
+    1; // 1 = Instant on valid UHF Serial2 read (anti-spam handled by cooldown)
 const int MAX_READ_ATTEMPTS =
     3; // Max read attempts
 const unsigned long VALIDATION_WINDOW_MS =
     3500; // Time window if multi-read is enabled (3.5s)
 const unsigned long PRESENCE_TIMEOUT_MS =
-    3000; // Tag must disappear for 3s before vehicle cleared
+    3000; // Tag must disappear from UHF beam for 3s after cooldown to clear
 const unsigned long MIN_COOLDOWN_MS =
-    5000; // 5-second anti-spam debounce per vehicle event
+    8000; // 8-second minimum cooldown lockout per vehicle event
 const unsigned long DISPLAY_HOLD_MS =
     2500;                         // Time to keep status displayed on LCD (2.5s)
 const char *READER_ID = "UHF-01"; // Physical reader identifier
@@ -326,7 +242,7 @@ struct ValidationSession {
 };
 ValidationSession valSession = {"", "", 0, 0, 0, 0};
 
-// Presence Tracking & Cooldown Records (Tracks whether car is still in zone)
+// Presence Tracking & Cooldown Records (Tracks whether tag is still in UHF beam)
 struct PresenceRecord {
   String uid;
   String plate;
@@ -344,12 +260,17 @@ bool isUidInPresence(const String &uid, String &outPlate) {
   for (int i = 0; i < MAX_PRESENCE_RECORDS; i++) {
     if (presenceRecords[i].uid.length() > 0 &&
         presenceRecords[i].uid.equalsIgnoreCase(uid)) {
-      bool cooldownExpired =
+      bool minCooldownElapsed =
           (now - presenceRecords[i].loggedAtMs >= MIN_COOLDOWN_MS);
-      if (!cooldownExpired) {
+      bool clearedBeam =
+          (now - presenceRecords[i].lastSeenMs >= PRESENCE_TIMEOUT_MS);
+      if (!minCooldownElapsed || !clearedBeam) {
         outPlate = presenceRecords[i].plate;
         return true;
       }
+      presenceRecords[i].uid = "";
+      presenceRecords[i].plate = "";
+      presenceRecords[i].isPresentInZone = false;
     }
   }
   return false;
@@ -358,6 +279,7 @@ bool isUidInPresence(const String &uid, String &outPlate) {
 void registerPresence(const String &uid, const String &plate) {
   unsigned long now = millis();
   int freeIdx = -1;
+  int oldestIdx = 0;
   for (int i = 0; i < MAX_PRESENCE_RECORDS; i++) {
     if (presenceRecords[i].uid.equalsIgnoreCase(uid)) {
       presenceRecords[i].lastSeenMs = now;
@@ -369,9 +291,12 @@ void registerPresence(const String &uid, const String &plate) {
     if (freeIdx == -1 && presenceRecords[i].uid.length() == 0) {
       freeIdx = i;
     }
+    if (presenceRecords[i].lastSeenMs < presenceRecords[oldestIdx].lastSeenMs) {
+      oldestIdx = i;
+    }
   }
   if (freeIdx == -1)
-    freeIdx = 0;
+    freeIdx = oldestIdx;
   presenceRecords[freeIdx].uid = uid;
   presenceRecords[freeIdx].plate = plate;
   presenceRecords[freeIdx].lastSeenMs = now;
@@ -389,22 +314,24 @@ void touchPresence(const String &uid) {
   }
 }
 
-void cleanupPresenceRecords();
-void showLcdIdle();
-void showLcdDetecting();
-void showLcdValidating(int current, int required, const String &uidSnippet);
-void showLcdConfirmed(int matches, int required);
-void showLcdEntry(const String &plate);
-void showLcdExit(const String &plate);
-void showLcdUnknown();
-void showLcdDuplicate();
-void showLcdMismatch();
-void setLcdHolding(unsigned long durationMs = DISPLAY_HOLD_MS);
-void handleUhfDetection(String uid, String altUid = "");
-void processConfirmedTag(String finalUid, String altUid, int matchCount);
-void updateReaderStateMachine();
+void cleanupPresenceRecords() {
+  unsigned long now = millis();
+  for (int i = 0; i < MAX_PRESENCE_RECORDS; i++) {
+    if (presenceRecords[i].uid.length() > 0 &&
+        (now - presenceRecords[i].loggedAtMs >= MIN_COOLDOWN_MS) &&
+        (now - presenceRecords[i].lastSeenMs >= PRESENCE_TIMEOUT_MS)) {
+      Serial.printf("[COOLDOWN CLEARED] Tag %s ready for next scan\n",
+                    presenceRecords[i].uid.c_str());
+      presenceRecords[i].uid = "";
+      presenceRecords[i].plate = "";
+      presenceRecords[i].isPresentInZone = false;
+    }
+  }
+}
+
 bool isTagInCooldown(const String &uid);
-void markTagInCooldown(const String &uid, const String &plate = "");
+void markTagInCooldown(const String &uid, const String &plate = "",
+                       bool logBanner = true);
 bool uhfReadConfirmed(const String &uid);
 void initSDCard();
 
@@ -496,7 +423,7 @@ void addCardToRam(String uid, String name, String plate, String role,
 
 // =====================================================
 // ASYNCHRONOUS BACKGROUND TRANSACTION QUEUE
-// Prevents cloud HTTP calls from blocking Wiegand scanning
+// Prevents cloud HTTP calls from blocking UHF Serial2 scanning
 // =====================================================
 struct QueuedTransaction {
   String uid;
@@ -572,7 +499,7 @@ void pauseBleAdvertising();
 void sendBleStatus(String status);
 
 // =====================================================
-// 4. LCD & AUDIO HELPERS
+// 4. LCD HELPERS
 // =====================================================
 // Raw direct LCD print without triggering auto-reset timers
 void lcdPrintRaw(String line1, String line2) {
@@ -593,30 +520,6 @@ void lcdShowFast(String line1, String line2) {
 
 void lcdMsg(String line1, String line2) { lcdPrintRaw(line1, line2); }
 
-void setTrafficLight(bool red, bool yellow, bool green) {
-  digitalWrite(RED_LED, red ? HIGH : LOW);
-  digitalWrite(YELLOW_LED, yellow ? HIGH : LOW);
-  digitalWrite(GREEN_LED, green ? HIGH : LOW);
-}
-
-void signalWifiConnectedSuccess() {
-  Serial.println("[WIFI] Connection Successful! 3 Green Blinks...");
-  setTrafficLight(false, false, false);
-
-  for (int i = 0; i < 3; i++) {
-    digitalWrite(GREEN_LED, HIGH);
-    digitalWrite(BUZZER_PIN, HIGH);
-    delay(100);
-    digitalWrite(BUZZER_PIN, LOW);
-    delay(50);
-    digitalWrite(GREEN_LED, LOW);
-    delay(150);
-  }
-
-  // Standby: RED ON
-  setTrafficLight(true, false, false);
-}
-
 void showReady() {
   if (inBleSetupMode) {
     if (bleClientConnected) {
@@ -624,54 +527,35 @@ void showReady() {
     } else {
       lcdPrintRaw("[OFFLINE] BLE ON", "PAIR TO SET WIFI");
     }
-    setTrafficLight(false, true, false);
     return;
   }
 
   if (wifiConnected && internetAvailable) {
     lcdPrintRaw("UHF VEHICLE ENT", "AUTO DRIVE-THRU");
-    // Standby: Solid RED when Online
-    setTrafficLight(true, false, false);
   } else {
     if (bleServerRunning) {
       lcdPrintRaw("[OFFLINE] BLE ON", "PAIR TO SET WIFI");
     } else {
       lcdPrintRaw("[OFFLINE] ENTRY", "AUTO DRIVE-THRU");
     }
-    // Standby: Blinking Yellow when Offline (Traffic light initialized to Yellow, pulsed in loop)
-    setTrafficLight(false, true, false);
-  }
-}
-
-void beep(int ms, int count = 1) {
-  for (int i = 0; i < count; i++) {
-    digitalWrite(BUZZER_PIN, HIGH);
-    delay(ms);
-    digitalWrite(BUZZER_PIN, LOW);
-    if (count > 1)
-      delay(40);
   }
 }
 
 void triggerBarrier() {
   // Free-flow automated drive-through monitoring (no mechanical barrier arm at ASU gate)
-  // Pulses auxiliary signal/relay and flashes Green LED to confirm automated passage registration
+  // Pulses auxiliary signal/relay to confirm automated passage registration
   digitalWrite(RELAY_PIN, LOW); // Quick signal pulse
-  digitalWrite(GREEN_LED, HIGH);
-  digitalWrite(RED_LED, LOW);
-  delay(100);
+  delay(40);
   digitalWrite(RELAY_PIN, HIGH);
-  digitalWrite(GREEN_LED, LOW);
 }
 
 // =====================================================
 // MULTI-READ RFID VALIDATION & COOLDOWN SUBSYSTEM
 // Prioritizes correctness over speed:
 // 1. Tag Detected
-// 2. Multi-read validation (3/3 identical match within 2.5s window)
-// 3. Confirm UID & Check previous entry/exit state
-// 4. Create ONE transaction
-// 5. Activate cooldown lockout (8s) & wait for vehicle to clear zone
+// 2. Confirm UID & Check previous entry/exit state
+// 3. Create ONE transaction
+// 4. Activate cooldown lockout (8s) & hold while tag stays in UHF beam (+3s clear)
 // =====================================================
 
 bool isTagInCooldown(const String &uid) {
@@ -685,11 +569,13 @@ bool isTagInCooldown(const String &uid) {
   return false;
 }
 
-void markTagInCooldown(const String &uid, const String &plate) {
+void markTagInCooldown(const String &uid, const String &plate, bool logBanner) {
   if (uid.length() == 0) return;
   registerPresence(uid, plate);
-  Serial.printf("[COOLDOWN] Tag %s locked out (min cooldown: %lu ms, waiting for vehicle to leave zone)\n",
-                uid.c_str(), MIN_COOLDOWN_MS);
+  if (logBanner) {
+    Serial.printf("[COOLDOWN] Tag %s locked out (min cooldown: %lu ms, holds while tag stays in beam + %lu ms clear)\n",
+                  uid.c_str(), MIN_COOLDOWN_MS, PRESENCE_TIMEOUT_MS);
+  }
 }
 
 bool uhfReadConfirmed(const String &uid) {
@@ -717,14 +603,11 @@ bool uhfReadConfirmed(const String &uid) {
       Serial.printf("[UHF MULTI-READ] Detection #%d/%d for UID: %s\n",
                     valSession.matchCount, REQUIRED_MATCHES, uid.c_str());
 
-      // Show intermediate progress on LCD & short pip on buzzer
+      // Show intermediate progress on LCD
       char l1[17], l2[17];
       snprintf(l1, sizeof(l1), "VALIDATING %d/%d", valSession.matchCount, REQUIRED_MATCHES);
       snprintf(l2, sizeof(l2), "TAG: %-11.11s", uid.c_str());
       lcdShowFast(l1, l2);
-      digitalWrite(BUZZER_PIN, HIGH);
-      delay(15);
-      digitalWrite(BUZZER_PIN, LOW);
 
       if (valSession.matchCount >= REQUIRED_MATCHES) {
         Serial.printf("[UHF VALIDATION] %d/%d MATCH CONFIRMED for UID: %s! Proceeding to state determination.\n",
@@ -759,9 +642,6 @@ bool uhfReadConfirmed(const String &uid) {
     snprintf(l1, sizeof(l1), "DETECTING... 1/%d", REQUIRED_MATCHES);
     snprintf(l2, sizeof(l2), "TAG: %-11.11s", uid.c_str());
     lcdShowFast(l1, l2);
-    digitalWrite(BUZZER_PIN, HIGH);
-    delay(20);
-    digitalWrite(BUZZER_PIN, LOW);
     return false;
   }
 }
@@ -906,8 +786,6 @@ void saveWifiToNVS(String ssid, String pass);
 bool checkRemoteWifiCommand() {
   if (WiFi.status() != WL_CONNECTED)
     return false;
-  if (wiegandBitCount > 0)
-    return false;
 
   secureClient.stop();
   secureClient.setInsecure();
@@ -1025,11 +903,12 @@ void sendDeviceHeartbeat() {
   http.addHeader("Content-Type", "application/json");
 
   String sdStat = sdCardReady ? "MOUNTED (HSPI)" : "UNMOUNTED / ERROR";
+  String uhfStat = "UHF SERIAL2 (" + String(currentUhfBaud) + ")";
   String payload =
       "{\"status\":\"ONLINE\",\"last_online\":\"now()\",\"wifi_ssid\":\"" +
       WiFi.SSID() + "\",\"ip_address\":\"" + WiFi.localIP().toString() + 
       "\",\"sd_status\":\"" + sdStat + 
-      "\",\"rfid_status\":\"WIEGAND 26/34 READY\",\"led_status\":\"ACTIVE (🔴🟢)\",\"buzzer_status\":\"PWM READY\",\"lcd_status\":\"INITIALIZED (16x2)\",\"relay_status\":\"PASS SIGNAL ARMED\"}";
+      "\",\"rfid_status\":\"" + uhfStat + "\",\"led_status\":\"DISABLED\",\"buzzer_status\":\"DISABLED\",\"lcd_status\":\"INITIALIZED (16x2)\",\"relay_status\":\"PASS SIGNAL ARMED\"}";
   http.addHeader("Prefer", "return=representation");
   int code = http.PATCH(payload);
   String patchResp = (code > 0) ? http.getString() : "";
@@ -1055,7 +934,7 @@ void sendDeviceHeartbeat() {
         ",\"status\":\"ONLINE\",\"last_online\":\"now()\",\"wifi_ssid\":\"" +
         WiFi.SSID() + "\",\"ip_address\":\"" + WiFi.localIP().toString() +
         "\",\"sd_status\":\"" + sdStat + 
-        "\",\"rfid_status\":\"WIEGAND 26/34 READY\",\"led_status\":\"ACTIVE (🔴🟢)\",\"buzzer_status\":\"PWM READY\",\"lcd_status\":\"INITIALIZED (16x2)\",\"relay_status\":\"PASS SIGNAL ARMED\"}";
+        "\",\"rfid_status\":\"" + uhfStat + "\",\"led_status\":\"DISABLED\",\"buzzer_status\":\"DISABLED\",\"lcd_status\":\"INITIALIZED (16x2)\",\"relay_status\":\"PASS SIGNAL ARMED\"}";
     int upCode = http.POST(fullPayload);
     http.end();
     secureClient.stop();
@@ -1167,7 +1046,7 @@ void sendBleStatus(String status) {
 }
 
 class BleServerCallbacks : public BLEServerCallbacks {
-  // Runs on the BLE stack task: only set flags, loop() handles LCD/buzzer.
+  // Runs on the BLE stack task: only set flags, loop() handles LCD updates.
   void onConnect(BLEServer* pServer) {
     bleClientConnected = true;
     bleEvtConnected = true;
@@ -1401,7 +1280,6 @@ void forgetWifiAndStartBle() {
   Serial.println("=======================================================");
   inBleSetupMode = true;
   lcdMsg("FORGETTING WIFI", "STARTING BLE...");
-  beep(150, 2);
 
   secureClient.stop();
   WiFi.setAutoReconnect(false);
@@ -1586,7 +1464,6 @@ bool attemptWifiConnection(String testSsid, String testPass,
       Serial.println("\n[OK] WiFi Connected! IP: " + WiFi.localIP().toString() +
                      " | RSSI: " + String(WiFi.RSSI()) + " dBm | DNS: " + WiFi.dnsIP().toString());
       lcdMsg("WiFi CONNECTED", WiFi.localIP().toString());
-      signalWifiConnectedSuccess(); // 3 Green blinks, then Red Standby
       delay(400);
 
       lcdMsg("SAVING WI-FI...", "SD & NVS BACKUP");
@@ -2335,9 +2212,6 @@ void syncWhitelistToRam() {
 void processCloudQueue() {
   if (txQueueCount == 0 || !wifiConnected || WiFi.status() != WL_CONNECTED)
     return;
-  // If Wiegand is currently receiving pulses, NEVER interrupt the reader!
-  if (wiegandBitCount > 0)
-    return;
 
   static unsigned long lastQueueAttempt = 0;
   if (millis() - lastQueueAttempt < 80)
@@ -2548,7 +2422,7 @@ void flushOfflineTransactions() {
   static unsigned long lastFlush = 0;
   if (!wifiConnected || WiFi.status() != WL_CONNECTED || !sdCardReady || !SD.exists(OFFLINE_TX_FILE))
     return;
-  if (txQueueCount > 0 || wiegandBitCount > 0)
+  if (txQueueCount > 0)
     return;
   if (millis() - lastFlush < 4000)
     return;
@@ -2682,9 +2556,18 @@ void handleScannedTag(String uid, String altUid = "") {
 
   unsigned long scanStartUs = micros();
 
-  // Multi-Tag Anti-Spam Check: Ignore duplicate pulses for this tag within 5s window
-  if (isTagInCooldown(uid) ||
-      (altUid.length() > 0 && isTagInCooldown(altUid))) {
+  // Multi-Tag Anti-Spam Check: Ignore duplicate reads while tag is in cooldown / still in UHF beam
+  bool inCooldown = isTagInCooldown(uid);
+  if (altUid.length() > 0 && isTagInCooldown(altUid)) {
+    inCooldown = true;
+  }
+  if (inCooldown) {
+    static unsigned long lastManualCooldownMsg = 0;
+    if (millis() - lastManualCooldownMsg >= 2500) {
+      lastManualCooldownMsg = millis();
+      Serial.printf("⏳ [COOLDOWN] Tag %s locked out (wait %lu ms + move tag away %lu ms)\n",
+                    uid.c_str(), MIN_COOLDOWN_MS, PRESENCE_TIMEOUT_MS);
+    }
     return;
   }
 
@@ -2724,15 +2607,16 @@ void handleScannedTag(String uid, String altUid = "") {
     isInside = ramCards[cardIdx].isInside;
 
     if (authorized) {
-      // 5-second Transit Anti-Passback Debounce:
-      // While vehicle is passing through beam, ignore repeat pulses that would
+      // Transit Anti-Passback Debounce:
+      // While vehicle is passing through beam, ignore repeat reads that would
       // log duplicate entry scans
       if (ramCards[cardIdx].lastActionTime > 0 &&
-          (millis() - ramCards[cardIdx].lastActionTime < 5000)) {
+          (millis() - ramCards[cardIdx].lastActionTime < MIN_COOLDOWN_MS)) {
         Serial.printf("  ⏳ [TRANSIT LOCKOUT] %s already granted ENTRY %lu ms "
                       "ago. Suppressing duplicate scan.\n",
                       plate.c_str(),
                       millis() - ramCards[cardIdx].lastActionTime);
+        markTagInCooldown(uid, plate, false);
         return;
       }
 
@@ -2826,12 +2710,12 @@ void handleScannedTag(String uid, String altUid = "") {
     }
   }
 
-  // Mark this tag in the cooldown history table
-  markTagInCooldown(uid, plate);
-  if (altUid.length() > 0)
-    markTagInCooldown(altUid, plate);
+  // Mark this tag in the cooldown history table (banner printed once per scan)
+  markTagInCooldown(uid, plate, true);
+  if (altUid.length() > 0 && altUid != uid)
+    markTagInCooldown(altUid, plate, false);
   if (finalUid != uid && finalUid != altUid)
-    markTagInCooldown(finalUid, plate);
+    markTagInCooldown(finalUid, plate, false);
 
   unsigned long processTimeUs = micros() - scanStartUs;
 
@@ -2871,19 +2755,11 @@ void handleScannedTag(String uid, String altUid = "") {
   }
   Serial.println("────────────────────────────────────────────────");
 
-  // 4. AUDIO/VISUAL CONFIRMATION & BARRIER TRIGGER
+  // 4. AUXILIARY PASS SIGNAL (Traffic Light LEDs & Buzzer removed)
   if (authorized) {
-    digitalWrite(GREEN_LED, HIGH);
-    digitalWrite(RED_LED, LOW);
-    digitalWrite(YELLOW_LED, LOW);
-    digitalWrite(RELAY_PIN, LOW); // Quick signal pulse
-    beep(40, 1);
+    digitalWrite(RELAY_PIN, LOW); // Brief pass signal pulse
+    delay(40);
     digitalWrite(RELAY_PIN, HIGH);
-  } else {
-    digitalWrite(RED_LED, HIGH);
-    digitalWrite(YELLOW_LED, LOW);
-    digitalWrite(GREEN_LED, LOW);
-    beep(120, 1);
   }
 
   // 5. AUTOMATICALLY SEND TO DATABASE (< 1 us queue, immediate POST in loop) - or buffer to SD when offline
@@ -2904,234 +2780,17 @@ void handleScannedTag(String uid, String altUid = "") {
   if (authorized) {
     updateOfflinePresence(finalUid, direction);
   }
+
+  // Refresh cooldown anchor AFTER any blocking cloud/SD write so HTTP latency never eats cooldown time
+  markTagInCooldown(uid, plate, false);
+  if (altUid.length() > 0 && altUid != uid)
+    markTagInCooldown(altUid, plate, false);
+  if (finalUid != uid && finalUid != altUid)
+    markTagInCooldown(finalUid, plate, false);
 }
 
 // =====================================================
-// 10. WIEGAND PULSE DECODER (Boland UHF RFID Reader)
-// =====================================================
-bool checkWiegandReader(String &outUid, String &outAltUid) {
-  outUid = "";
-  outAltUid = "";
-  if (wiegandBitCount == 0)
-    return false;
-
-  // Wait until pulse transmission has completed (idle for > 15ms = 15,000us)
-  if (micros() - lastWiegandActivityUs < 15000)
-    return false;
-
-  noInterrupts();
-  uint64_t raw = wiegandRawBits;
-  int bits = wiegandBitCount;
-  uint32_t d0Pulses = countD0;
-  uint32_t d1Pulses = countD1;
-  wiegandRawBits = 0;
-  wiegandBitCount = 0;
-  countD0 = 0;
-  countD1 = 0;
-  interrupts();
-
-  // ---- 1. Immediate Pulse Diagnostics (Visible on EVERY pulse burst) ----
-  Serial.println("\n========================================");
-  Serial.printf("[WIEGAND PULSE DETECTED] Total bits: %d | Raw Hex: 0x%llX\n",
-                bits, (unsigned long long)raw);
-  Serial.printf(
-      "  Pulse Breakdown: D0 (Purple) = %u pulses | D1 (Gray) = %u pulses\n",
-      d0Pulses, d1Pulses);
-
-  // Raw bit stream visualization (MSB first)
-  Serial.print("  Raw Bitstream: ");
-  int displayBits = bits > 64 ? 64 : bits;
-  for (int i = displayBits - 1; i >= 0; i--) {
-    Serial.print((raw & (1ULL << i)) ? '1' : '0');
-    if (i % 8 == 0 && i > 0) Serial.print(' ');
-  }
-  if (bits > 64) Serial.printf(" (+%d overflow pulses)", bits - 64);
-  Serial.println();
-
-  if (d1Pulses == 0 && d0Pulses > 0) {
-    Serial.println("  ⚠️ [LINE ALERT] ZERO pulses on D1! The Gray wire is "
-                   "either loose or not connected to GPIO 33!");
-  } else if (d0Pulses == 0 && d1Pulses > 0) {
-    Serial.println("  ⚠️ [LINE ALERT] ZERO pulses on D0! The Purple wire is "
-                   "either loose or not connected to GPIO 32!");
-  }
-
-  // ---- Filter 1: Discard frames with too few bits or all zeros ----
-  if (bits < 4 || raw == 0) {
-    Serial.printf("  [FILTER] Ignored all-zero/short pulse (%d bits)\n", bits);
-    Serial.println("========================================");
-    return false;
-  }
-
-  // ---- Filter 2: Discard all-ones noise (e.g. 0xFFFFFFFF / 4294967295) ----
-  if ((raw & 0xFFFFFFFF) == 0xFFFFFFFF || (bits <= 64 && raw == ((1ULL << (bits > 63 ? 63 : bits)) - 1ULL))) {
-    Serial.printf("  [FILTER] Ignored all-ones false trigger (%d bits, 0x%llX)\n",
-                  bits, (unsigned long long)raw);
-    Serial.println("========================================");
-    return false;
-  }
-
-  // ---- Filter 3: Discard alternating 01010101 (0x55) or 10101010 (0xAA) crosstalk noise ----
-  uint32_t low32 = (uint32_t)(raw & 0xFFFFFFFF);
-  if (low32 == 0x55555555 || low32 == 0xAAAAAAAA ||
-      (low32 & 0xFFFF) == 0x5555 || (low32 & 0xFFFF) == 0xAAAA ||
-      low32 == 0x5555552A || low32 == 0x55AAAAAA) {
-    Serial.printf("  [FILTER] Ignored alternating crosstalk frame (0x%llX, %d bits)\n",
-                  (unsigned long long)raw, bits);
-    Serial.println("========================================");
-    return false;
-  }
-
-  // ---- Filter 4: Discard non-standard frame lengths ----
-  // Valid RFID access control Wiegand standards are 24 to 40 bits (WG26, WG32, WG34, WG35, WG36, WG37)
-  if (bits < 24 || bits > 40) {
-    Serial.printf("  [FILTER] Discarded non-standard frame length: %d bits (Raw: 0x%llX). Standard RFID is 24-40 bits.\n",
-                  bits, (unsigned long long)raw);
-    Serial.println("========================================");
-    return false;
-  }
-
-  // ---- Filter 5: Frame Confirmation (Active only if WIEGAND_CONFIRM_READS > 1) ----
-#if WIEGAND_CONFIRM_READS > 1
-  static uint64_t lastRawConfirmed = 0;
-  static unsigned long lastRawConfirmedMs = 0;
-  static int rawConsecutiveMatches = 0;
-
-  unsigned long nowMs = millis();
-  if (raw == lastRawConfirmed && (nowMs - lastRawConfirmedMs <= WIEGAND_CONFIRM_WINDOW_MS)) {
-    rawConsecutiveMatches++;
-  } else {
-    lastRawConfirmed = raw;
-    lastRawConfirmedMs = nowMs;
-    rawConsecutiveMatches = 1;
-  }
-
-  if (rawConsecutiveMatches < WIEGAND_CONFIRM_READS) {
-    Serial.printf("  [WIEGAND CONFIRM] Frame 0x%llX (%d bits) seen %d/%d (Awaiting confirmation...)\n",
-                  (unsigned long long)raw, bits, rawConsecutiveMatches, WIEGAND_CONFIRM_READS);
-    Serial.println("========================================");
-    return false;
-  }
-  rawConsecutiveMatches = 0; // Confirmed! Reset for next vehicle tag
-#endif
-
-  uint32_t cardNumber = 0;
-  uint32_t facilityCode = 0;
-  char hexFormatted[32];
-  char decPadded[16];
-  hexFormatted[0] = '\0';
-  decPadded[0] = '\0';
-
-  if (bits == 26) {
-    // WG26 format: 1 even parity + 8 facility + 16 card number + 1 odd parity
-    int evenCount = 0;
-    for (int i = 13; i <= 24; i++) {
-      if ((raw >> i) & 1) evenCount++;
-    }
-    int oddCount = 0;
-    for (int i = 1; i <= 12; i++) {
-      if ((raw >> i) & 1) oddCount++;
-    }
-    bool pEvenOk = (((raw >> 25) & 1) == (evenCount % 2));
-    bool pOddOk = (((raw >> 0) & 1) != (oddCount % 2));
-    Serial.printf("  Parity:        Even=%s | Odd=%s\n",
-                  pEvenOk ? "PASS" : "FAIL", pOddOk ? "PASS" : "FAIL");
-
-    facilityCode = (raw >> 17) & 0xFF;
-    cardNumber = (raw >> 1) & 0xFFFF;
-    snprintf(hexFormatted, sizeof(hexFormatted), "%02X %02X %02X",
-             (uint8_t)(facilityCode), (uint8_t)(cardNumber >> 8),
-             (uint8_t)(cardNumber & 0xFF));
-    snprintf(decPadded, sizeof(decPadded), "%010lu", (unsigned long)cardNumber);
-    Serial.println("  Standard:      WG26 (26-bit)");
-    Serial.println("  Facility:      " + String(facilityCode));
-    Serial.println("  Card ID (Dec): " + String(cardNumber) +
-                   " (Padded: " + String(decPadded) + ")");
-    Serial.println("  Hex UID:       " + String(hexFormatted));
-
-    outUid = String(cardNumber);
-    outAltUid = String(decPadded);
-
-  } else if (bits == 34) {
-    // WG34 format: 1 even parity + 32 card number + 1 odd parity
-    int evenCount = 0;
-    for (int i = 17; i <= 32; i++) {
-      if ((raw >> i) & 1) evenCount++;
-    }
-    int oddCount = 0;
-    for (int i = 1; i <= 16; i++) {
-      if ((raw >> i) & 1) oddCount++;
-    }
-    bool pEvenOk = (((raw >> 33) & 1) == (evenCount % 2));
-    bool pOddOk = (((raw >> 0) & 1) != (oddCount % 2));
-    Serial.printf("  Parity:        Even=%s | Odd=%s\n",
-                  pEvenOk ? "PASS" : "FAIL", pOddOk ? "PASS" : "FAIL");
-
-    cardNumber = (raw >> 1) & 0xFFFFFFFF;
-    snprintf(hexFormatted, sizeof(hexFormatted), "%02X %02X %02X %02X",
-             (uint8_t)(cardNumber >> 24), (uint8_t)(cardNumber >> 16),
-             (uint8_t)(cardNumber >> 8), (uint8_t)(cardNumber & 0xFF));
-    char dec8[16];
-    snprintf(dec8, sizeof(dec8), "%08lu", (unsigned long)(cardNumber % 100000000UL));
-    snprintf(decPadded, sizeof(decPadded), "%010lu", (unsigned long)cardNumber);
-    Serial.println("  Standard:      WG34 (34-bit)");
-    Serial.println("  Card ID (Dec): " + String(cardNumber) +
-                   " (8-Digit Boland: " + String(dec8) + ")");
-    Serial.println("  Hex UID:       " + String(hexFormatted));
-
-    // Primary UID matches the Boland 8-digit decimal setting (e.g. 19670374)
-    outUid = String(cardNumber);
-    outAltUid = String(dec8);
-
-  } else if (bits == 32) {
-    // Raw 32-bit (4-byte UID without parity)
-    cardNumber = (uint32_t)(raw & 0xFFFFFFFF);
-    snprintf(hexFormatted, sizeof(hexFormatted), "%02X %02X %02X %02X",
-             (uint8_t)(cardNumber >> 24), (uint8_t)(cardNumber >> 16),
-             (uint8_t)(cardNumber >> 8), (uint8_t)(cardNumber & 0xFF));
-    char dec8[16];
-    snprintf(dec8, sizeof(dec8), "%08lu", (unsigned long)(cardNumber % 100000000UL));
-    snprintf(decPadded, sizeof(decPadded), "%010lu", (unsigned long)cardNumber);
-    Serial.println("  Standard:      WG32 (32-bit Raw)");
-    Serial.println("  Card ID (Dec): " + String(cardNumber) +
-                   " (8-Digit Boland: " + String(dec8) + ")");
-    Serial.println("  Hex UID:       " + String(hexFormatted));
-
-    outUid = String(cardNumber);
-    outAltUid = String(dec8);
-
-  } else {
-    // 37-bit (HID)
-    cardNumber = (uint32_t)((raw >> 1) & 0xFFFFFFFF);
-    snprintf(hexFormatted, sizeof(hexFormatted), "%02X %02X %02X %02X",
-             (uint8_t)(cardNumber >> 24), (uint8_t)(cardNumber >> 16),
-             (uint8_t)(cardNumber >> 8), (uint8_t)(cardNumber & 0xFF));
-    char dec8[16];
-    snprintf(dec8, sizeof(dec8), "%08lu", (unsigned long)(cardNumber % 100000000UL));
-    snprintf(decPadded, sizeof(decPadded), "%010lu", (unsigned long)cardNumber);
-    Serial.printf("  Standard:      %d-bit Wiegand\n", bits);
-    Serial.println("  Card ID (Dec): " + String(cardNumber) +
-                   " (8-Digit Boland: " + String(dec8) + ")");
-    Serial.println("  Hex UID:       " + String(hexFormatted));
-
-    outUid = String(cardNumber);
-    outAltUid = String(dec8);
-  }
-
-  // Final sanity check: never pass 0xFFFFFFFF (4294967295) or 0
-  if (cardNumber == 0xFFFFFFFF || cardNumber == 0 || outUid == "4294967295") {
-    Serial.println("  [FILTER] Dropped invalid card number (0 or 4294967295)");
-    outUid = "";
-    outAltUid = "";
-    return false;
-  }
-
-  Serial.println("========================================");
-  return true;
-}
-
-// =====================================================
-// 10B. BOLAND UHF SERIAL2 PACKET DECODER (Pins 16 & 17, Green & White wires)
+// 10. BOLAND UHF SERIAL2 PACKET DECODER (Pins 16 & 17, Green & White wires)
 // =====================================================
 #if ENABLE_UHF_SERIAL2
 bool checkUhfSerialReader(String &outUid, String &outAltUid) {
@@ -3167,44 +2826,24 @@ bool checkUhfSerialReader(String &outUid, String &outAltUid) {
     return false;
   }
 
-  // Print raw bytes for immediate visual verification in Serial Monitor
-  Serial.print("\n⚡ [UHF SERIAL2 RX] Received ");
-  Serial.print(rxLen);
-  Serial.print(" bytes: ");
-  for (int i = 0; i < rxLen; i++) {
-    if (rxBuf[i] < 0x10) Serial.print("0");
-    Serial.print(rxBuf[i], HEX);
-    Serial.print(" ");
-  }
-  Serial.println();
-
   bool allZeros = true;
   for (int i = 0; i < rxLen; i++) {
     if (rxBuf[i] != 0x00) { allZeros = false; break; }
   }
-  if (allZeros) {
-    static unsigned long lastZeroTip = 0;
-    if (millis() - lastZeroTip >= 4000) {
-      lastZeroTip = millis();
-      Serial.printf("  ⚠️ [BAUD TIP] Received all 00s @ %u baud. Type '115200', '57600', '9600', or 'INVERT' in Serial Monitor to switch.\n",
-                    currentUhfBaud);
-    }
-  }
 
   bool decoded = false;
   uint32_t cardNum = 0;
+  String decodeNote = "";
 
   // --- Decoding Strategy A: Standard UHF Frame (0xA0 Header) ---
   // Packet structure: [0xA0] [Len] [Addr] [Cmd] [Data...] [Checksum]
   for (int i = 0; i < rxLen; i++) {
     if (rxBuf[i] == 0xA0 && (i + 1 < rxLen)) {
       int frameLen = rxBuf[i + 1];
-      // Total packet size is frameLen + 2 (Header + Len byte)
       if (i + frameLen + 1 < rxLen) {
-        // Method 1: If PC word is present (Cmd 0x89 or 0xEE)
         if (frameLen >= 10 && (rxBuf[i + 3] == 0x89 || rxBuf[i + 3] == 0xEE)) {
           int epcLen = ((rxBuf[i + 5] >> 3) & 0x1F) * 2;
-          if (epcLen <= 0 || epcLen > 32) epcLen = 12; // Standard 96-bit EPC is 12 bytes
+          if (epcLen <= 0 || epcLen > 32) epcLen = 12;
           int epcEnd = i + 7 + epcLen;
           if (epcEnd <= i + frameLen + 1 && epcEnd - 4 >= i + 7) {
             cardNum = ((uint32_t)rxBuf[epcEnd - 4] << 24) |
@@ -3212,11 +2851,12 @@ bool checkUhfSerialReader(String &outUid, String &outAltUid) {
                       ((uint32_t)rxBuf[epcEnd - 2] << 8)  |
                       ((uint32_t)rxBuf[epcEnd - 1]);
             decoded = true;
-            Serial.printf("  [UHF EPC DECODED] 32-bit ID: 0x%08X (%lu)\n", cardNum, (unsigned long)cardNum);
+            char hexTmp[16];
+            snprintf(hexTmp, sizeof(hexTmp), "0x%08X", cardNum);
+            decodeNote = "  [UHF EPC DECODED] 32-bit ID: " + String(hexTmp) + " (" + String(cardNum) + ")";
             break;
           }
         }
-        // Method 2: Fallback to lowest 4 bytes
         if (!decoded) {
           int checkIdx = i + frameLen + 1;
           if (checkIdx - 4 >= i + 4) {
@@ -3225,7 +2865,9 @@ bool checkUhfSerialReader(String &outUid, String &outAltUid) {
                       ((uint32_t)rxBuf[checkIdx - 2] << 8)  |
                       ((uint32_t)rxBuf[checkIdx - 1]);
             decoded = true;
-            Serial.printf("  [UHF PACKET DECODED] 32-bit ID: 0x%08X (%lu)\n", cardNum, (unsigned long)cardNum);
+            char hexTmp[16];
+            snprintf(hexTmp, sizeof(hexTmp), "0x%08X", cardNum);
+            decodeNote = "  [UHF PACKET DECODED] 32-bit ID: " + String(hexTmp) + " (" + String(cardNum) + ")";
             break;
           }
         }
@@ -3239,13 +2881,14 @@ bool checkUhfSerialReader(String &outUid, String &outAltUid) {
       if (rxBuf[i] == 0xBB) {
         for (int j = i + 1; j < rxLen; j++) {
           if (rxBuf[j] == 0x7E && (j - 4 >= i + 2)) {
-            // Lowest 4 bytes before tail
             cardNum = ((uint32_t)rxBuf[j - 4] << 24) |
                       ((uint32_t)rxBuf[j - 3] << 16) |
                       ((uint32_t)rxBuf[j - 2] << 8)  |
                       ((uint32_t)rxBuf[j - 1]);
             decoded = true;
-            Serial.printf("  [UHF 0xBB DECODED] 32-bit ID: 0x%08X (%lu)\n", cardNum, (unsigned long)cardNum);
+            char hexTmp[16];
+            snprintf(hexTmp, sizeof(hexTmp), "0x%08X", cardNum);
+            decodeNote = "  [UHF 0xBB DECODED] 32-bit ID: " + String(hexTmp) + " (" + String(cardNum) + ")";
             break;
           }
         }
@@ -3254,19 +2897,29 @@ bool checkUhfSerialReader(String &outUid, String &outAltUid) {
     }
   }
 
-  // --- Decoding Strategy C: ASCII String (e.g. "19670374\r\n" or hex string) ---
+  // --- Decoding Strategy C: ASCII String (e.g. "19670366\r\n" or "0419670366\r\n") ---
+  // Splits on delimiters (\r, \n, STX, ETX) so back-to-back buffered packets stay clean
   if (!decoded) {
-    String asciiStr = "";
+    String currentToken = "";
+    String bestToken = "";
     for (int i = 0; i < rxLen; i++) {
       char c = (char)rxBuf[i];
       if (isdigit(c)) {
-        asciiStr += c;
+        currentToken += c;
+      } else {
+        if (currentToken.length() >= 6 && currentToken.length() <= 12) {
+          bestToken = currentToken;
+        }
+        currentToken = "";
       }
     }
-    if (asciiStr.length() >= 6 && asciiStr.length() <= 12) {
-      cardNum = (uint32_t)asciiStr.toInt();
+    if (currentToken.length() >= 6 && currentToken.length() <= 12) {
+      bestToken = currentToken;
+    }
+    if (bestToken.length() >= 6) {
+      cardNum = (uint32_t)strtoul(bestToken.c_str(), NULL, 10);
       decoded = true;
-      Serial.println("  [UHF ASCII DECODED] Card: " + asciiStr);
+      decodeNote = "  [UHF ASCII DECODED] Card: " + bestToken;
     }
   }
 
@@ -3277,20 +2930,69 @@ bool checkUhfSerialReader(String &outUid, String &outAltUid) {
               ((uint32_t)rxBuf[2] << 8)  |
               ((uint32_t)rxBuf[3]);
     decoded = true;
-    Serial.printf("  [UHF RAW 4B DECODED] ID: %lu\n", (unsigned long)cardNum);
+    decodeNote = "  [UHF RAW 4B DECODED] ID: " + String(cardNum);
   }
-
-  rxLen = 0; // Always reset buffer after processing
 
   if (decoded && cardNum > 0 && cardNum != 0xFFFFFFFF) {
     char dec8[16];
     snprintf(dec8, sizeof(dec8), "%08lu", (unsigned long)(cardNum % 100000000UL));
-    outUid = String(cardNum);
-    outAltUid = String(dec8);
-    Serial.println("  ⚡ [UHF SERIAL MATCH] Extracted Card ID: " + outUid + " (8-Digit Boland: " + outAltUid + ")");
+    outUid = String(dec8);
+    outAltUid = (cardNum >= 100000000UL) ? String(cardNum) : "";
+
+    // Check cooldown BEFORE printing raw RX flood so continuous UHF frames stay quiet
+    bool inCooldown = isTagInCooldown(outUid);
+    if (outAltUid.length() > 0 && isTagInCooldown(outAltUid)) {
+      inCooldown = true;
+    }
+    if (inCooldown) {
+      static unsigned long lastCooldownLogMs = 0;
+      if (millis() - lastCooldownLogMs >= 3000) {
+        lastCooldownLogMs = millis();
+        Serial.printf("⏳ [COOLDOWN] Tag %s held in lockout (staying in beam; move tag away 3s to clear)\n",
+                      outUid.c_str());
+      }
+      rxLen = 0;
+      outUid = "";
+      outAltUid = "";
+      return false;
+    }
+
+    Serial.print("\n⚡ [UHF SERIAL2 RX] Received ");
+    Serial.print(rxLen);
+    Serial.print(" bytes: ");
+    for (int i = 0; i < rxLen; i++) {
+      if (rxBuf[i] < 0x10) Serial.print("0");
+      Serial.print(rxBuf[i], HEX);
+      Serial.print(" ");
+    }
+    Serial.println();
+    if (decodeNote.length() > 0) Serial.println(decodeNote);
+    Serial.println("  ⚡ [UHF SERIAL MATCH] Extracted Card ID: " + outUid +
+                   (outAltUid.length() > 0 ? (" (Full 32-bit: " + outAltUid + ")") : ""));
+    rxLen = 0;
     return true;
   }
 
+  // Unrecognized packet: print raw bytes for hardware/baud diagnostics
+  Serial.print("\n⚡ [UHF SERIAL2 RX] Received ");
+  Serial.print(rxLen);
+  Serial.print(" bytes: ");
+  for (int i = 0; i < rxLen; i++) {
+    if (rxBuf[i] < 0x10) Serial.print("0");
+    Serial.print(rxBuf[i], HEX);
+    Serial.print(" ");
+  }
+  Serial.println();
+  if (allZeros) {
+    static unsigned long lastZeroTip = 0;
+    if (millis() - lastZeroTip >= 4000) {
+      lastZeroTip = millis();
+      Serial.printf("  ⚠️ [BAUD TIP] Received all 00s @ %u baud. Type '115200', '57600', '9600', or 'INVERT' in Serial Monitor to switch.\n",
+                    currentUhfBaud);
+    }
+  }
+
+  rxLen = 0;
   return false;
 }
 #endif
@@ -3301,7 +3003,7 @@ bool checkUhfSerialReader(String &outUid, String &outAltUid) {
 void setup() {
   WRITE_PERI_REG(
       RTC_CNTL_BROWN_OUT_REG,
-      0); // Prevent false brownout reboots during simultaneous WiFi TX + buzzer
+      0); // Prevent false brownout reboots during simultaneous WiFi RF TX
 
   // NOTE: Do NOT call esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT) here!
   // Arduino-ESP32's BLEDevice::init() -> btStart() initializes ESP_BT_MODE_BTDM
@@ -3312,28 +3014,20 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println("\n\n================================================");
-  Serial.println("CHARRMPASS — Automated Vehicle UHF Monitor (~860–960 MHz)");
-  Serial.println("Free-Flow Automated Drive-Through (No Mechanical Barrier)");
+  Serial.println("CHARRMPASS — Automated Vehicle UHF ENTRY Monitor (~860–960 MHz)");
+  Serial.println("Free-Flow Automated Drive-Through (UART Serial2 Only)");
   Serial.println("================================================");
 
-  // Peripherals
-  pinMode(RED_LED, OUTPUT);
-  pinMode(YELLOW_LED, OUTPUT);
-  pinMode(GREEN_LED, OUTPUT);
-  pinMode(BUZZER_PIN, OUTPUT);
+  // Peripherals (Traffic light LEDs, Buzzer, Wiegand, and MFRC522 removed)
   pinMode(RELAY_PIN, OUTPUT);
   pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP); // Onboard BOOT button
-
-  digitalWrite(RED_LED, HIGH);
-  digitalWrite(YELLOW_LED, LOW);
-  digitalWrite(GREEN_LED, LOW);
-  digitalWrite(RELAY_PIN, HIGH); // Relay OFF
+  digitalWrite(RELAY_PIN, HIGH);          // Relay OFF
 
   // LCD Init
   Wire.begin(21, 22);
   Wire.setTimeOut(50); // 50ms I2C timeout prevents buck-converter power glitches from locking LCD
   lcd.begin(16, 2);
-  lcdMsg("CHARRMPASS v4.5", "BOOTING GATE...");
+  lcdMsg("CHARRMPASS v4.5", "BOOTING UHF ENT");
   delay(1000);
 
   // Allocate dynamic RAM cache on Heap (prevents static DRAM overflow)
@@ -3368,23 +3062,6 @@ void setup() {
   Serial2.begin(currentUhfBaud, SERIAL_8N1, UHF_RX2_PIN, UHF_TX2_PIN, invertUhfSerial);
   Serial.printf("[UHF SERIAL2] Boland Reader ALREADY INVERTED on boot: GPIO %d (RX) & GPIO %d (TX) at %d baud (Invert=%s).\n",
                 UHF_RX2_PIN, UHF_TX2_PIN, currentUhfBaud, invertUhfSerial ? "YES (INVERTED)" : "NO (NORMAL)");
-#endif
-
-// Wiegand UHF Reader Interrupt Init on GPIO 32 (PURPLE = D0) and GPIO 33 (GRAY = D1)
-#if ENABLE_WIEGAND
-  pinMode(WIEGAND_D0_PIN, INPUT_PULLUP);
-  pinMode(WIEGAND_D1_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(WIEGAND_D0_PIN), isrWiegandD0, FALLING);
-  attachInterrupt(digitalPinToInterrupt(WIEGAND_D1_PIN), isrWiegandD1, FALLING);
-  Serial.println("[WIEGAND] Boland UHF Reader initialized on GPIO 32 "
-                 "(PURPLE=D0) and GPIO 33 (GRAY=D1) with pull-ups.");
-#endif
-
-// SPI Backup Reader Init
-#if ENABLE_SPI_MFRC522
-  SPI.begin(18, 19, 23, 5);
-  rfid.PCD_Init();
-  Serial.println("[RFID] SPI MFRC522 Backup Reader initialized.");
 #endif
 
   // MicroSD Memory Module Init on dedicated HSPI (CS 13, MOSI 12, MISO 14, SCK 26)
@@ -3498,7 +3175,6 @@ void loop() {
     Serial.println("\n[BLE] Web Client Connected via Bluetooth!");
     inBleSetupMode = true;
     lcdMsg("BLUETOOTH PAIRED", "ENCODE SSID&PASS");
-    beep(100, 2);
   }
   if (bleEvtDisconnected) {
     bleEvtDisconnected = false;
@@ -3523,7 +3199,6 @@ void loop() {
                    String(newPass.length()) + " char password)");
     Serial.println("=======================================================");
     lcdMsg("WIFI RECEIVED", newSsid.substring(0, 16));
-    beep(150, 1);
     delay(400);
 
     // STEP 1: Save new Wi-Fi credentials to SD Card (/wifi.cfg) & NVS FIRST
@@ -3536,7 +3211,6 @@ void loop() {
     // STEP 2: Notify Web App that credentials were saved to SD, then stop BLE to free RAM
     sendBleStatus("{\"event\":\"SAVED\",\"ssid\":\"" + newSsid + "\"}");
     lcdMsg("SD CARD SAVED!", "CONNECTING WIFI");
-    beep(150, 1);
     delay(600); // Allow BLE notification packet to flush to browser before stopping BLE
 
     // STEP 3: Stop BLE stack (frees ~105KB DRAM) and connect to Wi-Fi (max 3 attempts)
@@ -3641,9 +3315,10 @@ void loop() {
     }
   }
 
-  // 1. Process asynchronous background cloud transactions whenever Wiegand is idle
+  // 1. Process asynchronous background cloud transactions
   processCloudQueue();
   flushOfflineTransactions();
+  cleanupPresenceRecords();
 
   // 2. Periodic RAM Whitelist Sync from Supabase (every 5 minutes)
   if (wifiConnected && internetAvailable &&
@@ -3656,18 +3331,6 @@ void loop() {
   if (readyDisplayAtMillis > 0 && millis() >= readyDisplayAtMillis) {
     readyDisplayAtMillis = 0;
     showReady();
-  }
-
-  // ── OFFLINE STATUS INDICATOR: Non-blocking blinking yellow LED ──
-  // Blinks Yellow (500ms ON, 500ms OFF) when offline without blocking UHF reads
-  if (readyDisplayAtMillis == 0 && (!wifiConnected || WiFi.status() != WL_CONNECTED || !internetAvailable)) {
-    static unsigned long lastOfflineBlink = 0;
-    static bool offlineYellowState = true;
-    if (millis() - lastOfflineBlink >= 500) {
-      lastOfflineBlink = millis();
-      offlineYellowState = !offlineYellowState;
-      setTrafficLight(false, offlineYellowState, false);
-    }
   }
 
   // Serial input: RESET: to clear credentials, or manual UID
@@ -3693,7 +3356,6 @@ void loop() {
         Serial.println("\n[SERIAL PROVISION] Saving & connecting to SSID: '" +
                        currentSsid + "'...");
         lcdMsg("SAVING TO SD...", currentSsid.substring(0, 16));
-        beep(200, 1);
         saveWifiToSD(currentSsid, currentPass);
         saveWifiToNVS(currentSsid, currentPass);
         bool ok = attemptWifiConnection(currentSsid, currentPass, 15);
@@ -3772,7 +3434,7 @@ void loop() {
     }
   }
 
-// 4. Poll Boland Long-Range UHF UART Serial2 (White=TX/ESP-RX16, Green=RX/ESP-TX17)
+// 4. Poll Boland Long-Range UHF UART Serial2 (Green=Reader TX -> ESP-RX16, White=Reader RX -> ESP-TX17)
 #if ENABLE_UHF_SERIAL2
   String serialUid = "";
   String serialAlt = "";
@@ -3781,50 +3443,18 @@ void loop() {
   }
 #endif
 
-// 5. Poll Boland Long-Range UHF Wiegand Reader
-#if ENABLE_WIEGAND
-  String wiegandUid = "";
-  String wiegandAlt = "";
-  if (checkWiegandReader(wiegandUid, wiegandAlt)) {
-    handleScannedTag(wiegandUid, wiegandAlt);
-  }
-#endif
-
-// 5. Poll Backup SPI Reader
-#if ENABLE_SPI_MFRC522
-  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
-    String uid = "";
-    for (byte i = 0; i < rfid.uid.size; i++) {
-      char h[4];
-      sprintf(h, "%02X", rfid.uid.uidByte[i]);
-      uid += h;
-      if (i < rfid.uid.size - 1)
-        uid += " ";
-    }
-    rfid.PICC_HaltA();
-    rfid.PCD_StopCrypto1();
-
-    handleScannedTag(uid);
-  }
-#endif
-
-  // 6. Live Hardware Diagnostics (Printed every 6 seconds)
+  // 5. Live Hardware Diagnostics (Printed every 6 seconds)
   static unsigned long lastHardwareDiag = 0;
   if (millis() - lastHardwareDiag >= 6000) {
     lastHardwareDiag = millis();
     int rx_16 = digitalRead(UHF_RX2_PIN);
     int tx_17 = digitalRead(UHF_TX2_PIN);
-    int d0_32 = digitalRead(WIEGAND_D0_PIN);
-    int d1_33 = digitalRead(WIEGAND_D1_PIN);
-    Serial.printf("[HARDWARE MONITOR @ %u baud%s] Serial2 Pin 16(RX)=%s | Pin 17(TX)=%s | RX Bytes=%u || Wiegand G32(D0)=%s | G33(D1)=%s | Pulses=%u\n",
+    Serial.printf("[HARDWARE MONITOR @ %u baud%s] Serial2 Pin 16(RX)=%s | Pin 17(TX)=%s | RX Bytes=%u\n",
                   currentUhfBaud,
                   invertUhfSerial ? " (INV)" : "",
                   rx_16 ? "HIGH (IDLE)" : "LOW (ACTIVE)",
                   tx_17 ? "HIGH" : "LOW",
-                  uhfTotalBytesReceived,
-                  d0_32 ? "HIGH" : "LOW",
-                  d1_33 ? "HIGH" : "LOW",
-                  wiegandTotalPulses);
+                  uhfTotalBytesReceived);
   }
 
   delayMicroseconds(200); // High-frequency polling (zero lag)
