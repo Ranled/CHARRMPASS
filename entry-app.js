@@ -277,8 +277,14 @@ function renderRecentList() {
     // Determine whether this entry transaction is a Vehicle
     const hasRealPlate = plate && plate !== '--' && plate !== 'PEDESTRIAN' && plate !== 'NONE' && plate !== 'N/A' && plate !== '—' && plate !== t.rfid_uid?.substring(0, 12);
     const hasVehType   = vtype && vtype !== 'None' && vtype !== 'Walking / Pedestrian' && vtype !== 'PEDESTRIAN';
-    const isPed        = t.user_type === 'PEDESTRIAN' || t.rfid_type === 'CLOSE_RANGE' || (!hasRealPlate && !hasVehType);
-    const isVehicle    = !isPed && (hasRealPlate || hasVehType);
+    const isVehicle = t.user_type === 'VEHICLE' ||
+                         t.rfid_type === 'LONG_RANGE' ||
+                         String(t.gate || '').includes('01') ||
+                         String(t.gate || '').includes('ENTRY_GATE') ||
+                         /UHF|Vehicle/i.test(t.remarks || '') ||
+                         (/^\d{8,10}$/.test(String(t.rfid_uid || '').trim())) ||
+                         (hasRealPlate || hasVehType);
+    const isPed = !isVehicle;
 
     if (!name) name = ok ? (isVehicle ? 'Authorized Driver' : 'Authorized Pedestrian') : (isPending ? 'Duplicate Entry Scan' : 'Unregistered RFID');
     if (!plate) plate = isVehicle ? (t.rfid_uid?.substring(0, 12) || '--') : 'PEDESTRIAN';
@@ -400,8 +406,14 @@ function showScanResult(txn) {
   // Determine whether this entrant is a Vehicle
   const hasRealPlate = plate && plate !== '—' && plate !== '--' && plate !== 'PEDESTRIAN' && plate !== 'NONE' && plate !== 'N/A';
   const hasVehType   = vtype && vtype !== 'None' && vtype !== 'Walking / Pedestrian' && vtype !== 'PEDESTRIAN';
-  const isPed        = txn.user_type === 'PEDESTRIAN' || txn.rfid_type === 'CLOSE_RANGE' || (!hasRealPlate && !hasVehType);
-  const isVehicle    = !isPed && (hasRealPlate || hasVehType);
+  const isVehicle = txn.user_type === 'VEHICLE' ||
+                         txn.rfid_type === 'LONG_RANGE' ||
+                         String(txn.gate || '').includes('01') ||
+                         String(txn.gate || '').includes('ENTRY_GATE') ||
+                         /UHF|Vehicle/i.test(txn.remarks || '') ||
+                         (/^\d{8,10}$/.test(String(txn.rfid_uid || '').trim())) ||
+                         (hasRealPlate || hasVehType);
+    const isPed = !isVehicle;
 
   if (!name) name = isPending ? 'Registered User (Duplicate Scan)' : (ok ? (isVehicle ? 'Authorized Driver' : 'Authorized Pedestrian') : 'Unknown Card');
   if (!plate) plate = isVehicle ? '—' : 'PEDESTRIAN';

@@ -626,6 +626,8 @@ async function processManual() {
   const isVehicleCard = (card?.vehicles?.plate_number && card.vehicles.plate_number !== 'PEDESTRIAN' && card.vehicles.plate_number !== 'NONE' && card.vehicles.plate_number !== 'N/A') ||
                         (card?.vehicles?.vehicle_type && card.vehicles.vehicle_type !== 'None' && card.vehicles.vehicle_type !== 'Walking / Pedestrian') ||
                         (card?.user_type === 'VEHICLE') ||
+                        (card?.rfid_type === 'LONG_RANGE') ||
+                        (/^\d{8,10}$/.test(String(cleanUid).trim())) ||
                         (isVisitor && visitorPlate && visitorPlate !== 'N/A' && visitorPlate !== 'VISITOR PASS');
   const user_type = isVehicleCard ? 'VEHICLE' : 'PEDESTRIAN';
   const rfid_type = isVehicleCard ? 'LONG_RANGE' : 'CLOSE_RANGE';

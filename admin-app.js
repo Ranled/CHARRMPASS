@@ -1062,10 +1062,21 @@ function renderAdmin() {
         if (adminLogsDirection !== 'ALL') {
             filteredLogs = filteredLogs.filter(l => l.direction === adminLogsDirection);
         }
+        const isLogVehicle = (l) => {
+            if (l.user_type === 'VEHICLE') return true;
+            if (l.rfid_type === 'LONG_RANGE') return true;
+            const gate = String(l.gate || '');
+            if (gate.includes('GATE_01') || gate.includes('GATE_02') || gate.includes('VEHICLE') || gate.includes('BARRIER') || gate.includes('ENTRY_GATE') || gate.includes('EXIT_GATE')) return true;
+            if (/UHF|Vehicle/i.test(l.remarks || '')) return true;
+            if (l.vehicles?.plate_number && l.vehicles?.plate_number !== 'PEDESTRIAN' && l.vehicles?.plate_number !== '--') return true;
+            if (/^\d{8,10}$/.test(String(l.rfid_uid || '').trim()) || String(l.rfid_uid || '').includes('UHF')) return true;
+            return false;
+        };
+
         if (adminLogsMode === 'PEDESTRIAN') {
-            filteredLogs = filteredLogs.filter(l => l.user_type === 'PEDESTRIAN' || l.rfid_type === 'CLOSE_RANGE' || l.vehicles?.vehicle_type === 'None' || l.vehicles?.plate_number === 'PEDESTRIAN' || l.gate?.includes('PEDESTRIAN') || l.gate?.includes('TURNSTILE'));
+            filteredLogs = filteredLogs.filter(l => !isLogVehicle(l));
         } else if (adminLogsMode === 'VEHICLE') {
-            filteredLogs = filteredLogs.filter(l => l.user_type === 'VEHICLE' || l.rfid_type === 'LONG_RANGE' || (l.vehicles?.plate_number && l.vehicles?.plate_number !== 'PEDESTRIAN') || l.gate?.includes('VEHICLE') || l.gate?.includes('BARRIER'));
+            filteredLogs = filteredLogs.filter(l => isLogVehicle(l));
         }
 
         const recentLogs = filteredLogs.slice(0, 100);
@@ -1075,7 +1086,8 @@ function renderAdmin() {
                 let name     = l.users?.full_name;
                 let plate    = l.vehicles?.plate_number;
 
-                const isPed = l.user_type === 'PEDESTRIAN' || l.rfid_type === 'CLOSE_RANGE' || l.vehicles?.vehicle_type === 'None' || l.vehicles?.plate_number === 'PEDESTRIAN' || l.gate?.includes('PEDESTRIAN') || l.gate?.includes('TURNSTILE');
+                const isVeh = isLogVehicle(l);
+                const isPed = !isVeh;
 
                 if (!name && l.remarks) {
                     if (l.remarks.includes('Visitor')) {
