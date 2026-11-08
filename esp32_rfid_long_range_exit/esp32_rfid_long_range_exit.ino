@@ -512,10 +512,10 @@ void lcdPrintRaw(String line1, String line2) {
   lcd.print(b2);
 }
 
-// Fast, flicker-free LCD write with automatic 1.2s status hold timer
+// Fast, flicker-free LCD write with automatic status hold timer
 void lcdShowFast(String line1, String line2) {
   lcdPrintRaw(line1, line2);
-  readyDisplayAtMillis = millis() + 1200; // Hold scan status on LCD for 1.2s
+  readyDisplayAtMillis = millis() + DISPLAY_HOLD_MS; // Hold scan status on LCD for 2.5s
 }
 
 void lcdMsg(String line1, String line2) { lcdPrintRaw(line1, line2); }
@@ -3029,7 +3029,12 @@ void setup() {
   // LCD Init
   Wire.begin(21, 22);
   Wire.setTimeOut(50); // 50ms I2C timeout prevents buck-converter power glitches from locking LCD
-  lcd.begin(16, 2);
+  int lcdStatus = lcd.begin(16, 2);
+  if (lcdStatus != 0) {
+    Serial.printf("[LCD ERROR] I2C LCD init failed (code %d). Check SDA=21, SCL=22, 5V power, and I2C backpack.\n", lcdStatus);
+  } else {
+    Serial.println("[LCD OK] 16x2 I2C LCD initialized successfully.");
+  }
   lcdMsg("CHARRMPASS v4.5", "BOOTING UHF EXT");
   delay(1000);
 

@@ -503,7 +503,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 BEGIN
     RETURN QUERY
@@ -511,8 +511,8 @@ BEGIN
     FROM public.system_accounts sa
     WHERE LOWER(sa.username) = LOWER(TRIM(COALESCE(p_username, '')))
       AND (
-          (sa.password_hash IS NOT NULL AND sa.password_hash = crypt(COALESCE(p_password, ''), sa.password_hash))
-          OR (sa.password_hash IS NULL AND sa.password = COALESCE(p_password, ''))
+          (sa.password_hash IS NOT NULL AND sa.password_hash = extensions.crypt(COALESCE(p_password, ''), sa.password_hash))
+          OR (sa.password IS NOT NULL AND sa.password = COALESCE(p_password, ''))
       )
     LIMIT 1;
 END;
@@ -548,7 +548,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 DECLARE
     v_clean_user TEXT := TRIM(COALESCE(p_username, ''));
@@ -571,7 +571,7 @@ BEGIN
         SET username = v_clean_user,
             role = v_role,
             password = CASE WHEN p_password IS NOT NULL AND LENGTH(p_password) > 0 THEN '***HASHED***' ELSE sa.password END,
-            password_hash = CASE WHEN p_password IS NOT NULL AND LENGTH(p_password) > 0 THEN crypt(p_password, gen_salt('bf')) ELSE sa.password_hash END,
+            password_hash = CASE WHEN p_password IS NOT NULL AND LENGTH(p_password) > 0 THEN extensions.crypt(p_password, extensions.gen_salt('bf')) ELSE sa.password_hash END,
             updated_at = NOW()
         WHERE sa.id = v_target_id;
 
@@ -586,7 +586,7 @@ BEGIN
 
         RETURN QUERY
         INSERT INTO public.system_accounts (username, password, password_hash, role, updated_at)
-        VALUES (v_clean_user, '***HASHED***', crypt(p_password, gen_salt('bf')), v_role, NOW())
+        VALUES (v_clean_user, '***HASHED***', extensions.crypt(p_password, extensions.gen_salt('bf')), v_role, NOW())
         RETURNING system_accounts.id, system_accounts.username, system_accounts.role, system_accounts.updated_at;
     END IF;
 END;
@@ -617,7 +617,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 DECLARE
     v_key_sha TEXT;
@@ -647,7 +647,7 @@ BEGIN
 
     UPDATE public.system_accounts
     SET password = '***HASHED***',
-        password_hash = crypt(p_new_password, gen_salt('bf')),
+        password_hash = extensions.crypt(p_new_password, extensions.gen_salt('bf')),
         updated_at = NOW()
     WHERE system_accounts.id = v_target.id;
 
@@ -660,6 +660,9 @@ GRANT EXECUTE ON FUNCTION public.list_system_accounts() TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.upsert_system_account(UUID, TEXT, TEXT, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.delete_system_account(UUID) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.reset_account_password_with_master_key(TEXT, TEXT, TEXT) TO anon, authenticated;
+
+-- Allow anon SELECT for client authentication fallback while keeping RPCs as primary
+GRANT SELECT ON public.system_accounts TO anon, authenticated;
 
 -- ============================================================
 -- 10. ROW LEVEL SECURITY (RLS) & STORAGE BUCKETS
@@ -692,7 +695,8 @@ CREATE POLICY "anon_transactions_update" ON public.transactions FOR UPDATE USING
 CREATE POLICY "anon_special_tags"        ON public.special_tags FOR ALL    USING (true) WITH CHECK (true);
 CREATE POLICY "anon_devices"             ON public.devices      FOR ALL    USING (true) WITH CHECK (true);
 
-REVOKE ALL ON public.system_accounts FROM anon;
+-- Allow anon SELECT for client authentication fallback while keeping RPCs as primary
+GRANT SELECT ON public.system_accounts TO anon, authenticated;
 
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES

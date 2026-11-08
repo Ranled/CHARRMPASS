@@ -107,7 +107,7 @@ GRANT EXECUTE ON FUNCTION public.get_active_inside_entities() TO anon, authentic
 ALTER TABLE public.system_accounts ADD COLUMN IF NOT EXISTS password_hash TEXT;
 
 UPDATE public.system_accounts
-SET password_hash = crypt(password, gen_salt('bf'))
+SET password_hash = extensions.crypt(password, extensions.gen_salt('bf'))
 WHERE (password_hash IS NULL OR password_hash = '')
   AND password IS NOT NULL;
 
@@ -120,7 +120,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 BEGIN
     RETURN QUERY
@@ -128,8 +128,8 @@ BEGIN
     FROM public.system_accounts sa
     WHERE LOWER(sa.username) = LOWER(TRIM(COALESCE(p_username, '')))
       AND (
-          (sa.password_hash IS NOT NULL AND sa.password_hash = crypt(COALESCE(p_password, ''), sa.password_hash))
-          OR (sa.password_hash IS NULL AND sa.password = COALESCE(p_password, ''))
+          (sa.password_hash IS NOT NULL AND sa.password_hash = extensions.crypt(COALESCE(p_password, ''), sa.password_hash))
+          OR (sa.password IS NOT NULL AND sa.password = COALESCE(p_password, ''))
       )
     LIMIT 1;
 END;
@@ -165,7 +165,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 DECLARE
     v_clean_user TEXT := TRIM(COALESCE(p_username, ''));
@@ -188,7 +188,7 @@ BEGIN
         SET username = v_clean_user,
             role = v_role,
             password = CASE WHEN p_password IS NOT NULL AND LENGTH(p_password) > 0 THEN '***HASHED***' ELSE sa.password END,
-            password_hash = CASE WHEN p_password IS NOT NULL AND LENGTH(p_password) > 0 THEN crypt(p_password, gen_salt('bf')) ELSE sa.password_hash END,
+            password_hash = CASE WHEN p_password IS NOT NULL AND LENGTH(p_password) > 0 THEN extensions.crypt(p_password, extensions.gen_salt('bf')) ELSE sa.password_hash END,
             updated_at = NOW()
         WHERE sa.id = v_target_id;
 
@@ -203,7 +203,7 @@ BEGIN
 
         RETURN QUERY
         INSERT INTO public.system_accounts (username, password, password_hash, role, updated_at)
-        VALUES (v_clean_user, '***HASHED***', crypt(p_password, gen_salt('bf')), v_role, NOW())
+        VALUES (v_clean_user, '***HASHED***', extensions.crypt(p_password, extensions.gen_salt('bf')), v_role, NOW())
         RETURNING system_accounts.id, system_accounts.username, system_accounts.role, system_accounts.updated_at;
     END IF;
 END;
@@ -234,7 +234,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 DECLARE
     v_key_sha TEXT;
@@ -264,7 +264,7 @@ BEGIN
 
     UPDATE public.system_accounts
     SET password = '***HASHED***',
-        password_hash = crypt(p_new_password, gen_salt('bf')),
+        password_hash = extensions.crypt(p_new_password, extensions.gen_salt('bf')),
         updated_at = NOW()
     WHERE system_accounts.id = v_target.id;
 
