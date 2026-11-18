@@ -63,25 +63,72 @@
                 </div>
 
                 <!-- MODE CHOICE -->
-                <div id="modeChoice" class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <button type="button" onclick="selectMode('pedestrian')" id="chooseCardPedestrian"
-                        class="form-section shadow-glass text-left hover:-translate-y-1 hover:shadow-xl transition-all border-2 border-transparent hover:border-charm-dark focus:outline-none">
-                        <div class="w-14 h-14 rounded-2xl bg-charm-dark flex items-center justify-center mb-4">
-                            <i data-lucide="footprints" class="w-7 h-7 text-charm-yellow"></i>
+                <div id="modeChoice" class="space-y-6">
+                    <!-- Pre-Registration Terms & Conditions Gate -->
+                    <div id="preTermsConsentBox" class="form-section shadow-glass border-2 border-slate-200/90 transition-all duration-300 !p-6">
+                        <div class="flex items-center justify-between gap-3 mb-4 flex-wrap">
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 rounded-xl bg-charm-dark flex items-center justify-center text-charm-yellow shadow-sm shrink-0">
+                                    <i data-lucide="shield-check" class="w-5 h-5"></i>
+                                </div>
+                                <div>
+                                    <h3 class="font-display font-bold text-base text-slate-800">Step 0: Terms &amp; Conditions and Data Privacy Consent</h3>
+                                    <p class="text-xs text-slate-500">Please read and accept the campus registration policy before proceeding</p>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span id="preTermsStatusBadge" class="px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200">
+                                    Required First
+                                </span>
+                                <button type="button" onclick="openTermsModal()" class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-charm-dark/10 hover:bg-charm-dark hover:text-white text-charm-dark text-xs font-bold transition-colors">
+                                    <i data-lucide="book-open-check" class="w-3.5 h-3.5"></i> Read Full Terms
+                                </button>
+                            </div>
                         </div>
-                        <h3 class="font-display font-extrabold text-xl text-slate-800">I'm a Person</h3>
-                        <p class="text-sm text-slate-500 mt-1 mb-4">Register yourself first. You'll receive your <b>CPASS ID</b>, which every vehicle you register will use.</p>
-                        <span class="text-xs font-bold text-charm-dark flex items-center gap-1">Start here <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i></span>
-                    </button>
-                    <button type="button" onclick="selectMode('vehicle')" id="chooseCardVehicle"
-                        class="form-section shadow-glass text-left hover:-translate-y-1 hover:shadow-xl transition-all border-2 border-transparent hover:border-charm-dark focus:outline-none">
-                        <div class="w-14 h-14 rounded-2xl bg-charm-yellow flex items-center justify-center mb-4">
-                            <i data-lucide="car" class="w-7 h-7 text-charm-dark"></i>
-                        </div>
-                        <h3 class="font-display font-extrabold text-xl text-slate-800">I have a Vehicle</h3>
-                        <p class="text-sm text-slate-500 mt-1 mb-4">Already have a CPASS ID? Link your car, motorcycle or other vehicle to it.</p>
-                        <span class="text-xs font-bold text-charm-dark flex items-center gap-1">Requires an approved CPASS ID <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i></span>
-                    </button>
+
+                        <label for="agreePreTerms" class="flex items-start gap-3.5 p-4 rounded-xl bg-slate-50 hover:bg-charm-light/15 border border-slate-200/90 cursor-pointer transition-colors select-none">
+                            <input type="checkbox" id="agreePreTerms" onchange="handleTermsToggle('pre')" class="mt-0.5 w-5 h-5 rounded-md border-slate-300 text-charm-dark focus:ring-charm-dark accent-[#0E4B3A] cursor-pointer shrink-0">
+                            <span class="text-xs text-slate-600 leading-relaxed">
+                                I have read, understood, and agree to the
+                                <button type="button" onclick="event.preventDefault(); openTermsModal();" class="font-bold text-charm-dark underline hover:text-charm-mid">CHARRMPASS Terms and Conditions</button>,
+                                Campus Gate &amp; Parking Regulations, and the collection and processing of my personal and vehicle data in accordance with the
+                                <button type="button" onclick="event.preventDefault(); openTermsModal();" class="font-bold text-charm-dark underline hover:text-charm-mid">Data Privacy Act of 2012 (RA 10173)</button>
+                                of <b>Aklan State University – Ibajay Campus</b>.
+                            </span>
+                        </label>
+                    </div>
+
+                    <!-- Mode Cards -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <button type="button" onclick="selectMode('pedestrian')" id="chooseCardPedestrian"
+                            class="form-section shadow-glass text-left transition-all border-2 border-transparent opacity-60 cursor-not-allowed focus:outline-none relative">
+                            <div class="flex items-start justify-between gap-2 mb-4">
+                                <div class="w-14 h-14 rounded-2xl bg-charm-dark flex items-center justify-center">
+                                    <i data-lucide="footprints" class="w-7 h-7 text-charm-yellow"></i>
+                                </div>
+                                <span id="lockBadgePedestrian" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-100 text-slate-500 text-[10px] font-bold uppercase tracking-wider">
+                                    <i data-lucide="lock" class="w-3 h-3"></i> Accept Terms Above
+                                </span>
+                            </div>
+                            <h3 class="font-display font-extrabold text-xl text-slate-800">I'm a Person</h3>
+                            <p class="text-sm text-slate-500 mt-1 mb-4">Register yourself first. You'll receive your <b>CPASS ID</b>, which every vehicle you register will use.</p>
+                            <span class="text-xs font-bold text-charm-dark flex items-center gap-1">Start here <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i></span>
+                        </button>
+                        <button type="button" onclick="selectMode('vehicle')" id="chooseCardVehicle"
+                            class="form-section shadow-glass text-left transition-all border-2 border-transparent opacity-60 cursor-not-allowed focus:outline-none relative">
+                            <div class="flex items-start justify-between gap-2 mb-4">
+                                <div class="w-14 h-14 rounded-2xl bg-charm-yellow flex items-center justify-center">
+                                    <i data-lucide="car" class="w-7 h-7 text-charm-dark"></i>
+                                </div>
+                                <span id="lockBadgeVehicle" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-100 text-slate-500 text-[10px] font-bold uppercase tracking-wider">
+                                    <i data-lucide="lock" class="w-3 h-3"></i> Accept Terms Above
+                                </span>
+                            </div>
+                            <h3 class="font-display font-extrabold text-xl text-slate-800">I have a Vehicle</h3>
+                            <p class="text-sm text-slate-500 mt-1 mb-4">Already have a CPASS ID? Link your car, motorcycle or other vehicle to it.</p>
+                            <span class="text-xs font-bold text-charm-dark flex items-center gap-1">Requires an approved CPASS ID <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i></span>
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Stepper (built by JS for the chosen mode) -->
@@ -314,6 +361,39 @@
                             <div id="reviewContent" class="space-y-4">
                                 <!-- Populated via JS -->
                             </div>
+
+                            <!-- Terms and Conditions & Data Privacy Consent -->
+                            <div id="termsConsentBox" class="mt-6 rounded-2xl border-2 border-slate-200 bg-white/80 p-5 transition-all duration-300">
+                                <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
+                                    <div class="flex items-center gap-2">
+                                        <div class="w-8 h-8 rounded-xl bg-charm-dark/10 flex items-center justify-center text-charm-dark">
+                                            <i data-lucide="shield-check" class="w-4 h-4"></i>
+                                        </div>
+                                        <div>
+                                            <h4 class="font-display font-bold text-sm text-slate-800">Terms &amp; Conditions and Data Privacy Consent</h4>
+                                            <p class="text-[11px] text-slate-500">Aklan State University &bull; Ibajay Campus (RA 10173 Compliance)</p>
+                                        </div>
+                                    </div>
+                                    <div class="flex items-center gap-2">
+                                        <span id="termsStatusBadge" class="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200">
+                                            Required
+                                        </span>
+                                        <button type="button" onclick="openTermsModal()" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-charm-dark/10 hover:bg-charm-dark hover:text-white text-charm-dark text-xs font-bold transition-colors">
+                                            <i data-lucide="book-open-check" class="w-3.5 h-3.5"></i> Read Full Terms
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <label for="agreeTerms" class="flex items-start gap-3.5 p-3.5 rounded-xl bg-slate-50/90 hover:bg-charm-light/15 border border-slate-200/80 cursor-pointer transition-colors select-none">
+                                    <input type="checkbox" id="agreeTerms" onchange="handleTermsToggle('review')" class="mt-0.5 w-5 h-5 rounded-md border-slate-300 text-charm-dark focus:ring-charm-dark accent-[#0E4B3A] cursor-pointer shrink-0">
+                                    <span class="text-xs text-slate-600 leading-relaxed">
+                                        I hereby certify that all information and documents submitted are true, accurate, and authentic. I have read, understood, and agree to the
+                                        <button type="button" onclick="event.preventDefault(); openTermsModal();" class="font-bold text-charm-dark underline hover:text-charm-mid">CHARRMPASS Terms and Conditions</button>,
+                                        Campus Gate &amp; Parking Regulations, and the collection and processing of my personal and vehicle data in accordance with the
+                                        <button type="button" onclick="event.preventDefault(); openTermsModal();" class="font-bold text-charm-dark underline hover:text-charm-mid">Data Privacy Act of 2012 (RA 10173)</button>.
+                                    </span>
+                                </label>
+                            </div>
                         </div>
                     </div>
 
@@ -387,6 +467,128 @@
                     </button>
                     <button type="button" onclick="closeCamera()" class="px-6 py-3 rounded-xl bg-white border border-slate-200 text-sm font-bold text-slate-600 hover:bg-slate-50 transition-colors">
                         Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Terms and Conditions & Data Privacy Modal -->
+    <div id="termsModal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onclick="if (event.target === this) closeTermsModal()">
+        <div class="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[88vh] animate-slide-up border border-white/40">
+            <!-- Modal Header -->
+            <div class="px-6 py-5 bg-gradient-to-r from-charm-dark to-charm-mid text-white flex items-center justify-between gap-4">
+                <div class="flex items-center gap-3.5">
+                    <div class="w-11 h-11 rounded-2xl bg-white/15 border border-white/25 flex items-center justify-center shrink-0">
+                        <i data-lucide="shield-check" class="w-6 h-6 text-charm-yellow"></i>
+                    </div>
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <h3 class="font-display font-bold text-lg tracking-wide text-white">Terms &amp; Conditions</h3>
+                            <span class="px-2 py-0.5 rounded-full bg-charm-yellow/20 border border-charm-yellow/40 text-charm-yellow text-[10px] font-bold uppercase tracking-wider">RA 10173</span>
+                        </div>
+                        <p class="text-xs text-emerald-100/90 mt-0.5">CHARRMPASS &bull; Aklan State University – Ibajay Campus</p>
+                    </div>
+                </div>
+                <button type="button" onclick="closeTermsModal()" class="w-9 h-9 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-colors" title="Close">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <!-- Modal Body (Scrollable) -->
+            <div class="p-6 overflow-y-auto custom-scrollbar space-y-4 text-slate-600 text-xs leading-relaxed">
+                <div class="p-4 rounded-2xl bg-charm-light/15 border border-charm-light/40 flex items-start gap-3">
+                    <i data-lucide="info" class="w-5 h-5 text-charm-dark shrink-0 mt-0.5"></i>
+                    <div>
+                        <div class="font-bold text-charm-dark text-xs">Official Campus Access &amp; Registration Agreement</div>
+                        <p class="text-slate-600 mt-0.5">
+                            Please read these Terms and Conditions carefully before submitting your registration to <b>CHARRMPASS</b> (Web-Based Smart Entry and Exit Monitoring System Using RFID Technology for Aklan State University – Ibajay Campus).
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Section 1 -->
+                <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
+                    <h4 class="font-display font-bold text-slate-800 text-sm flex items-center gap-2 mb-1.5">
+                        <span class="w-6 h-6 rounded-lg bg-charm-dark text-charm-yellow text-xs font-extrabold flex items-center justify-center">1</span>
+                        System Purpose &amp; Scope
+                    </h4>
+                    <p>
+                        CHARRMPASS regulates and monitors pedestrian and vehicular entry and exit at <b>Aklan State University – Ibajay Campus</b> using Dual-Frequency RFID technology (13.56 MHz Close-Range Cards for pedestrians and UHF Long-Range Stickers for vehicles). Registration is required for students, faculty, staff, and authorized stakeholders to obtain a <b>CPASS ID</b> and RFID credentials.
+                    </p>
+                </div>
+
+                <!-- Section 2 -->
+                <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
+                    <h4 class="font-display font-bold text-slate-800 text-sm flex items-center gap-2 mb-1.5">
+                        <span class="w-6 h-6 rounded-lg bg-charm-dark text-charm-yellow text-xs font-extrabold flex items-center justify-center">2</span>
+                        Data Privacy &amp; Protection (Republic Act No. 10173)
+                    </h4>
+                    <p>
+                        In compliance with the <b>Philippine Data Privacy Act of 2012 (RA 10173)</b>, by registering in CHARRMPASS you expressly consent to the collection, storage, and processing of your personal and vehicle data—including your full name, age, sex, address, academic/employment role, Student ID, profile photo, identification cards (front and back), vehicle details, OR/CR, Driver's License, and gate entry/exit timestamps. All data is encrypted, stored securely, and used exclusively by authorized ASU – Ibajay Campus administrators and security personnel for identity verification, gate access control, and campus safety auditing.
+                    </p>
+                </div>
+
+                <!-- Section 3 -->
+                <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
+                    <h4 class="font-display font-bold text-slate-800 text-sm flex items-center gap-2 mb-1.5">
+                        <span class="w-6 h-6 rounded-lg bg-charm-dark text-charm-yellow text-xs font-extrabold flex items-center justify-center">3</span>
+                        Accuracy &amp; Authenticity of Submitted Documents
+                    </h4>
+                    <p>
+                        You affirm that all personal details, vehicle records, and uploaded photographs/documents are true, current, and authentic. Submitting falsified, altered, or another person's identification or vehicle documents is a serious offense that will result in immediate rejection or revocation of campus access privileges and may be referred to university disciplinary authorities.
+                    </p>
+                </div>
+
+                <!-- Section 4 -->
+                <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
+                    <h4 class="font-display font-bold text-slate-800 text-sm flex items-center gap-2 mb-1.5">
+                        <span class="w-6 h-6 rounded-lg bg-charm-dark text-charm-yellow text-xs font-extrabold flex items-center justify-center">4</span>
+                        CPASS ID, RFID Card &amp; UHF Sticker Usage
+                    </h4>
+                    <ul class="list-disc pl-5 space-y-1">
+                        <li>Your <b>CPASS ID</b>, close-range RFID card, and long-range UHF vehicle sticker are <b>strictly non-transferable</b> and may only be used by the registered person or affixed to the specific registered vehicle.</li>
+                        <li>Lending, swapping, or tampering with RFID tags to grant unauthorized entry or bypass anti-passback monitoring is strictly prohibited.</li>
+                        <li>Lost, stolen, or damaged RFID cards or UHF stickers must be reported immediately to the ASU – Ibajay Campus Security Office or System Administrator for deactivation.</li>
+                    </ul>
+                </div>
+
+                <!-- Section 5 -->
+                <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
+                    <h4 class="font-display font-bold text-slate-800 text-sm flex items-center gap-2 mb-1.5">
+                        <span class="w-6 h-6 rounded-lg bg-charm-dark text-charm-yellow text-xs font-extrabold flex items-center justify-center">5</span>
+                        Campus Gate, Traffic &amp; Parking Regulations
+                    </h4>
+                    <ul class="list-disc pl-5 space-y-1">
+                        <li>All registrants must tap in upon entry and tap out upon exit at the designated campus gates so campus occupancy records remain accurate.</li>
+                        <li>Vehicle owners must slow down at the Entry and Exit UHF zones, cooperate with on-duty security guards for visual photo/plate verification, and park only in designated campus parking areas.</li>
+                        <li>The university is not liable for loss or damage to vehicles or personal belongings left unattended inside parked vehicles on campus premises.</li>
+                    </ul>
+                </div>
+
+                <!-- Section 6 -->
+                <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
+                    <h4 class="font-display font-bold text-slate-800 text-sm flex items-center gap-2 mb-1.5">
+                        <span class="w-6 h-6 rounded-lg bg-charm-dark text-charm-yellow text-xs font-extrabold flex items-center justify-center">6</span>
+                        Administrative Review &amp; Right to Revoke Access
+                    </h4>
+                    <p>
+                        Submitting this registration places your account in <b>PENDING</b> status until verified and approved by a Campus Administrator. ASU – Ibajay Campus Administration and Security reserve the right to deny applications, perform manual gate overrides, or suspend/revoke RFID authorization at any time for non-compliance with university security policies.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Modal Footer -->
+            <div class="px-6 py-4 bg-slate-50 border-t border-slate-200/80 flex items-center justify-between gap-3 flex-wrap">
+                <span class="text-[11px] font-semibold text-slate-500 flex items-center gap-1.5">
+                    <i data-lucide="lock" class="w-3.5 h-3.5 text-charm-dark"></i> Protected under RA 10173 &bull; ASU Ibajay Security
+                </span>
+                <div class="flex items-center gap-2.5 ml-auto">
+                    <button type="button" onclick="closeTermsModal()" class="px-5 py-2.5 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors">
+                        Close
+                    </button>
+                    <button type="button" onclick="acceptTermsFromModal()" class="px-5 py-2.5 rounded-xl bg-charm-dark text-white text-xs font-bold hover:bg-opacity-90 transition-colors shadow-md flex items-center gap-2">
+                        <i data-lucide="check-circle-2" class="w-4 h-4 text-charm-yellow"></i> I Understand &amp; Accept
                     </button>
                 </div>
             </div>
