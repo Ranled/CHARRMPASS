@@ -63,8 +63,34 @@ function currentStepId() {
 // =====================
 // MODE SELECTION
 // =====================
+function isTermsAccepted() {
+    const pre = document.getElementById('agreePreTerms');
+    const rev = document.getElementById('agreeTerms');
+    return Boolean((pre && pre.checked) || (rev && rev.checked));
+}
+
 function selectMode(newMode) {
     if (!FLOWS[newMode]) return;
+
+    if (!isTermsAccepted()) {
+        const preBox = document.getElementById('preTermsConsentBox');
+        const preCheck = document.getElementById('agreePreTerms');
+        if (preBox) {
+            preBox.classList.remove('border-slate-200/90');
+            preBox.classList.add('border-red-400', 'bg-red-50/40');
+            preBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            setTimeout(() => {
+                if (!isTermsAccepted()) {
+                    preBox.classList.remove('border-red-400', 'bg-red-50/40');
+                    preBox.classList.add('border-slate-200/90');
+                }
+            }, 2500);
+        }
+        if (preCheck) preCheck.focus();
+        showToast('Please check and accept the Terms and Conditions before proceeding to registration.', 'warning');
+        return;
+    }
+
     mode = newMode;
     flow = FLOWS[newMode];
     flowIndex = 0;
@@ -93,9 +119,20 @@ function selectMode(newMode) {
 }
 
 function backToModeChoice() {
+    mode = null;
+    flow = [];
+    flowIndex = 0;
     const url = new URL(window.location.href);
     url.searchParams.delete('mode');
-    window.location.href = url.pathname;
+    window.history.replaceState({}, '', url);
+
+    document.getElementById('registrationForm').classList.add('hidden');
+    document.getElementById('formStepper').classList.add('hidden');
+    document.getElementById('modeChoice').classList.remove('hidden');
+    document.getElementById('pageTitle').textContent = 'Register';
+    document.getElementById('pageSubtitle').textContent = 'Choose how you want to register';
+    handleTermsToggle();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 // =====================
@@ -168,10 +205,144 @@ function updateStepper() {
     nextBtn.classList.toggle('opacity-50', lockNext);
     nextBtn.classList.toggle('cursor-not-allowed', lockNext);
 
-    if (stepId === 4) buildReview();
+    if (stepId === 4) {
+        buildReview();
+        handleTermsToggle();
+    }
 
     lucide.createIcons();
 }
+
+function handleTermsToggle(source) {
+    const preCheck = document.getElementById('agreePreTerms');
+    const revCheck = document.getElementById('agreeTerms');
+
+    let accepted = false;
+    if (source === 'pre' && preCheck) {
+        accepted = preCheck.checked;
+        if (revCheck) revCheck.checked = accepted;
+    } else if (source === 'review' && revCheck) {
+        accepted = revCheck.checked;
+        if (preCheck) preCheck.checked = accepted;
+    } else {
+        accepted = Boolean((preCheck && preCheck.checked) || (revCheck && revCheck.checked));
+        if (preCheck) preCheck.checked = accepted;
+        if (revCheck) revCheck.checked = accepted;
+    }
+
+    // Update Pre-Registration Consent Box & Mode Cards
+    const preBox = document.getElementById('preTermsConsentBox');
+    const preBadge = document.getElementById('preTermsStatusBadge');
+    const cardPed = document.getElementById('chooseCardPedestrian');
+    const cardVeh = document.getElementById('chooseCardVehicle');
+    const lockPed = document.getElementById('lockBadgePedestrian');
+    const lockVeh = document.getElementById('lockBadgeVehicle');
+
+    if (preBox) {
+        preBox.classList.remove('border-red-400', 'bg-red-50/40');
+        preBox.classList.toggle('border-charm-dark/40', accepted);
+        preBox.classList.toggle('bg-charm-light/10', accepted);
+        preBox.classList.toggle('border-slate-200/90', !accepted);
+    }
+    if (preBadge) {
+        if (accepted) {
+            preBadge.textContent = 'Accepted';
+            preBadge.className = 'px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-green-100 text-green-800 border border-green-200';
+        } else {
+            preBadge.textContent = 'Required First';
+            preBadge.className = 'px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200';
+        }
+    }
+
+    [cardPed, cardVeh].forEach(card => {
+        if (!card) return;
+        card.classList.toggle('opacity-60', !accepted);
+        card.classList.toggle('cursor-not-allowed', !accepted);
+        card.classList.toggle('hover:-translate-y-1', accepted);
+        card.classList.toggle('hover:shadow-xl', accepted);
+        card.classList.toggle('hover:border-charm-dark', accepted);
+    });
+
+    [lockPed, lockVeh].forEach(lock => {
+        if (!lock) return;
+        if (accepted) {
+            lock.className = 'inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-green-100 text-green-800 border border-green-200 text-[10px] font-bold uppercase tracking-wider';
+            lock.innerHTML = '<i data-lucide="check-circle-2" class="w-3 h-3"></i> Unlocked';
+        } else {
+            lock.className = 'inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-100 text-slate-500 text-[10px] font-bold uppercase tracking-wider';
+            lock.innerHTML = '<i data-lucide="lock" class="w-3 h-3"></i> Accept Terms Above';
+        }
+    });
+
+    // Update Step 4 Review Consent Box
+    const consentBox = document.getElementById('termsConsentBox');
+    const badge = document.getElementById('termsStatusBadge');
+    const submitBtn = document.getElementById('btnSubmit');
+
+    if (consentBox) {
+        consentBox.classList.remove('border-red-400', 'bg-red-50/40');
+        consentBox.classList.toggle('border-charm-dark/40', accepted);
+        consentBox.classList.toggle('bg-charm-light/15', accepted);
+        consentBox.classList.toggle('border-slate-200', !accepted);
+        consentBox.classList.toggle('bg-white/80', !accepted);
+    }
+    if (badge) {
+        if (accepted) {
+            badge.textContent = 'Accepted';
+            badge.className = 'px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-green-100 text-green-800 border border-green-200';
+        } else {
+            badge.textContent = 'Required';
+            badge.className = 'px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200';
+        }
+    }
+    if (submitBtn && currentStepId() === 4) {
+        submitBtn.classList.toggle('opacity-60', !accepted);
+    }
+    if (typeof lucide !== 'undefined' && lucide.createIcons) lucide.createIcons();
+
+    if (accepted && window.pendingRequestedMode && !mode) {
+        const targetMode = window.pendingRequestedMode;
+        window.pendingRequestedMode = null;
+        selectMode(targetMode);
+    }
+}
+
+function openTermsModal() {
+    const modal = document.getElementById('termsModal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    if (typeof lucide !== 'undefined' && lucide.createIcons) lucide.createIcons();
+}
+
+function closeTermsModal() {
+    const modal = document.getElementById('termsModal');
+    if (!modal) return;
+    modal.classList.add('hidden');
+}
+
+function acceptTermsFromModal() {
+    const preCheck = document.getElementById('agreePreTerms');
+    const revCheck = document.getElementById('agreeTerms');
+    if (preCheck) preCheck.checked = true;
+    if (revCheck) revCheck.checked = true;
+    handleTermsToggle();
+    closeTermsModal();
+    showToast('Terms and Conditions accepted. You may now proceed with registration.', 'success');
+}
+
+window.handleTermsToggle = handleTermsToggle;
+window.openTermsModal = openTermsModal;
+window.closeTermsModal = closeTermsModal;
+window.acceptTermsFromModal = acceptTermsFromModal;
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        const termsModal = document.getElementById('termsModal');
+        if (termsModal && !termsModal.classList.contains('hidden')) {
+            closeTermsModal();
+        }
+    }
+});
 
 function flagField(id, message) {
     const el = document.getElementById(id);
@@ -235,6 +406,27 @@ function validateCurrentStep() {
         ];
         for (const [id, msg] of fields) {
             if (!document.getElementById(id).value.trim()) return flagField(id, msg);
+        }
+    }
+
+    if (stepId === 4) {
+        const agreeTerms = document.getElementById('agreeTerms');
+        if (!agreeTerms || !agreeTerms.checked) {
+            const consentBox = document.getElementById('termsConsentBox');
+            if (consentBox) {
+                consentBox.classList.remove('border-slate-200');
+                consentBox.classList.add('border-red-400', 'bg-red-50/40');
+                consentBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                setTimeout(() => {
+                    if (!agreeTerms.checked) {
+                        consentBox.classList.remove('border-red-400', 'bg-red-50/40');
+                        consentBox.classList.add('border-slate-200');
+                    }
+                }, 2500);
+            }
+            if (agreeTerms) agreeTerms.focus();
+            showToast('Please read and accept the Terms and Conditions before submitting.', 'warning');
+            return false;
         }
     }
     return true;
@@ -855,9 +1047,14 @@ document.getElementById('registrationForm').addEventListener('submit', async (e)
 // INIT
 // =====================
 (function init() {
+    handleTermsToggle();
     const requested = new URLSearchParams(window.location.search).get('mode');
     if (requested && FLOWS[requested]) {
-        selectMode(requested);
+        if (isTermsAccepted()) {
+            selectMode(requested);
+        } else {
+            window.pendingRequestedMode = requested;
+        }
     }
     lucide.createIcons();
 })();
