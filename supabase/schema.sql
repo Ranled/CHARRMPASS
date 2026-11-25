@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS public.users (
     id_front_image        TEXT,
     id_back_image         TEXT,
     drivers_license_image TEXT,
+    privacy_consent_at    TIMESTAMPTZ,
+    privacy_policy_version TEXT,
     created_at            TIMESTAMPTZ DEFAULT NOW(),
     updated_at            TIMESTAMPTZ DEFAULT NOW()
 );
@@ -72,6 +74,8 @@ ALTER TABLE public.users ADD COLUMN IF NOT EXISTS profile_image TEXT;
 ALTER TABLE public.users ADD COLUMN IF NOT EXISTS id_front_image TEXT;
 ALTER TABLE public.users ADD COLUMN IF NOT EXISTS id_back_image TEXT;
 ALTER TABLE public.users ADD COLUMN IF NOT EXISTS drivers_license_image TEXT;
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS privacy_consent_at TIMESTAMPTZ;
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS privacy_policy_version TEXT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS users_cpass_id_key ON public.users (UPPER(cpass_id));
 
@@ -106,6 +110,8 @@ CREATE TABLE IF NOT EXISTS public.vehicles (
     approval_status  TEXT DEFAULT 'PENDING' CHECK (approval_status IN ('PENDING', 'APPROVED', 'REJECTED')),
     motorcycle_image TEXT,
     or_cr_image      TEXT,
+    privacy_consent_at TIMESTAMPTZ,
+    privacy_policy_version TEXT,
     created_at       TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -113,6 +119,8 @@ CREATE TABLE IF NOT EXISTS public.vehicles (
 ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'PENDING';
 ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS motorcycle_image TEXT;
 ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS or_cr_image TEXT;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS privacy_consent_at TIMESTAMPTZ;
+ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS privacy_policy_version TEXT;
 
 -- ============================================================
 -- 3. RFID CARDS TABLE

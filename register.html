@@ -65,7 +65,7 @@
                 <!-- MODE CHOICE -->
                 <div id="modeChoice" class="space-y-6">
                     <!-- Pre-Registration Terms & Conditions Gate -->
-                    <div id="preTermsConsentBox" class="form-section shadow-glass border-2 border-slate-200/90 transition-all duration-300 !p-6">
+                    <div id="preTermsConsentBox" class="form-section shadow-glass border-2 !border-slate-200/90 transition-all duration-300 !p-6">
                         <div class="flex items-center justify-between gap-3 mb-4 flex-wrap">
                             <div class="flex items-center gap-3">
                                 <div class="w-10 h-10 rounded-xl bg-charm-dark flex items-center justify-center text-charm-yellow shadow-sm shrink-0">
@@ -86,16 +86,28 @@
                             </div>
                         </div>
 
-                        <label for="agreePreTerms" class="flex items-start gap-3.5 p-4 rounded-xl bg-slate-50 hover:bg-charm-light/15 border border-slate-200/90 cursor-pointer transition-colors select-none">
-                            <input type="checkbox" id="agreePreTerms" onchange="handleTermsToggle('pre')" class="mt-0.5 w-5 h-5 rounded-md border-slate-300 text-charm-dark focus:ring-charm-dark accent-[#0E4B3A] cursor-pointer shrink-0">
-                            <span class="text-xs text-slate-600 leading-relaxed">
+                        <!-- Deep-link mode indicator (shown when arriving with ?mode=...) -->
+                        <div id="pendingModeBanner" class="hidden mb-4 px-3.5 py-2.5 rounded-xl bg-charm-light/25 border border-charm-dark/20 flex items-center justify-between gap-3 flex-wrap text-xs">
+                            <div class="flex items-center gap-2 text-charm-dark font-semibold">
+                                <i data-lucide="compass" class="w-4 h-4 shrink-0"></i>
+                                <span id="pendingModeText">Accept below to continue to your selected registration form.</span>
+                            </div>
+                            <button type="button" onclick="clearPendingMode()" class="text-[11px] font-bold text-slate-600 hover:text-charm-dark underline">
+                                Choose another option
+                            </button>
+                        </div>
+
+                        <div onclick="if (!event.target.closest('button, input')) { const cb = document.getElementById('agreePreTerms'); cb.checked = !cb.checked; handleTermsToggle('pre'); }"
+                            class="flex items-start gap-3.5 p-4 rounded-xl bg-slate-50 hover:bg-charm-light/15 border border-slate-200/90 cursor-pointer transition-colors select-none">
+                            <input type="checkbox" id="agreePreTerms" aria-labelledby="agreePreTermsText" onchange="handleTermsToggle('pre')" class="mt-0.5 w-5 h-5 rounded-md border-slate-300 text-charm-dark focus:ring-charm-dark accent-[#0E4B3A] cursor-pointer shrink-0">
+                            <span id="agreePreTermsText" class="text-xs text-slate-600 leading-relaxed">
                                 I have read, understood, and agree to the
-                                <button type="button" onclick="event.preventDefault(); openTermsModal();" class="font-bold text-charm-dark underline hover:text-charm-mid">CHARRMPASS Terms and Conditions</button>,
+                                <button type="button" onclick="openTermsModal()" class="font-bold text-charm-dark underline hover:text-charm-mid">CHARRMPASS Terms and Conditions</button>,
                                 Campus Gate &amp; Parking Regulations, and the collection and processing of my personal and vehicle data in accordance with the
-                                <button type="button" onclick="event.preventDefault(); openTermsModal();" class="font-bold text-charm-dark underline hover:text-charm-mid">Data Privacy Act of 2012 (RA 10173)</button>
+                                <button type="button" onclick="openTermsModal()" class="font-bold text-charm-dark underline hover:text-charm-mid">Data Privacy Act of 2012 (RA 10173)</button>
                                 of <b>Aklan State University – Ibajay Campus</b>.
                             </span>
-                        </label>
+                        </div>
                     </div>
 
                     <!-- Mode Cards -->
@@ -362,7 +374,7 @@
                                 <!-- Populated via JS -->
                             </div>
 
-                            <!-- Terms and Conditions & Data Privacy Consent -->
+                            <!-- Final Certification & Data Privacy Confirmation -->
                             <div id="termsConsentBox" class="mt-6 rounded-2xl border-2 border-slate-200 bg-white/80 p-5 transition-all duration-300">
                                 <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
                                     <div class="flex items-center gap-2">
@@ -370,13 +382,13 @@
                                             <i data-lucide="shield-check" class="w-4 h-4"></i>
                                         </div>
                                         <div>
-                                            <h4 class="font-display font-bold text-sm text-slate-800">Terms &amp; Conditions and Data Privacy Consent</h4>
+                                            <h4 class="font-display font-bold text-sm text-slate-800">Final Certification &amp; Data Privacy Confirmation</h4>
                                             <p class="text-[11px] text-slate-500">Aklan State University &bull; Ibajay Campus (RA 10173 Compliance)</p>
                                         </div>
                                     </div>
                                     <div class="flex items-center gap-2">
                                         <span id="termsStatusBadge" class="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200">
-                                            Required
+                                            Confirm Before Submitting
                                         </span>
                                         <button type="button" onclick="openTermsModal()" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-charm-dark/10 hover:bg-charm-dark hover:text-white text-charm-dark text-xs font-bold transition-colors">
                                             <i data-lucide="book-open-check" class="w-3.5 h-3.5"></i> Read Full Terms
@@ -384,15 +396,16 @@
                                     </div>
                                 </div>
 
-                                <label for="agreeTerms" class="flex items-start gap-3.5 p-3.5 rounded-xl bg-slate-50/90 hover:bg-charm-light/15 border border-slate-200/80 cursor-pointer transition-colors select-none">
-                                    <input type="checkbox" id="agreeTerms" onchange="handleTermsToggle('review')" class="mt-0.5 w-5 h-5 rounded-md border-slate-300 text-charm-dark focus:ring-charm-dark accent-[#0E4B3A] cursor-pointer shrink-0">
-                                    <span class="text-xs text-slate-600 leading-relaxed">
-                                        I hereby certify that all information and documents submitted are true, accurate, and authentic. I have read, understood, and agree to the
-                                        <button type="button" onclick="event.preventDefault(); openTermsModal();" class="font-bold text-charm-dark underline hover:text-charm-mid">CHARRMPASS Terms and Conditions</button>,
-                                        Campus Gate &amp; Parking Regulations, and the collection and processing of my personal and vehicle data in accordance with the
-                                        <button type="button" onclick="event.preventDefault(); openTermsModal();" class="font-bold text-charm-dark underline hover:text-charm-mid">Data Privacy Act of 2012 (RA 10173)</button>.
+                                <div onclick="if (!event.target.closest('button, input')) { const cb = document.getElementById('agreeTerms'); cb.checked = !cb.checked; handleTermsToggle('review'); }"
+                                    class="flex items-start gap-3.5 p-3.5 rounded-xl bg-slate-50/90 hover:bg-charm-light/15 border border-slate-200/80 cursor-pointer transition-colors select-none">
+                                    <input type="checkbox" id="agreeTerms" aria-labelledby="agreeTermsText" onchange="handleTermsToggle('review')" class="mt-0.5 w-5 h-5 rounded-md border-slate-300 text-charm-dark focus:ring-charm-dark accent-[#0E4B3A] cursor-pointer shrink-0">
+                                    <span id="agreeTermsText" class="text-xs text-slate-600 leading-relaxed">
+                                        I hereby certify that all information and documents shown above are true, accurate, and authentic, and I confirm my consent to the
+                                        <button type="button" onclick="openTermsModal()" class="font-bold text-charm-dark underline hover:text-charm-mid">CHARRMPASS Terms and Conditions</button>,
+                                        Campus Gate &amp; Parking Regulations, and data processing under the
+                                        <button type="button" onclick="openTermsModal()" class="font-bold text-charm-dark underline hover:text-charm-mid">Data Privacy Act of 2012 (RA 10173)</button>.
                                     </span>
-                                </label>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -519,14 +532,22 @@
                 </div>
 
                 <!-- Section 2 -->
-                <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
-                    <h4 class="font-display font-bold text-slate-800 text-sm flex items-center gap-2 mb-1.5">
+                <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-2.5">
+                    <h4 class="font-display font-bold text-slate-800 text-sm flex items-center gap-2">
                         <span class="w-6 h-6 rounded-lg bg-charm-dark text-charm-yellow text-xs font-extrabold flex items-center justify-center">2</span>
                         Data Privacy &amp; Protection (Republic Act No. 10173)
                     </h4>
                     <p>
-                        In compliance with the <b>Philippine Data Privacy Act of 2012 (RA 10173)</b>, by registering in CHARRMPASS you expressly consent to the collection, storage, and processing of your personal and vehicle data—including your full name, age, sex, address, academic/employment role, Student ID, profile photo, identification cards (front and back), vehicle details, OR/CR, Driver's License, and gate entry/exit timestamps. All data is encrypted, stored securely, and used exclusively by authorized ASU – Ibajay Campus administrators and security personnel for identity verification, gate access control, and campus safety auditing.
+                        In compliance with the <b>Philippine Data Privacy Act of 2012 (RA 10173)</b> and its Implementing Rules and Regulations, <b>Aklan State University – Ibajay Campus</b> acts as the Personal Information Controller for data submitted through CHARRMPASS. By registering, you freely and expressly consent to the collection, storage, and processing of the following information:
                     </p>
+                    <ul class="list-disc pl-5 space-y-1">
+                        <li><b>Personal &amp; Identification Data:</b> Full name, age, sex, residential address, academic or employment role, program/department, section, Student ID / CPASS ID, profile photo, and identification cards (front and back).</li>
+                        <li><b>Vehicle &amp; Access Data:</b> Vehicle type, model, plate number, color, optional OR/CR, Driver's License, motorcycle photo, RFID tag assignments, and automated gate entry/exit timestamps.</li>
+                        <li><b>Purpose &amp; Security Safeguards:</b> Your data is transmitted securely over HTTPS/TLS, stored in access-controlled cloud storage and databases, and used strictly by authorized ASU – Ibajay Campus administrators and security personnel for identity verification, gate access control, and campus safety auditing. Personal data is never sold or shared with unauthorized third parties.</li>
+                        <li><b>Data Retention &amp; Disposal:</b> Registration records and gate access logs are retained only for the duration of your active enrollment, employment, or authorized campus access and in accordance with university recordkeeping policies, after which they are securely archived or permanently deleted.</li>
+                        <li><b>Your Rights as a Data Subject (Sec. 16, RA 10173):</b> You have the right to be informed, to access your personal records, to request correction (rectification) of inaccurate details, to object or withdraw consent (which will deactivate campus RFID access), to request erasure or blocking of your data, and to file a complaint with the National Privacy Commission (NPC).</li>
+                        <li><b>Privacy Inquiries &amp; Data Requests:</b> To exercise your data privacy rights or request updates/deletion of your records, please contact the <b>ASU – Ibajay Campus Security Office, CHARRMPASS System Administrator, or the Campus Data Protection Officer (DPO)</b>.</li>
+                    </ul>
                 </div>
 
                 <!-- Section 3 -->
@@ -581,7 +602,7 @@
             <!-- Modal Footer -->
             <div class="px-6 py-4 bg-slate-50 border-t border-slate-200/80 flex items-center justify-between gap-3 flex-wrap">
                 <span class="text-[11px] font-semibold text-slate-500 flex items-center gap-1.5">
-                    <i data-lucide="lock" class="w-3.5 h-3.5 text-charm-dark"></i> Protected under RA 10173 &bull; ASU Ibajay Security
+                    <i data-lucide="lock" class="w-3.5 h-3.5 text-charm-dark"></i> Protected under RA 10173 &bull; Policy v1.0 &bull; ASU Ibajay Security
                 </span>
                 <div class="flex items-center gap-2.5 ml-auto">
                     <button type="button" onclick="closeTermsModal()" class="px-5 py-2.5 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors">

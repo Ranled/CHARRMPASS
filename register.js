@@ -24,11 +24,13 @@ if (typeof showToast !== 'function') {
 // =====================
 // STATE
 // =====================
+const PRIVACY_POLICY_VERSION = 'RA10173-v1.0';
 let mode = null;               // 'pedestrian' | 'vehicle'
 let flow = [];                 // ordered list of step ids for the current mode
 let flowIndex = 0;
 let verifiedOwner = null;      // owner row returned by lookupCpass()
 let issuedCpassId = null;      // CPASS ID shown on the success screen
+let consentAcceptedAt = null;  // ISO timestamp when user accepted RA 10173 consent
 let cameraStream = null;
 let cameraTarget = null;
 let cameraFacingMode = 'user';
@@ -63,26 +65,55 @@ function currentStepId() {
 // =====================
 // MODE SELECTION
 // =====================
-function isTermsAccepted() {
+function isPreTermsAccepted() {
     const pre = document.getElementById('agreePreTerms');
-    const rev = document.getElementById('agreeTerms');
-    return Boolean((pre && pre.checked) || (rev && rev.checked));
+    return Boolean(pre && pre.checked);
+}
+
+function isTermsAccepted() {
+    return isPreTermsAccepted();
+}
+
+function updatePendingModeBanner() {
+    const banner = document.getElementById('pendingModeBanner');
+    const text = document.getElementById('pendingModeText');
+    const cardPed = document.getElementById('chooseCardPedestrian');
+    const cardVeh = document.getElementById('chooseCardVehicle');
+
+    const pending = window.pendingRequestedMode;
+    if (banner) banner.classList.toggle('hidden', !pending || Boolean(mode));
+    if (text && pending) {
+        const label = pending === 'pedestrian' ? 'Register as a Person' : 'Register a Vehicle';
+        text.innerHTML = `Selected path: <b>${label}</b> — accept the consent box below to continue automatically.`;
+    }
+    if (cardPed) cardPed.classList.toggle('ring-2', pending === 'pedestrian' && !mode);
+    if (cardPed) cardPed.classList.toggle('ring-charm-dark/40', pending === 'pedestrian' && !mode);
+    if (cardVeh) cardVeh.classList.toggle('ring-2', pending === 'vehicle' && !mode);
+    if (cardVeh) cardVeh.classList.toggle('ring-charm-dark/40', pending === 'vehicle' && !mode);
+}
+
+function clearPendingMode() {
+    window.pendingRequestedMode = null;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('mode');
+    window.history.replaceState({}, '', url);
+    updatePendingModeBanner();
 }
 
 function selectMode(newMode) {
     if (!FLOWS[newMode]) return;
 
-    if (!isTermsAccepted()) {
+    if (!isPreTermsAccepted()) {
         const preBox = document.getElementById('preTermsConsentBox');
         const preCheck = document.getElementById('agreePreTerms');
         if (preBox) {
-            preBox.classList.remove('border-slate-200/90');
-            preBox.classList.add('border-red-400', 'bg-red-50/40');
+            preBox.classList.remove('!border-slate-200/90', '!border-charm-dark/40', '!bg-charm-light/10');
+            preBox.classList.add('!border-red-400', '!bg-red-50/60');
             preBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
             setTimeout(() => {
-                if (!isTermsAccepted()) {
-                    preBox.classList.remove('border-red-400', 'bg-red-50/40');
-                    preBox.classList.add('border-slate-200/90');
+                if (!isPreTermsAccepted()) {
+                    preBox.classList.remove('!border-red-400', '!bg-red-50/60');
+                    preBox.classList.add('!border-slate-200/90');
                 }
             }, 2500);
         }
@@ -91,9 +122,14 @@ function selectMode(newMode) {
         return;
     }
 
+    window.pendingRequestedMode = null;
     mode = newMode;
     flow = FLOWS[newMode];
     flowIndex = 0;
+
+    // Step 4 final certification starts unchecked for each registration flow
+    const revCheck = document.getElementById('agreeTerms');
+    if (revCheck) revCheck.checked = false;
 
     const url = new URL(window.location.href);
     url.searchParams.set('mode', newMode);
@@ -113,15 +149,21 @@ function selectMode(newMode) {
         document.getElementById('pageSubtitle').textContent = 'Link your vehicle to your approved CPASS ID.';
     }
 
+    updatePendingModeBanner();
     toggleStudentId();
     buildStepper();
     updateStepper();
 }
 
 function backToModeChoice() {
+    window.pendingRequestedMode = null;
     mode = null;
     flow = [];
     flowIndex = 0;
+
+    const revCheck = document.getElementById('agreeTerms');
+    if (revCheck) revCheck.checked = false;
+
     const url = new URL(window.location.href);
     url.searchParams.delete('mode');
     window.history.replaceState({}, '', url);
@@ -131,6 +173,7 @@ function backToModeChoice() {
     document.getElementById('modeChoice').classList.remove('hidden');
     document.getElementById('pageTitle').textContent = 'Register';
     document.getElementById('pageSubtitle').textContent = 'Choose how you want to register';
+    updatePendingModeBanner();
     handleTermsToggle();
     window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -217,20 +260,16 @@ function handleTermsToggle(source) {
     const preCheck = document.getElementById('agreePreTerms');
     const revCheck = document.getElementById('agreeTerms');
 
-    let accepted = false;
-    if (source === 'pre' && preCheck) {
-        accepted = preCheck.checked;
-        if (revCheck) revCheck.checked = accepted;
-    } else if (source === 'review' && revCheck) {
-        accepted = revCheck.checked;
-        if (preCheck) preCheck.checked = accepted;
-    } else {
-        accepted = Boolean((preCheck && preCheck.checked) || (revCheck && revCheck.checked));
-        if (preCheck) preCheck.checked = accepted;
-        if (revCheck) revCheck.checked = accepted;
+    const preAccepted = Boolean(preCheck && preCheck.checked);
+    const reviewAccepted = Boolean(revCheck && revCheck.checked);
+
+    if (source === 'pre') {
+        consentAcceptedAt = preAccepted ? (consentAcceptedAt || new Date().toISOString()) : null;
+    } else if (source === 'review' && reviewAccepted) {
+        consentAcceptedAt = new Date().toISOString();
     }
 
-    // Update Pre-Registration Consent Box & Mode Cards
+    // Update Pre-Registration Consent Box & Mode Cards (Step 0)
     const preBox = document.getElementById('preTermsConsentBox');
     const preBadge = document.getElementById('preTermsStatusBadge');
     const cardPed = document.getElementById('chooseCardPedestrian');
@@ -239,13 +278,13 @@ function handleTermsToggle(source) {
     const lockVeh = document.getElementById('lockBadgeVehicle');
 
     if (preBox) {
-        preBox.classList.remove('border-red-400', 'bg-red-50/40');
-        preBox.classList.toggle('border-charm-dark/40', accepted);
-        preBox.classList.toggle('bg-charm-light/10', accepted);
-        preBox.classList.toggle('border-slate-200/90', !accepted);
+        preBox.classList.remove('!border-red-400', '!bg-red-50/60');
+        preBox.classList.toggle('!border-charm-dark/40', preAccepted);
+        preBox.classList.toggle('!bg-charm-light/10', preAccepted);
+        preBox.classList.toggle('!border-slate-200/90', !preAccepted);
     }
     if (preBadge) {
-        if (accepted) {
+        if (preAccepted) {
             preBadge.textContent = 'Accepted';
             preBadge.className = 'px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-green-100 text-green-800 border border-green-200';
         } else {
@@ -256,16 +295,16 @@ function handleTermsToggle(source) {
 
     [cardPed, cardVeh].forEach(card => {
         if (!card) return;
-        card.classList.toggle('opacity-60', !accepted);
-        card.classList.toggle('cursor-not-allowed', !accepted);
-        card.classList.toggle('hover:-translate-y-1', accepted);
-        card.classList.toggle('hover:shadow-xl', accepted);
-        card.classList.toggle('hover:border-charm-dark', accepted);
+        card.classList.toggle('opacity-60', !preAccepted);
+        card.classList.toggle('cursor-not-allowed', !preAccepted);
+        card.classList.toggle('hover:-translate-y-1', preAccepted);
+        card.classList.toggle('hover:shadow-xl', preAccepted);
+        card.classList.toggle('hover:border-charm-dark', preAccepted);
     });
 
     [lockPed, lockVeh].forEach(lock => {
         if (!lock) return;
-        if (accepted) {
+        if (preAccepted) {
             lock.className = 'inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-green-100 text-green-800 border border-green-200 text-[10px] font-bold uppercase tracking-wider';
             lock.innerHTML = '<i data-lucide="check-circle-2" class="w-3 h-3"></i> Unlocked';
         } else {
@@ -274,33 +313,35 @@ function handleTermsToggle(source) {
         }
     });
 
-    // Update Step 4 Review Consent Box
+    // Update Step 4 Review Final Certification Box (independent from Step 0)
     const consentBox = document.getElementById('termsConsentBox');
     const badge = document.getElementById('termsStatusBadge');
     const submitBtn = document.getElementById('btnSubmit');
 
     if (consentBox) {
         consentBox.classList.remove('border-red-400', 'bg-red-50/40');
-        consentBox.classList.toggle('border-charm-dark/40', accepted);
-        consentBox.classList.toggle('bg-charm-light/15', accepted);
-        consentBox.classList.toggle('border-slate-200', !accepted);
-        consentBox.classList.toggle('bg-white/80', !accepted);
+        consentBox.classList.toggle('border-charm-dark/40', reviewAccepted);
+        consentBox.classList.toggle('bg-charm-light/15', reviewAccepted);
+        consentBox.classList.toggle('border-slate-200', !reviewAccepted);
+        consentBox.classList.toggle('bg-white/80', !reviewAccepted);
     }
     if (badge) {
-        if (accepted) {
-            badge.textContent = 'Accepted';
+        if (reviewAccepted) {
+            badge.textContent = 'Confirmed';
             badge.className = 'px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-green-100 text-green-800 border border-green-200';
         } else {
-            badge.textContent = 'Required';
+            badge.textContent = 'Confirm Before Submitting';
             badge.className = 'px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200';
         }
     }
     if (submitBtn && currentStepId() === 4) {
-        submitBtn.classList.toggle('opacity-60', !accepted);
+        submitBtn.classList.toggle('opacity-60', !reviewAccepted);
     }
+
+    updatePendingModeBanner();
     if (typeof lucide !== 'undefined' && lucide.createIcons) lucide.createIcons();
 
-    if (accepted && window.pendingRequestedMode && !mode) {
+    if (preAccepted && window.pendingRequestedMode && !mode) {
         const targetMode = window.pendingRequestedMode;
         window.pendingRequestedMode = null;
         selectMode(targetMode);
@@ -323,17 +364,27 @@ function closeTermsModal() {
 function acceptTermsFromModal() {
     const preCheck = document.getElementById('agreePreTerms');
     const revCheck = document.getElementById('agreeTerms');
+    const onReviewStep = Boolean(mode && currentStepId() === 4);
+
     if (preCheck) preCheck.checked = true;
-    if (revCheck) revCheck.checked = true;
-    handleTermsToggle();
+    if (onReviewStep && revCheck) revCheck.checked = true;
+    consentAcceptedAt = new Date().toISOString();
+
+    handleTermsToggle(onReviewStep ? 'review' : 'pre');
     closeTermsModal();
-    showToast('Terms and Conditions accepted. You may now proceed with registration.', 'success');
+    showToast(
+        onReviewStep
+            ? 'Final certification and Data Privacy consent confirmed. You may submit your registration.'
+            : 'Terms and Data Privacy Policy accepted. You may now choose your registration path.',
+        'success'
+    );
 }
 
 window.handleTermsToggle = handleTermsToggle;
 window.openTermsModal = openTermsModal;
 window.closeTermsModal = closeTermsModal;
 window.acceptTermsFromModal = acceptTermsFromModal;
+window.clearPendingMode = clearPendingMode;
 
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
@@ -414,18 +465,18 @@ function validateCurrentStep() {
         if (!agreeTerms || !agreeTerms.checked) {
             const consentBox = document.getElementById('termsConsentBox');
             if (consentBox) {
-                consentBox.classList.remove('border-slate-200');
+                consentBox.classList.remove('border-slate-200', 'bg-white/80', 'border-charm-dark/40', 'bg-charm-light/15');
                 consentBox.classList.add('border-red-400', 'bg-red-50/40');
                 consentBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 setTimeout(() => {
-                    if (!agreeTerms.checked) {
+                    if (!agreeTerms || !agreeTerms.checked) {
                         consentBox.classList.remove('border-red-400', 'bg-red-50/40');
-                        consentBox.classList.add('border-slate-200');
+                        consentBox.classList.add('border-slate-200', 'bg-white/80');
                     }
                 }, 2500);
             }
             if (agreeTerms) agreeTerms.focus();
-            showToast('Please read and accept the Terms and Conditions before submitting.', 'warning');
+            showToast('Please confirm the final certification and Data Privacy consent before submitting.', 'warning');
             return false;
         }
     }
@@ -798,6 +849,42 @@ function isDbConnected() {
     return (typeof supabaseClient !== 'undefined' && supabaseClient !== null) || (typeof isConnected !== 'undefined' && isConnected);
 }
 
+/**
+ * Inserts a row with RA 10173 consent audit fields, falling back seamlessly
+ * if the optional migration_privacy_consent_audit SQL has not been run yet.
+ */
+async function insertWithConsentFallback(table, row) {
+    const consentMeta = {
+        privacy_consent_at: consentAcceptedAt || new Date().toISOString(),
+        privacy_policy_version: PRIVACY_POLICY_VERSION
+    };
+    const { data, error } = await supabaseClient
+        .from(table)
+        .insert([{ ...row, ...consentMeta }])
+        .select()
+        .single();
+
+    if (!error) return data;
+
+    const msg = String(error.message || error.details || '').toLowerCase();
+    const isMissingConsentCol =
+        (error.code === 'PGRST204' || error.code === '42703' || msg.includes('column') || msg.includes('schema cache')) &&
+        (msg.includes('privacy_consent_at') || msg.includes('privacy_policy_version'));
+
+    if (!isMissingConsentCol) {
+        throw new Error(error.message);
+    }
+
+    console.warn(`Consent audit columns not yet migrated on ${table}; retrying insert without audit metadata.`);
+    const { data: fallbackData, error: fallbackErr } = await supabaseClient
+        .from(table)
+        .insert([row])
+        .select()
+        .single();
+    if (fallbackErr) throw new Error(fallbackErr.message);
+    return fallbackData;
+}
+
 async function submitPedestrian() {
     const role = document.getElementById('regRole').value;
     const isStudent = role === 'Student';
@@ -839,12 +926,7 @@ async function submitPedestrian() {
         }
         // Non-students: omit cpass_id, the DB trigger assigns CP00, CP01, ...
 
-        const { data: newUser, error: userErr } = await supabaseClient
-            .from('users')
-            .insert([payload])
-            .select()
-            .single();
-        if (userErr) throw new Error(userErr.message);
+        const newUser = await insertWithConsentFallback('users', payload);
 
         // Close-range card placeholder: admin assigns the real UID after approval
         const { error: cardErr } = await supabaseClient
@@ -881,7 +963,9 @@ async function submitPedestrian() {
         user_type: 'PEDESTRIAN',
         rfid_type: 'CLOSE_RANGE',
         authorization_status: 'PENDING',
-        approval_status: 'PENDING'
+        approval_status: 'PENDING',
+        privacy_consent_at: consentAcceptedAt || new Date().toISOString(),
+        privacy_policy_version: PRIVACY_POLICY_VERSION
     });
     localStorage.setItem('charrmpass_registrations', JSON.stringify(registrations));
     showToast('Registration saved locally (Demo Mode).', 'info');
@@ -913,12 +997,11 @@ async function submitVehicle() {
     };
 
     if (isDbConnected()) {
-        const { data: newVehicle, error: vehErr } = await supabaseClient
-            .from('vehicles')
-            .insert([{ user_id: verifiedOwner.id, approval_status: 'PENDING', ...vehicle }])
-            .select()
-            .single();
-        if (vehErr) throw new Error(vehErr.message);
+        const newVehicle = await insertWithConsentFallback('vehicles', {
+            user_id: verifiedOwner.id,
+            approval_status: 'PENDING',
+            ...vehicle
+        });
 
         // Driver's license is stored on the owner's profile when provided
         if (licUrl) {
@@ -959,7 +1042,9 @@ async function submitVehicle() {
         ...vehicle,
         plate_number: vehicle.plate_number,
         authorization_status: 'PENDING',
-        approval_status: 'PENDING'
+        approval_status: 'PENDING',
+        privacy_consent_at: consentAcceptedAt || new Date().toISOString(),
+        privacy_policy_version: PRIVACY_POLICY_VERSION
     });
     localStorage.setItem('charrmpass_registrations', JSON.stringify(registrations));
     showToast('Vehicle saved locally (Demo Mode).', 'info');
@@ -1047,14 +1132,14 @@ document.getElementById('registrationForm').addEventListener('submit', async (e)
 // INIT
 // =====================
 (function init() {
-    handleTermsToggle();
     const requested = new URLSearchParams(window.location.search).get('mode');
     if (requested && FLOWS[requested]) {
-        if (isTermsAccepted()) {
+        if (isPreTermsAccepted()) {
             selectMode(requested);
         } else {
             window.pendingRequestedMode = requested;
         }
     }
+    handleTermsToggle();
     lucide.createIcons();
 })();
